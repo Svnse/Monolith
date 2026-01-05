@@ -76,7 +76,7 @@ class GeneratorWorker(QThread):
             
             self.trace.emit("→ inference complete")
         except Exception as e:
-            self.trace.emit(f\"<span style='color:red'>ERROR: {e}</span>\")
+            self.trace.emit(f"<span style='color:red'>ERROR: {e}</span>")
         finally:
             self.done.emit()
 
@@ -117,7 +117,7 @@ class LLMEngine(QObject):
         self.sig_trace.emit("→ system online")
 
     def _on_load_error(self, err_msg):
-        self.sig_trace.emit(f\"<span style='color:red'>{err_msg}</span>\")
+        self.sig_trace.emit(f"<span style='color:red'>{err_msg}</span>")
         self.set_status(SystemStatus.ERROR)
 
     def unload_model(self):
