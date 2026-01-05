@@ -1,0 +1,246 @@
+import uuid
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QFrame, QLabel, QStackedLayout
+)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QMouseEvent
+
+from core.state import SystemStatus, AppState
+from core.style import BG_MAIN, BG_SIDEBAR, FG_ACCENT, FG_ERROR, FG_WARN
+from ui.components.atoms import SidebarButton, SkeetButton
+from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock, FlameLabel
+from ui.components.module_strip import ModuleStrip
+
+# PAGES
+from ui.pages.chat import PageChat
+from ui.pages.settings import PageSettings
+from ui.pages.databank import PageFiles
+
+# MODULES
+from ui.modules.manager import PageAddons
+from ui.modules.injector import InjectorWidget
+
+class MonolithUI(QMainWindow):
+    def __init__(self, state: AppState):
+        super().__init__()
+        self.state = state
+        self.vitals_win = None
+        self._drag_pos = None
+
+        self.setWindowFlags(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(1100, 700)
+
+        main_widget = QWidget()
+        main_widget.setObjectName("MainFrame")
+        main_widget.setStyleSheet(f"""
+            QWidget {{ background: {BG_MAIN}; }}
+            QWidget#MainFrame {{ border: 1px solid #333; }}
+        """)
+        self.setCentralWidget(main_widget)
+
+        root_layout = QVBoxLayout(main_widget)
+        root_layout.setContentsMargins(1,1,1,1)
+        root_layout.setSpacing(0)
+
+        # Top Gradient
+        self.gradient_line = GradientLine()
+        root_layout.addWidget(self.gradient_line)
+
+        # Top Bar
+        self.top_bar = self._build_top_bar()
+        root_layout.addWidget(self.top_bar)
+
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(0)
+
+        # --- SIDEBAR ---
+        self.sidebar = QFrame()
+        self.sidebar.setFixedWidth(70)
+        self.sidebar.setStyleSheet(f"background: {BG_SIDEBAR}; border-right: 1px solid #1a1a1a;")
+        
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(5, 15, 5, 15)
+        sidebar_layout.setSpacing(10)
+
+        self.btn_chat = SidebarButton("⌖", "TERMINAL") 
+        self.btn_chat.clicked.connect(lambda: self.set_page(0))
+
+        self.btn_files = SidebarButton("▤", "DATABANK")
+        self.btn_files.clicked.connect(lambda: self.set_page(1))
+
+        self.module_strip = ModuleStrip()
+        self.module_strip.sig_module_selected.connect(self.switch_to_module)
+        self.module_strip.sig_module_closed.connect(self.close_module)
+
+        self.btn_conf = SidebarButton("⚙", "CONFIG")
+        self.btn_conf.clicked.connect(lambda: self.set_page(3))
+
+        self.btn_addons = SidebarButton("＋", "ADDONS")
+        self.btn_addons.clicked.connect(lambda: self.set_page(2))
+
+        sidebar_layout.addWidget(self.btn_chat)
+        sidebar_layout.addWidget(self.btn_files)
+        sidebar_layout.addWidget(self.module_strip)
+        sidebar_layout.addStretch() 
+        sidebar_layout.addWidget(self.btn_conf)
+        sidebar_layout.addWidget(self.btn_addons)
+
+        content_layout.addWidget(self.sidebar)
+
+        # --- PAGE STACK ---
+        self.stack = QStackedLayout()
+        self.page_chat = PageChat(state)
+        self.page_files = PageFiles(state)
+        self.page_addons = PageAddons(state)
+        self.page_settings = PageSettings(state)
+        
+        self.stack.addWidget(self.page_chat)
+        self.stack.addWidget(self.page_files)
+        self.stack.addWidget(self.page_addons)
+        self.stack.addWidget(self.page_settings)
+
+        self.center_vbox = QVBoxLayout()
+        self.center_vbox.addLayout(self.stack)
+        content_layout.addLayout(self.center_vbox)
+
+        root_layout.addLayout(content_layout)
+
+        # --- SIGNALS ---
+        self.page_addons.sig_launch_addon.connect(self.launch_addon)
+        self.set_page(0)
+
+    # ---------------- WINDOW BEHAVIOR ----------------
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton and event.position().y() < 40:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._drag_pos and event.buttons() == Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self._drag_pos = None
+
+    # ---------------- MODULE SYSTEM ----------------
+
+    def launch_addon(self, addon_type: str):
+        mod_id = str(uuid.uuid4())
+        widget = None
+        icon_char = "?"
+        label_text = "MODULE"
+        
+        if addon_type == "injector":
+            widget = InjectorWidget(self)
+            icon_char = "💉" 
+            label_text = "RUNTIME"
+        
+        if widget:
+            widget._mod_id = mod_id
+            self.stack.addWidget(widget)
+            self.module_strip.add_module(mod_id, icon_char, label_text)
+            
+            if hasattr(widget, 'sig_closed'):
+                widget.sig_closed.connect(lambda: self.close_module(mod_id))
+            if hasattr(widget, 'sig_finished'):
+                widget.sig_finished.connect(lambda: self.module_strip.flash_module(mod_id))
+            
+            self.switch_to_module(mod_id)
+
+    def close_module(self, mod_id):
+        target_w = None
+        for i in range(self.stack.count()):
+            w = self.stack.widget(i)
+            if getattr(w, '_mod_id', None) == mod_id:
+                target_w = w
+                break
+        
+        if target_w:
+            self.stack.removeWidget(target_w)
+            target_w.deleteLater()
+            
+        self.module_strip.remove_module(mod_id)
+
+        if self.stack.currentWidget() == target_w:
+             self.set_page(0)
+
+    def switch_to_module(self, mod_id):
+        for i in range(self.stack.count()):
+            w = self.stack.widget(i)
+            if getattr(w, '_mod_id', None) == mod_id:
+                self.stack.setCurrentWidget(w)
+                self._update_sidebar_state(module_selection=True)
+                self.module_strip.select_module(mod_id)
+                return
+
+    def _update_sidebar_state(self, page_idx=None, module_selection=False):
+        self.btn_chat.setChecked(page_idx == 0 and not module_selection)
+        self.btn_files.setChecked(page_idx == 1 and not module_selection)
+        self.btn_addons.setChecked(page_idx == 2 and not module_selection)
+        self.btn_conf.setChecked(page_idx == 3 and not module_selection)
+        if not module_selection: self.module_strip.deselect_all()
+
+    def update_status(self, status):
+        if status == SystemStatus.ERROR:
+            self.lbl_status.setStyleSheet(f"color: {FG_ERROR}; font-size: 10px; font-weight: bold;")
+        elif status == SystemStatus.LOADING:
+            self.lbl_status.setStyleSheet(f"color: {FG_WARN}; font-size: 10px; font-weight: bold;")
+        else:
+            self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
+        self.lbl_status.setText(status.value if hasattr(status, "value") else str(status))
+
+        # Pass loading state to settings page to lock buttons
+        self.page_settings.set_loading_state(status == SystemStatus.LOADING or status == SystemStatus.RUNNING)
+
+    def update_ctx(self, used):
+        self.state.ctx_used = used
+
+    def set_page(self, idx):
+        self.stack.setCurrentIndex(idx)
+        self._update_sidebar_state(page_idx=idx)
+
+    def _build_top_bar(self):
+        bar = QFrame()
+        bar.setFixedHeight(35)
+        bar.setStyleSheet("background: #111; border-bottom: 1px solid #222;")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(10, 0, 10, 0)
+
+        self.lbl_status = QLabel("READY")
+        self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
+
+        btn_vitals = SkeetButton("VITALS")
+        btn_vitals.setFixedSize(60, 22)
+        btn_vitals.clicked.connect(self.toggle_vitals)
+
+        layout.addWidget(btn_vitals)
+        layout.addWidget(self.lbl_status)
+        layout.addStretch()
+
+        self.lbl_model = FlameLabel("MONOLITH")
+        layout.addWidget(self.lbl_model)
+        layout.addStretch()
+
+        self.win_controls = SplitControlBlock()
+        self.win_controls.minClicked.connect(self.showMinimized)
+        self.win_controls.maxClicked.connect(self.toggle_maximize)
+        self.win_controls.closeClicked.connect(self.close)
+        layout.addWidget(self.win_controls)
+
+        return bar
+
+    def toggle_maximize(self):
+        self.showNormal() if self.isMaximized() else self.showMaximized()
+
+    def toggle_vitals(self):
+        if not self.vitals_win:
+            self.vitals_win = VitalsWindow(self.state, self)
+        
+        if not self.vitals_win.isVisible():
+            self.vitals_win.show()
+        else:
+            self.vitals_win.close()
