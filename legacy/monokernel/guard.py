@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from PySide6.QtCore import QObject, Signal
 
 from core.state import AppState, SystemStatus
-from engine.llm import LLMEngine
+from engine.base import EnginePort
 
 
 class MonoGuard(QObject):
@@ -14,7 +14,7 @@ class MonoGuard(QObject):
     sig_status = Signal(SystemStatus)
     sig_usage = Signal(int)
 
-    def __init__(self, state: AppState, engine: LLMEngine):
+    def __init__(self, state: AppState, engine: EnginePort):
         super().__init__()
         self.state = state
         self.engine = engine
