@@ -3,6 +3,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from core.state import AppState
+from engine.bridge import EngineBridge
 from engine.llm import LLMEngine
 from monokernel.guard import MonoGuard
 from ui.addons.builtin import build_builtin_registry
@@ -14,7 +15,8 @@ from ui.main_window import MonolithUI
 def main():
     app = QApplication(sys.argv)
     state = AppState()
-    engine = LLMEngine(state)
+    engine_impl = LLMEngine(state)
+    engine = EngineBridge(engine_impl)
     guard = MonoGuard(state, engine)
 
     ui = MonolithUI(state)
