@@ -124,6 +124,7 @@ class MonolithUI(QMainWindow):
     # ---------------- MODULE SYSTEM ----------------
 
     def close_module(self, mod_id):
+        current = self.stack.currentWidget()
         target_w = None
         for i in range(self.stack.count()):
             w = self.stack.widget(i)
@@ -137,7 +138,7 @@ class MonolithUI(QMainWindow):
             
         self.module_strip.remove_module(mod_id)
 
-        if self.stack.currentWidget() == target_w:
+        if current == target_w:
             self.set_page(0)
 
     def switch_to_module(self, mod_id):

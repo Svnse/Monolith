@@ -73,6 +73,7 @@ class PageSettings(QWidget):
         self.s_tok = SkeetSlider("Max Tokens", 512, 8192, state.max_tokens, is_int=True)
         self.s_tok.valueChanged.connect(lambda v: setattr(state, 'max_tokens', int(v)))
         self.s_ctx = SkeetSlider("Context Limit", 1024, 16384, state.ctx_limit, is_int=True)
+        self.s_ctx.valueChanged.connect(lambda v: setattr(state, "ctx_limit", int(v)))
         lbl_sys = QLabel("System Prompt")
         lbl_sys.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; margin-top: 5px;")
         self.inp_sys = QLineEdit(state.system_prompt)
@@ -113,8 +114,13 @@ class PageSettings(QWidget):
         # Init Stream Redirect
         self.sys_out = EmittingStream()
         self.sys_out.textWritten.connect(self.append_sys_log)
-        sys.stdout = self.sys_out
-        sys.stderr = self.sys_out
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        self._capture_enabled = False
+        if os.environ.get("MONOLITH_CAPTURE_STDIO") == "1":
+            sys.stdout = self.sys_out
+            sys.stderr = self.sys_out
+            self._capture_enabled = True
 
     def set_mode(self, mode):
         is_op = (mode == "OPERATOR")
@@ -140,3 +146,9 @@ class PageSettings(QWidget):
         if is_loading: self.btn_load.setText("PROCESSING...")
 
         else: self.btn_load.setText("UNLOAD MODEL" if self.state.model_loaded else "LOAD MODEL")
+
+    def closeEvent(self, event):
+        if self._capture_enabled:
+            sys.stdout = self._orig_stdout
+            sys.stderr = self._orig_stderr
+        super().closeEvent(event)

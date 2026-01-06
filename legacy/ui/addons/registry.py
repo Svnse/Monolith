@@ -11,6 +11,8 @@ class AddonRegistry:
         self._specs[spec.id] = spec
 
     def get(self, addon_id: str) -> AddonSpec:
+        if addon_id not in self._specs:
+            raise KeyError(f"Addon '{addon_id}' not found. Known addons: {list(self._specs.keys())}")
         return self._specs[addon_id]
 
     def all(self) -> Iterable[AddonSpec]:

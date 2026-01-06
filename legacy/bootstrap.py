@@ -27,6 +27,8 @@ def main():
     # global chrome-only wiring stays here
     guard.sig_status.connect(ui.update_status)
     guard.sig_usage.connect(ui.update_ctx)
+    app.aboutToQuit.connect(guard.slot_stop)
+    app.aboutToQuit.connect(engine.shutdown)
 
     ui.show()
     return app.exec()

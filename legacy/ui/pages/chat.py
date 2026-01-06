@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton
 )
 from PySide6.QtGui import QTextCursor
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
 
 from core.style import BG_INPUT, FG_DIM, FG_ACCENT, ACCENT_GOLD
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection
@@ -14,6 +14,10 @@ class PageChat(QWidget):
     def __init__(self, state):
         super().__init__()
         self.state = state
+        self._token_buf: list[str] = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(25)
+        self._flush_timer.timeout.connect(self._flush_tokens)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
@@ -114,7 +118,21 @@ class PageChat(QWidget):
         self.chat.moveCursor(QTextCursor.End)
         self.sig_generate.emit(txt)
 
-    def append_token(self, t): self.chat.insertPlainText(t)
+    def _flush_tokens(self):
+        if not self._token_buf:
+            self._flush_timer.stop()
+            return
+        chunk = "".join(self._token_buf)
+        self._token_buf.clear()
+        self.chat.moveCursor(QTextCursor.End)
+        self.chat.insertPlainText(chunk)
+        self.chat.moveCursor(QTextCursor.End)
+
+    def append_token(self, t):
+        self._token_buf.append(t)
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
     def append_trace(self, html): self.trace.append(html)
     def clear_chat(self):
         self.chat.clear()

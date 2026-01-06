@@ -32,15 +32,31 @@ class AddonHost:
         if not self.ctx.ui:
             raise RuntimeError("AddonHost requires UI for launching modules")
 
-        spec = self.registry.get(addon_id)
-        if spec.kind != "module":
-            raise ValueError(f"Addon '{addon_id}' is not a module")
-        instance_id = str(uuid.uuid4())
-        widget = spec.factory(self.ctx)
-        widget._mod_id = instance_id
+        try:
+            spec = self.registry.get(addon_id)
+            if spec.kind != "module":
+                raise ValueError(f"Addon '{addon_id}' is not a module")
+            instance_id = str(uuid.uuid4())
+            widget = spec.factory(self.ctx)
+        except Exception as e:
+            self.ctx.guard.sig_trace.emit(f"<span style='color:red'>ADDON ERROR: {e}</span>")
+            return ""
 
-        self.ctx.ui.stack.addWidget(widget)
-        self.ctx.ui.module_strip.add_module(instance_id, spec.icon or "?", spec.title)
+        widget._mod_id = instance_id
+        added_stack = False
+        added_strip = False
+        try:
+            self.ctx.ui.stack.addWidget(widget)
+            added_stack = True
+            self.ctx.ui.module_strip.add_module(instance_id, spec.icon or "?", spec.title)
+            added_strip = True
+        except Exception:
+            if added_strip:
+                self.ctx.ui.module_strip.remove_module(instance_id)
+            if added_stack:
+                self.ctx.ui.stack.removeWidget(widget)
+            widget.deleteLater()
+            return ""
 
         if hasattr(widget, "sig_closed"):
             widget.sig_closed.connect(lambda: self.ctx.ui.close_module(instance_id))
