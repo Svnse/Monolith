@@ -1,0 +1,17 @@
+from dataclasses import dataclass
+from typing import Optional, TYPE_CHECKING
+
+from core.state import AppState
+from monokernel.guard import MonoGuard
+
+if TYPE_CHECKING:
+    from ui.addons.host import AddonHost
+    from ui.main_window import MonolithUI
+
+
+@dataclass
+class AddonContext:
+    state: AppState
+    guard: MonoGuard
+    ui: Optional["MonolithUI"]
+    host: Optional["AddonHost"]

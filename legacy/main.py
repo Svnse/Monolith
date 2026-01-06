@@ -5,6 +5,9 @@ from core.state import AppState
 from engine.llm import LLMEngine
 from monokernel.guard import MonoGuard
 from ui.main_window import MonolithUI
+from ui.addons.builtin import build_builtin_registry
+from ui.addons.context import AddonContext
+from ui.addons.host import AddonHost
 
 def main():
     app = QApplication(sys.argv)
@@ -16,6 +19,10 @@ def main():
     
     # 2. Initialize UI
     ui = MonolithUI(state)
+    registry = build_builtin_registry()
+    ctx = AddonContext(state=state, guard=guard, ui=ui, host=None)
+    host = AddonHost(registry, ctx)
+    ui.attach_host(host)
 
     # 3. Connect UI Commands -> Engine
     ui.page_settings.sig_load.connect(guard.slot_load_model)

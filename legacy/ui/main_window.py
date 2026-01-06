@@ -1,4 +1,5 @@
-import uuid
+from typing import Optional
+
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QFrame, QLabel, QStackedLayout
@@ -8,18 +9,10 @@ from PySide6.QtGui import QMouseEvent
 
 from core.state import SystemStatus, AppState
 from core.style import BG_MAIN, BG_SIDEBAR, FG_ACCENT, FG_ERROR, FG_WARN
+from ui.addons.host import AddonHost
 from ui.components.atoms import SidebarButton, SkeetButton
 from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock, FlameLabel
 from ui.components.module_strip import ModuleStrip
-
-# PAGES
-from ui.pages.chat import PageChat
-from ui.pages.settings import PageSettings
-from ui.pages.databank import PageFiles
-
-# MODULES
-from ui.modules.manager import PageAddons
-from ui.modules.injector import InjectorWidget
 
 class MonolithUI(QMainWindow):
     def __init__(self, state: AppState):
@@ -91,15 +84,11 @@ class MonolithUI(QMainWindow):
 
         # --- PAGE STACK ---
         self.stack = QStackedLayout()
-        self.page_chat = PageChat(state)
-        self.page_files = PageFiles(state)
-        self.page_addons = PageAddons(state)
-        self.page_settings = PageSettings(state)
-        
-        self.stack.addWidget(self.page_chat)
-        self.stack.addWidget(self.page_files)
-        self.stack.addWidget(self.page_addons)
-        self.stack.addWidget(self.page_settings)
+        self.host: Optional[AddonHost] = None
+        self.page_chat = None
+        self.page_files = None
+        self.page_addons = None
+        self.page_settings = None
 
         self.center_vbox = QVBoxLayout()
         self.center_vbox.addLayout(self.stack)
@@ -107,8 +96,20 @@ class MonolithUI(QMainWindow):
 
         root_layout.addLayout(content_layout)
 
-        # --- SIGNALS ---
+    def attach_host(self, host: AddonHost) -> None:
+        self.host = host
+        self.page_chat = host.mount_page("terminal")
+        self.page_files = host.mount_page("databank")
+        self.page_addons = host.mount_page("addons")
+        self.page_settings = host.mount_page("settings")
+
+        self.stack.addWidget(self.page_chat)
+        self.stack.addWidget(self.page_files)
+        self.stack.addWidget(self.page_addons)
+        self.stack.addWidget(self.page_settings)
+
         self.page_addons.sig_launch_addon.connect(self.launch_addon)
+
         self.set_page(0)
 
     # ---------------- WINDOW BEHAVIOR ----------------
@@ -129,27 +130,9 @@ class MonolithUI(QMainWindow):
     # ---------------- MODULE SYSTEM ----------------
 
     def launch_addon(self, addon_type: str):
-        mod_id = str(uuid.uuid4())
-        widget = None
-        icon_char = "?"
-        label_text = "MODULE"
-        
-        if addon_type == "injector":
-            widget = InjectorWidget(self)
-            icon_char = "💉" 
-            label_text = "RUNTIME"
-        
-        if widget:
-            widget._mod_id = mod_id
-            self.stack.addWidget(widget)
-            self.module_strip.add_module(mod_id, icon_char, label_text)
-            
-            if hasattr(widget, 'sig_closed'):
-                widget.sig_closed.connect(lambda: self.close_module(mod_id))
-            if hasattr(widget, 'sig_finished'):
-                widget.sig_finished.connect(lambda: self.module_strip.flash_module(mod_id))
-            
-            self.switch_to_module(mod_id)
+        if not self.host:
+            return
+        self.host.launch_module(addon_type)
 
     def close_module(self, mod_id):
         target_w = None
@@ -166,7 +149,7 @@ class MonolithUI(QMainWindow):
         self.module_strip.remove_module(mod_id)
 
         if self.stack.currentWidget() == target_w:
-             self.set_page(0)
+            self.set_page(0)
 
     def switch_to_module(self, mod_id):
         for i in range(self.stack.count()):
