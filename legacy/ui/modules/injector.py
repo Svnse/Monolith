@@ -157,3 +157,9 @@ class InjectorWidget(QWidget):
             self.process.kill()
         self.sig_closed.emit()
         self.deleteLater()
+
+    def closeEvent(self, event):
+        if self.process.state() != QProcess.NotRunning:
+            self.process.kill()
+            self.process.waitForFinished(300)
+        event.accept()

@@ -23,3 +23,6 @@ class EnginePort(Protocol):
 
     def stop_generation(self) -> None:
         ...
+
+    def shutdown(self) -> None:
+        ...
