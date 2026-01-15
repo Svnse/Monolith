@@ -48,18 +48,18 @@ def build_builtin_registry() -> AddonRegistry:
     registry.register(
         AddonSpec(
             id="terminal",
-            kind="page",
+            kind="module",
             title="Terminal",
-            icon=None,
+            icon="⌖",
             factory=terminal_factory,
         )
     )
     registry.register(
         AddonSpec(
             id="databank",
-            kind="page",
+            kind="module",
             title="Databank",
-            icon=None,
+            icon="▤",
             factory=databank_factory,
         )
     )

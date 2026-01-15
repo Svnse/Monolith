@@ -1,11 +1,11 @@
 import math
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QScrollArea, QSizePolicy
+    QApplication, QWidget, QVBoxLayout, QScrollArea, QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QPoint
-from PySide6.QtGui import QPainter, QColor, QPen, QPolygonF
+from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QEvent
+from PySide6.QtGui import QPainter, QColor, QPen, QPolygonF, QDrag, QMimeData
 
-from core.style import ACCENT_GOLD, FG_DIM, FG_TEXT
+from core.style import ACCENT_GOLD
 from .atoms import SidebarButton
 
 class OverflowArrow(QWidget):
@@ -55,10 +55,24 @@ class ModuleIcon(SidebarButton):
         self.pulse_timer = QTimer(self)
         self.pulse_timer.timeout.connect(self._step_pulse)
         self.pulse_timer.start(50)
+        self._drag_start_pos = None
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MiddleButton: self.sig_close.emit(self.mod_id)
-        elif e.button() == Qt.LeftButton: self.sig_select.emit(self.mod_id)
+        elif e.button() == Qt.LeftButton:
+            self._drag_start_pos = e.position().toPoint()
+            self.sig_select.emit(self.mod_id)
+
+    def mouseMoveEvent(self, e):
+        if not (e.buttons() & Qt.LeftButton) or self._drag_start_pos is None:
+            return
+        if (e.position().toPoint() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData("application/x-monolith-module", self.mod_id.encode())
+        drag.setMimeData(mime)
+        drag.exec(Qt.MoveAction)
 
     def set_active(self, val):
         self.setChecked(val)
@@ -89,64 +103,6 @@ class ModuleIcon(SidebarButton):
             glow.setAlpha(alpha)
             p.fillRect(self.rect(), glow)
 
-class ModuleGroup(QWidget):
-    sig_item_select = Signal(str)
-    sig_item_close = Signal(str)
-
-    def __init__(self, code):
-        super().__init__()
-        self.code = code
-        self.expanded = False
-        self.items = {} 
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0,0,0,0)
-        self.layout.setSpacing(2)
-        
-        self.header = QPushButton(f"{code} ▸")
-        self.header.setFixedSize(50, 40)
-        self.header.setCursor(Qt.PointingHandCursor)
-        self.header.setStyleSheet(f"""
-            QPushButton {{
-                color: {FG_DIM}; background: transparent; 
-                border: 1px solid #222; font-weight: bold; font-size: 10px;
-            }}
-            QPushButton:hover {{ color: {FG_TEXT}; border-color: #444; }}
-        """)
-        self.header.clicked.connect(self.toggle)
-        self.layout.addWidget(self.header)
-        
-        self.container = QWidget()
-        self.cont_layout = QVBoxLayout(self.container)
-        self.cont_layout.setContentsMargins(10, 0, 0, 5)
-        self.cont_layout.setSpacing(2)
-        self.container.setVisible(False)
-        self.layout.addWidget(self.container)
-
-    def add_item(self, mod_id, icon_char, label_text):
-        icon = ModuleIcon(mod_id, icon_char, label_text)
-        icon.sig_select.connect(self.sig_item_select)
-        icon.sig_close.connect(self.sig_item_close)
-        icon.setFixedSize(40, 40)
-        icon.lbl_icon.setStyleSheet("font-size: 14px;")
-        icon.lbl_text.setVisible(False)
-        self.items[mod_id] = icon
-        self.cont_layout.addWidget(icon)
-        self.update_recent(mod_id)
-
-    def remove_item(self, mod_id):
-        if mod_id in self.items:
-            icon = self.items.pop(mod_id)
-            icon.deleteLater()
-
-    def update_recent(self, mod_id):
-        for mid, icon in self.items.items():
-            icon.set_pulsing(mid == mod_id)
-
-    def toggle(self):
-        self.expanded = not self.expanded
-        self.container.setVisible(self.expanded)
-        self.header.setText(f"{self.code} {'▾' if self.expanded else '▸'}")
-
 class ModuleStrip(QWidget):
     sig_module_selected = Signal(str)
     sig_module_closed = Signal(str)
@@ -166,96 +122,95 @@ class ModuleStrip(QWidget):
         self.vbox = QVBoxLayout(self.content)
         self.vbox.setContentsMargins(5, 5, 5, 5)
         self.vbox.setSpacing(5)
-        self.vbox.addStretch() 
+        self.vbox.addStretch()
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll)
         self.arrow = OverflowArrow()
         self.arrow.clicked.connect(self.scroll_down)
         self.arrow.setVisible(False)
         layout.addWidget(self.arrow)
-        self.groups = {}
-        self.singles = {}
-        self.registry = {}
+        self.modules = {}
+        self.order = []
+        self.content.setAcceptDrops(True)
+        self.content.installEventFilter(self)
 
     def add_module(self, mod_id, icon_char, label_text):
-        self.registry[mod_id] = (icon_char, label_text)
-        existing = [mid for mid, (c, l) in self.registry.items() if c == icon_char and mid != mod_id]
-        if not existing:
-            icon = ModuleIcon(mod_id, icon_char, label_text)
-            icon.sig_select.connect(self.sig_module_selected)
-            icon.sig_close.connect(self.sig_module_closed)
-            self.vbox.insertWidget(self.vbox.count()-1, icon)
-            self.singles[mod_id] = icon
-        else:
-            if icon_char not in self.groups:
-                prev_id = existing[0]
-                prev_data = self.registry[prev_id]
-                prev_icon = self.singles.pop(prev_id)
-                self.vbox.removeWidget(prev_icon)
-                prev_icon.deleteLater()
-                group = ModuleGroup(icon_char)
-                group.sig_item_select.connect(self.sig_module_selected)
-                group.sig_item_close.connect(self.sig_module_closed)
-                self.groups[icon_char] = group
-                self.vbox.insertWidget(self.vbox.count()-1, group)
-                group.add_item(prev_id, prev_data[0], prev_data[1])
-                group.add_item(mod_id, icon_char, label_text)
-                if not group.expanded: group.toggle()
-            else:
-                group = self.groups[icon_char]
-                group.add_item(mod_id, icon_char, label_text)
-                if not group.expanded: group.toggle()
-                group.update_recent(mod_id)
+        icon = ModuleIcon(mod_id, icon_char, label_text)
+        icon.sig_select.connect(self.sig_module_selected)
+        icon.sig_close.connect(self.sig_module_closed)
+        self.modules[mod_id] = icon
+        self.order.append(mod_id)
+        self.vbox.insertWidget(self.vbox.count()-1, icon)
         self._check_overflow()
 
     def remove_module(self, mod_id):
-        if mod_id not in self.registry: return
-        icon_char, _ = self.registry.pop(mod_id)
-        if mod_id in self.singles:
-            icon = self.singles.pop(mod_id)
-            icon.deleteLater()
-        elif icon_char in self.groups:
-            group = self.groups[icon_char]
-            group.remove_item(mod_id)
-            remaining = [mid for mid, (c, l) in self.registry.items() if c == icon_char]
-            if len(remaining) == 1:
-                last_id = remaining[0]
-                last_data = self.registry[last_id]
-                self.vbox.removeWidget(group)
-                del self.groups[icon_char]
-                group.deleteLater()
-                icon = ModuleIcon(last_id, last_data[0], last_data[1])
-                icon.sig_select.connect(self.sig_module_selected)
-                icon.sig_close.connect(self.sig_module_closed)
-                self.vbox.insertWidget(self.vbox.count()-1, icon)
-                self.singles[last_id] = icon
+        if mod_id not in self.modules:
+            return
+        icon = self.modules.pop(mod_id)
+        if mod_id in self.order:
+            self.order.remove(mod_id)
+        self.vbox.removeWidget(icon)
+        icon.deleteLater()
         self._check_overflow()
 
     def select_module(self, mod_id):
         self.deselect_all()
-        if mod_id in self.singles:
-            self.singles[mod_id].set_active(True)
-        else:
-            data = self.registry.get(mod_id)
-            if data and data[0] in self.groups:
-                grp = self.groups[data[0]]
-                if mod_id in grp.items:
-                    grp.items[mod_id].set_active(True)
+        if mod_id in self.modules:
+            self.modules[mod_id].set_active(True)
     
     def flash_module(self, mod_id):
-        if mod_id in self.singles:
-            self.singles[mod_id].flash()
-        else:
-            data = self.registry.get(mod_id)
-            if data and data[0] in self.groups:
-                grp = self.groups[data[0]]
-                if mod_id in grp.items:
-                    grp.items[mod_id].flash()
+        if mod_id in self.modules:
+            self.modules[mod_id].flash()
 
     def deselect_all(self):
-        for icon in self.singles.values(): icon.set_active(False)
-        for grp in self.groups.values():
-            for icon in grp.items.values(): icon.set_active(False)
+        for icon in self.modules.values(): icon.set_active(False)
+
+    def get_order(self):
+        return list(self.order)
+
+    def eventFilter(self, obj, event):
+        if obj is self.content:
+            if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+                if event.mimeData().hasFormat("application/x-monolith-module"):
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Drop:
+                if event.mimeData().hasFormat("application/x-monolith-module"):
+                    mod_id = bytes(event.mimeData().data("application/x-monolith-module")).decode()
+                    target = self._module_at_pos(event.position().toPoint())
+                    self.reorder_module(mod_id, target)
+                    event.acceptProposedAction()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def reorder_module(self, mod_id, target_id):
+        if mod_id not in self.order or mod_id == target_id:
+            return
+        self.order.remove(mod_id)
+        if target_id and target_id in self.order:
+            target_index = self.order.index(target_id)
+            self.order.insert(target_index, mod_id)
+        else:
+            self.order.append(mod_id)
+        self._rebuild_layout()
+
+    def _module_at_pos(self, pos):
+        widget = self.content.childAt(pos)
+        while widget and widget is not self.content:
+            if isinstance(widget, ModuleIcon):
+                return widget.mod_id
+            widget = widget.parent()
+        return None
+
+    def _rebuild_layout(self):
+        while self.vbox.count():
+            item = self.vbox.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        for mod_id in self.order:
+            self.vbox.addWidget(self.modules[mod_id])
+        self.vbox.addStretch()
+        self._check_overflow()
 
     def _check_overflow(self):
         self.content.adjustSize()

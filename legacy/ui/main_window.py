@@ -57,24 +57,16 @@ class MonolithUI(QMainWindow):
         sidebar_layout.setContentsMargins(5, 15, 5, 15)
         sidebar_layout.setSpacing(10)
 
-        self.btn_chat = SidebarButton("⌖", "TERMINAL") 
-        self.btn_chat.clicked.connect(lambda: self.set_page(0))
-
-        self.btn_files = SidebarButton("▤", "DATABANK")
-        self.btn_files.clicked.connect(lambda: self.set_page(1))
-
         self.module_strip = ModuleStrip()
         self.module_strip.sig_module_selected.connect(self.switch_to_module)
         self.module_strip.sig_module_closed.connect(self.close_module)
 
         self.btn_conf = SidebarButton("⚙", "CONFIG")
-        self.btn_conf.clicked.connect(lambda: self.set_page(3))
+        self.btn_conf.clicked.connect(lambda: self.set_page("settings"))
 
         self.btn_addons = SidebarButton("＋", "ADDONS")
-        self.btn_addons.clicked.connect(lambda: self.set_page(2))
+        self.btn_addons.clicked.connect(lambda: self.set_page("addons"))
 
-        sidebar_layout.addWidget(self.btn_chat)
-        sidebar_layout.addWidget(self.btn_files)
         sidebar_layout.addWidget(self.module_strip)
         sidebar_layout.addStretch() 
         sidebar_layout.addWidget(self.btn_conf)
@@ -85,6 +77,11 @@ class MonolithUI(QMainWindow):
         # --- PAGE STACK ---
         self.stack = QStackedLayout()
         self.host: Optional[AddonHost] = None
+        self.pages = {}
+
+        self.empty_page = QWidget()
+        self.stack.addWidget(self.empty_page)
+        self.pages["empty"] = self.empty_page
 
         self.center_vbox = QVBoxLayout()
         self.center_vbox.addLayout(self.stack)
@@ -94,17 +91,15 @@ class MonolithUI(QMainWindow):
 
     def attach_host(self, host: AddonHost) -> None:
         self.host = host
-        terminal = host.mount_page("terminal")
-        databank = host.mount_page("databank")
         addons = host.mount_page("addons")
         settings = host.mount_page("settings")
 
-        self.stack.addWidget(terminal)
-        self.stack.addWidget(databank)
         self.stack.addWidget(addons)
         self.stack.addWidget(settings)
+        self.pages["addons"] = addons
+        self.pages["settings"] = settings
 
-        self.set_page(0)
+        self.set_page("empty")
 
     # ---------------- WINDOW BEHAVIOR ----------------
 
@@ -139,7 +134,11 @@ class MonolithUI(QMainWindow):
         self.module_strip.remove_module(mod_id)
 
         if current == target_w:
-            self.set_page(0)
+            remaining = self.module_strip.get_order()
+            if remaining:
+                self.switch_to_module(remaining[-1])
+            else:
+                self.set_page("empty")
 
     def switch_to_module(self, mod_id):
         for i in range(self.stack.count()):
@@ -151,10 +150,8 @@ class MonolithUI(QMainWindow):
                 return
 
     def _update_sidebar_state(self, page_idx=None, module_selection=False):
-        self.btn_chat.setChecked(page_idx == 0 and not module_selection)
-        self.btn_files.setChecked(page_idx == 1 and not module_selection)
-        self.btn_addons.setChecked(page_idx == 2 and not module_selection)
-        self.btn_conf.setChecked(page_idx == 3 and not module_selection)
+        self.btn_addons.setChecked(page_idx == "addons" and not module_selection)
+        self.btn_conf.setChecked(page_idx == "settings" and not module_selection)
         if not module_selection: self.module_strip.deselect_all()
 
     def update_status(self, status):
@@ -175,9 +172,11 @@ class MonolithUI(QMainWindow):
     def update_ctx(self, used):
         self.state.ctx_used = used
 
-    def set_page(self, idx):
-        self.stack.setCurrentIndex(idx)
-        self._update_sidebar_state(page_idx=idx)
+    def set_page(self, page_id):
+        target = self.pages.get(page_id)
+        if target:
+            self.stack.setCurrentWidget(target)
+        self._update_sidebar_state(page_idx=page_id)
 
     def _build_top_bar(self):
         bar = QFrame()
