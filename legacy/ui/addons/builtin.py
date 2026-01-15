@@ -2,6 +2,8 @@ from ui.addons.context import AddonContext
 from ui.addons.registry import AddonRegistry
 from ui.addons.spec import AddonSpec
 from ui.modules.injector import InjectorWidget
+from ui.modules.sd import SDModule
+from ui.modules.audiogen import AudioGenModule
 from ui.modules.manager import PageAddons
 from ui.pages.chat import PageChat
 from ui.pages.databank import PageFiles
@@ -40,6 +42,14 @@ def databank_factory(ctx: AddonContext):
 def injector_factory(ctx: AddonContext):
     assert ctx.ui is not None, "InjectorWidget requires UI parent"
     return InjectorWidget(ctx.ui)
+
+
+def sd_factory(ctx: AddonContext):
+    return SDModule()
+
+
+def audiogen_factory(ctx: AddonContext):
+    return AudioGenModule()
 
 
 def build_builtin_registry() -> AddonRegistry:
@@ -89,6 +99,24 @@ def build_builtin_registry() -> AddonRegistry:
             title="RUNTIME",
             icon="💉",
             factory=injector_factory,
+        )
+    )
+    registry.register(
+        AddonSpec(
+            id="sd",
+            kind="module",
+            title="Stable Diffusion",
+            icon="⟡",
+            factory=sd_factory,
+        )
+    )
+    registry.register(
+        AddonSpec(
+            id="audiogen",
+            kind="module",
+            title="Audio Gen",
+            icon="♫",
+            factory=audiogen_factory,
         )
     )
 
