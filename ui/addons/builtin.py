@@ -54,7 +54,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="terminal",
             kind="module",
-            title="Terminal",
+            title="TERMINAL",
             icon="⌖",
             factory=terminal_factory,
         )
@@ -90,7 +90,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="sd",
             kind="module",
-            title="Stable Diffusion",
+            title="Vision",
             icon="⟡",
             factory=sd_factory,
         )
@@ -99,7 +99,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="audiogen",
             kind="module",
-            title="Audio Gen",
+            title="Audio",
             icon="♫",
             factory=audiogen_factory,
         )

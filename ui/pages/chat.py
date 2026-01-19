@@ -6,7 +6,7 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Signal, Qt, QTimer
 
 from core.state import SystemStatus
-from core.style import BG_INPUT, FG_DIM, FG_ACCENT, ACCENT_GOLD
+from core.style import BG_INPUT, FG_DIM, FG_ACCENT, FG_TEXT, ACCENT_GOLD
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
 from ui.modules.llm_config import load_config, save_config
 
@@ -54,21 +54,6 @@ class PageChat(QWidget):
             font-family: 'Consolas', monospace; font-size: 12px;
         """)
         chat_layout.addWidget(self.chat)
-        
-        self.drawer = CollapsibleSection("▼ PRE-CONTEXT INJECTION")
-        d_layout = QVBoxLayout()
-        d_layout.setContentsMargins(5,5,5,5)
-        self.txt_ctx = QLineEdit()
-        self.txt_ctx.setPlaceholderText("Override system prompt...")
-        self.txt_ctx.setStyleSheet(f"""
-            background: {BG_INPUT}; color: #888; border: 1px solid #333; 
-            font-family: 'Verdana'; font-size: 11px; padding: 4px;
-        """)
-        self.txt_ctx.setText(self.config.get("context_injection", ""))
-        self.txt_ctx.textChanged.connect(self._on_context_injection_changed)
-        d_layout.addWidget(self.txt_ctx)
-        self.drawer.set_content_layout(d_layout)
-        chat_layout.addWidget(self.drawer)
         
         input_row = QHBoxLayout()
         self.input = QLineEdit()
@@ -192,7 +177,7 @@ class PageChat(QWidget):
         if not txt: return
         self.input.clear()
         self.chat.append(f"<span style='color:{ACCENT_GOLD}'><b>USER:</b></span> {txt}")
-        self.chat.append(f"<span style='color:{FG_ACCENT}'><b>MONOLITH:</b></span>")
+        self.chat.append(f"<span style='color:{FG_TEXT}'><b>MONOLITH:</b></span>")
         self.chat.moveCursor(QTextCursor.End)
         self.sig_generate.emit(txt)
 
