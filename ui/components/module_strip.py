@@ -52,9 +52,6 @@ class ModuleIcon(SidebarButton):
         self.customContextMenuRequested.connect(lambda: self.sig_close.emit(self.mod_id))
         
         self.pulse_phase = 0.0
-        self.pulse_timer = QTimer(self)
-        self.pulse_timer.timeout.connect(self._step_pulse)
-        self.pulse_timer.start(50)
         self._drag_start_pos = None
 
     def mousePressEvent(self, e):
@@ -81,17 +78,14 @@ class ModuleIcon(SidebarButton):
     def flash(self):
         if not self.isChecked():
             self.is_pulsing = True
-            QTimer.singleShot(2000, lambda: self.set_pulsing(False))
+            self.pulse_phase = 0.0
+            self.update()
+            QTimer.singleShot(250, lambda: self.set_pulsing(False))
 
     def set_pulsing(self, val):
         self.is_pulsing = val
         if val: self.pulse_phase = 0.0
         self.update()
-
-    def _step_pulse(self):
-        if self.is_pulsing:
-            self.pulse_phase += 0.15
-            self.update()
 
     def paintEvent(self, e):
         super().paintEvent(e)

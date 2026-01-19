@@ -63,7 +63,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="databank",
             kind="module",
-            title="Databank",
+            title="DATABANK",
             icon="▤",
             factory=databank_factory,
         )
@@ -72,7 +72,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="addons",
             kind="page",
-            title="Addons",
+            title="ADDONS",
             icon=None,
             factory=addons_page_factory,
         )
@@ -90,7 +90,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="sd",
             kind="module",
-            title="Vision",
+            title="VISION",
             icon="⟡",
             factory=sd_factory,
         )
@@ -99,7 +99,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="audiogen",
             kind="module",
-            title="Audio",
+            title="AUDIO",
             icon="♫",
             factory=audiogen_factory,
         )

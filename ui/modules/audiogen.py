@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QFrame, QComboBox, QDoubleSpinBox, QPushButton
 )
-from PySide6.QtCore import Qt, QThread, Signal, QUrl
+from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QPainter, QPen, QColor
 
@@ -77,10 +77,10 @@ class AudioGenWorker(QThread):
     finished = Signal(object, int)
     error = Signal(str)
 
-    def __init__(self, prompt, model_name, duration, sample_rate):
+    def __init__(self, prompt, model_id, duration, sample_rate):
         super().__init__()
         self.prompt = prompt
-        self.model_name = model_name
+        self.model_id = model_id
         self.duration = duration
         self.sample_rate = sample_rate
 
@@ -92,7 +92,7 @@ class AudioGenWorker(QThread):
             
             self.progress.emit("Loading model...")
             
-            model = MusicGen.get_pretrained(self.model_name)
+            model = MusicGen.get_pretrained(self.model_id)
             model.set_generation_params(duration=self.duration)
             
             self.progress.emit("Generating audio...")
@@ -121,6 +121,10 @@ class AudioGenModule(QWidget):
         self.current_sample_rate = None
         self.current_filepath = None
         self.worker = None
+        self._config_timer = QTimer(self)
+        self._config_timer.setInterval(250)
+        self._config_timer.setSingleShot(True)
+        self._config_timer.timeout.connect(self._save_config)
         
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
@@ -129,7 +133,7 @@ class AudioGenModule(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        grp = SkeetGroupBox("AUDIO GENERATION")
+        grp = SkeetGroupBox("AUDIO")
         inner = QVBoxLayout()
         inner.setSpacing(12)
 
@@ -137,15 +141,32 @@ class AudioGenModule(QWidget):
         config_section = CollapsibleSection("⚙ CONFIGURATION")
         config_layout = QVBoxLayout()
         config_layout.setSpacing(8)
-        
-        # Model Size
+
+        grp_model = SkeetGroupBox("MODEL LOADER")
+        model_layout = QVBoxLayout()
         model_row = QHBoxLayout()
-        lbl_model = QLabel("Model")
+        lbl_model = QLabel("MODEL ID")
         lbl_model.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
         lbl_model.setFixedWidth(80)
+        self.inp_model_id = QLineEdit()
+        self.inp_model_id.setPlaceholderText("facebook/musicgen-small")
+        self.inp_model_id.setText(self.config.get("model_id", "facebook/musicgen-small"))
+        self.inp_model_id.setStyleSheet(f"""
+            QLineEdit {{
+                background: {BG_INPUT}; color: {FG_TEXT};
+                border: 1px solid {BORDER_DARK}; padding: 4px;
+            }}
+        """)
+        model_row.addWidget(lbl_model)
+        model_row.addWidget(self.inp_model_id)
+        model_layout.addLayout(model_row)
+
+        size_row = QHBoxLayout()
+        lbl_size = QLabel("SIZE")
+        lbl_size.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_size.setFixedWidth(80)
         self.cmb_model = QComboBox()
         self.cmb_model.addItems(["small", "medium", "large"])
-        self.cmb_model.setCurrentText(self.config.get("model_size", "small"))
         self.cmb_model.setStyleSheet(f"""
             QComboBox {{
                 background: {BG_INPUT}; color: {FG_TEXT};
@@ -154,12 +175,16 @@ class AudioGenModule(QWidget):
             QComboBox::drop-down {{ border: none; }}
             QComboBox::down-arrow {{ image: none; }}
         """)
-        model_row.addWidget(lbl_model)
-        model_row.addWidget(self.cmb_model)
-        model_row.addStretch()
-        config_layout.addLayout(model_row)
-        
-        # Duration
+        size_row.addWidget(lbl_size)
+        size_row.addWidget(self.cmb_model)
+        size_row.addStretch()
+        model_layout.addLayout(size_row)
+        grp_model.add_layout(model_layout)
+        config_layout.addWidget(grp_model)
+
+        grp_audio = SkeetGroupBox("AUDIO CONFIG")
+        audio_layout = QVBoxLayout()
+
         duration_row = QHBoxLayout()
         lbl_duration = QLabel("Duration (s)")
         lbl_duration.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
@@ -177,9 +202,8 @@ class AudioGenModule(QWidget):
         duration_row.addWidget(lbl_duration)
         duration_row.addWidget(self.inp_duration)
         duration_row.addStretch()
-        config_layout.addLayout(duration_row)
-        
-        # Sample Rate
+        audio_layout.addLayout(duration_row)
+
         sr_row = QHBoxLayout()
         lbl_sr = QLabel("Sample Rate")
         lbl_sr.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
@@ -196,11 +220,10 @@ class AudioGenModule(QWidget):
         sr_row.addWidget(lbl_sr)
         sr_row.addWidget(self.cmb_sr)
         sr_row.addStretch()
-        config_layout.addLayout(sr_row)
-        
-        btn_save_config = SkeetButton("SAVE CONFIG")
-        btn_save_config.clicked.connect(self._save_config)
-        config_layout.addWidget(btn_save_config)
+        audio_layout.addLayout(sr_row)
+
+        grp_audio.add_layout(audio_layout)
+        config_layout.addWidget(grp_audio)
         
         config_section.set_content_layout(config_layout)
         inner.addWidget(config_section)
@@ -256,22 +279,53 @@ class AudioGenModule(QWidget):
         grp.add_layout(inner)
         layout.addWidget(grp)
 
+        self._sync_model_size_from_id()
+        self.inp_model_id.textChanged.connect(self._queue_save_config)
+        self.inp_duration.valueChanged.connect(self._queue_save_config)
+        self.cmb_sr.currentTextChanged.connect(self._queue_save_config)
+        self.cmb_model.currentTextChanged.connect(self._on_model_size_changed)
+
     def _load_config(self):
         if self.config_path.exists():
             try:
                 with open(self.config_path, 'r') as f:
-                    return json.load(f)
+                    config = json.load(f)
+                if "model_id" not in config and "model_size" in config:
+                    model_size = config.get("model_size", "small")
+                    config["model_id"] = f"facebook/musicgen-{model_size}"
+                    config.pop("model_size", None)
+                    try:
+                        with open(self.config_path, 'w') as f:
+                            json.dump(config, f, indent=2)
+                    except Exception:
+                        pass
+                return config
             except:
                 pass
         return {
-            "model_size": "small",
+            "model_id": "facebook/musicgen-small",
             "duration": 5.0,
             "sample_rate": 32000
         }
 
+    def _sync_model_size_from_id(self):
+        model_id = self.inp_model_id.text()
+        size = None
+        if model_id.startswith("facebook/musicgen-"):
+            suffix = model_id.split("facebook/musicgen-")[-1]
+            if suffix in {"small", "medium", "large"}:
+                size = suffix
+        if size:
+            self.cmb_model.setCurrentText(size)
+        else:
+            self.cmb_model.setCurrentText("small")
+
+    def _queue_save_config(self):
+        self._config_timer.start()
+
     def _save_config(self):
         config = {
-            "model_size": self.cmb_model.currentText(),
+            "model_id": self.inp_model_id.text().strip() or self.inp_model_id.placeholderText(),
             "duration": self.inp_duration.value(),
             "sample_rate": int(self.cmb_sr.currentText())
         }
@@ -279,6 +333,9 @@ class AudioGenModule(QWidget):
             json.dump(config, f, indent=2)
         self.config = config
         self._set_status("CONFIG SAVED", FG_ACCENT)
+
+    def _on_model_size_changed(self, size):
+        self.inp_model_id.setText(f"facebook/musicgen-{size}")
 
     def _set_status(self, status, color):
         self.lbl_status.setText(status)
@@ -301,7 +358,7 @@ class AudioGenModule(QWidget):
 
         self.worker = AudioGenWorker(
             prompt,
-            self.cmb_model.currentText(),
+            self.inp_model_id.text().strip() or self.inp_model_id.placeholderText(),
             self.inp_duration.value(),
             int(self.cmb_sr.currentText())
         )
