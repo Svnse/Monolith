@@ -46,50 +46,16 @@ class PageChat(QWidget):
         controls.addWidget(btn_new)
         controls.addWidget(btn_clear)
         chat_layout.addLayout(controls)
-        
-        self.chat = QTextEdit()
-        self.chat.setReadOnly(True)
-        self.chat.setStyleSheet(f"""
-            background: {BG_INPUT}; color: #ccc; border: 1px solid #222; 
-            font-family: 'Consolas', monospace; font-size: 12px;
-        """)
-        chat_layout.addWidget(self.chat)
-        
-        input_row = QHBoxLayout()
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("Enter command...")
-        self.input.returnPressed.connect(self.send)
-        self.input.setStyleSheet(f"""
-            QLineEdit {{
-                background: {BG_INPUT}; color: white; border: 1px solid #333;
-                padding: 8px; font-family: 'Verdana'; font-size: 11px;
-            }}
-            QLineEdit:focus {{ border: 1px solid {ACCENT_GOLD}; }}
-        """)
-        
-        self.btn_send = QPushButton("SEND")
-        self.btn_send.setCursor(Qt.PointingHandCursor)
-        self.btn_send.setFixedWidth(80)
-        self.btn_send.setStyleSheet(f"""
-            QPushButton {{
-                background: {BG_INPUT}; 
-                border: 1px solid {ACCENT_GOLD}; 
-                color: {ACCENT_GOLD}; 
-                padding: 8px; font-size: 11px; font-weight: bold; border-radius: 2px;
-            }}
-            QPushButton:hover {{ background: {ACCENT_GOLD}; color: black; }}
-            QPushButton:pressed {{ background: #b08d2b; }}
-        """)
-        self.btn_send.clicked.connect(self.send)
-        
-        input_row.addWidget(self.input)
-        input_row.addWidget(self.btn_send)
-        chat_layout.addLayout(input_row)
-        
-        chat_group.add_layout(chat_layout)
-        left_col.addWidget(chat_group)
 
         config_section = CollapsibleSection("⚙ CONFIGURATION")
+        config_section.btn_toggle.setStyleSheet(f"""
+            QPushButton {{
+                color: {FG_TEXT}; background: transparent;
+                border: none; text-align: left; font-weight: bold; font-size: 10px;
+            }}
+            QPushButton:checked {{ color: {FG_TEXT}; }}
+            QPushButton:hover {{ color: {FG_TEXT}; }}
+        """)
         config_layout = QVBoxLayout()
         config_layout.setSpacing(12)
 
@@ -153,7 +119,49 @@ class PageChat(QWidget):
         config_row.addLayout(ai_col)
         config_layout.addLayout(config_row)
         config_section.set_content_layout(config_layout)
-        left_col.addWidget(config_section)
+        chat_layout.addWidget(config_section)
+
+        self.chat = QTextEdit()
+        self.chat.setReadOnly(True)
+        self.chat.setStyleSheet(f"""
+            background: {BG_INPUT}; color: #ccc; border: 1px solid #222; 
+            font-family: 'Consolas', monospace; font-size: 12px;
+        """)
+        chat_layout.addWidget(self.chat)
+        
+        input_row = QHBoxLayout()
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("Enter command...")
+        self.input.returnPressed.connect(self.send)
+        self.input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {BG_INPUT}; color: white; border: 1px solid #333;
+                padding: 8px; font-family: 'Verdana'; font-size: 11px;
+            }}
+            QLineEdit:focus {{ border: 1px solid {ACCENT_GOLD}; }}
+        """)
+        
+        self.btn_send = QPushButton("SEND")
+        self.btn_send.setCursor(Qt.PointingHandCursor)
+        self.btn_send.setFixedWidth(80)
+        self.btn_send.setStyleSheet(f"""
+            QPushButton {{
+                background: {BG_INPUT}; 
+                border: 1px solid {ACCENT_GOLD}; 
+                color: {ACCENT_GOLD}; 
+                padding: 8px; font-size: 11px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:hover {{ background: {ACCENT_GOLD}; color: black; }}
+            QPushButton:pressed {{ background: #b08d2b; }}
+        """)
+        self.btn_send.clicked.connect(self.send)
+        
+        input_row.addWidget(self.input)
+        input_row.addWidget(self.btn_send)
+        chat_layout.addLayout(input_row)
+        
+        chat_group.add_layout(chat_layout)
+        left_col.addWidget(chat_group)
         left_col.addStretch()
         layout.addLayout(left_col, 3)
 
@@ -162,7 +170,7 @@ class PageChat(QWidget):
         self.trace = QTextEdit()
         self.trace.setReadOnly(True)
         self.trace.setStyleSheet(f"""
-            background: {BG_INPUT}; color: {FG_ACCENT}; border: 1px solid #222; 
+            background: {BG_INPUT}; color: {FG_TEXT}; border: 1px solid #222; 
             font-family: 'Consolas', monospace; font-size: 10px;
         """)
         trace_group.add_widget(self.trace)

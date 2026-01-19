@@ -175,7 +175,7 @@ class MonolithUI(QMainWindow):
         self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
 
         btn_vitals = SkeetButton("VITALS")
-        btn_vitals.setFixedSize(75, 22)
+        btn_vitals.setFixedSize(75, 26)
         btn_vitals.clicked.connect(self.toggle_vitals)
 
         layout.addWidget(btn_vitals)
