@@ -81,9 +81,9 @@ class SkeetSlider(QWidget):
             self.slider.setValue(int(init_v*100))
         self.slider.setStyleSheet(f"""
             QSlider::groove:horizontal {{ height: 4px; background: #222; border-radius: 2px; }}
-            QSlider::handle:horizontal {{ background: {FG_DIM}; width: 8px; margin: -2px 0; border-radius: 4px; }}
-            QSlider::handle:horizontal:hover {{ background: {FG_ACCENT}; }}
-            QSlider::sub-page:horizontal {{ background: {FG_ACCENT}; border-radius: 2px; }}
+            QSlider::handle:horizontal {{ background: {ACCENT_GOLD}; width: 8px; margin: -2px 0; border-radius: 4px; }}
+            QSlider::handle:horizontal:hover {{ background: {ACCENT_GOLD}; }}
+            QSlider::sub-page:horizontal {{ background: #ffffff; border-radius: 2px; }}
         """)
         self.slider.valueChanged.connect(self._on_change)
         layout.addWidget(self.lbl)

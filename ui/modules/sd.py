@@ -4,7 +4,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QFrame, QScrollArea, QFileDialog, QSpinBox, QDoubleSpinBox,
-    QCheckBox, QAbstractSpinBox
+    QAbstractSpinBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QPixmap, QImage
@@ -25,13 +25,13 @@ class SDWorker(QThread):
     finished = Signal(object)
     error = Signal(str)
 
-    def __init__(self, prompt, model_path, steps, guidance, seed, use_seed):
+    def __init__(self, prompt, model_path, steps, guidance, seed):
         super().__init__()
         self.prompt = prompt
         self.model_path = model_path
         self.steps = steps
         self.guidance = guidance
-        self.seed = seed if use_seed else None
+        self.seed = seed
 
     def run(self):
         try:
@@ -195,13 +195,13 @@ class SDModule(QWidget):
         
         # Seed
         seed_row = QHBoxLayout()
-        self.chk_seed = QCheckBox("Use Seed")
-        self.chk_seed.setChecked(self.config.get("use_seed", False))
-        self.chk_seed.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_seed = QLabel("Seed")
+        lbl_seed.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_seed.setFixedWidth(80)
         self.inp_seed = QSpinBox()
-        self.inp_seed.setRange(0, 2147483647)
-        self.inp_seed.setValue(self.config.get("seed", 42))
-        self.inp_seed.setEnabled(self.chk_seed.isChecked())
+        self.inp_seed.setRange(-1, 2147483647)
+        self.inp_seed.setSpecialValueText("RANDOM")
+        self.inp_seed.setValue(self.config.get("seed", -1))
         self.inp_seed.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.inp_seed.setStyleSheet(f"""
             QSpinBox {{
@@ -209,17 +209,32 @@ class SDModule(QWidget):
                 border: 1px solid {BORDER_DARK}; padding: 4px;
             }}
         """)
-        self.chk_seed.toggled.connect(self.inp_seed.setEnabled)
-        seed_row.addWidget(self.chk_seed)
-        btn_seed_up = SkeetButton("+")
-        btn_seed_up.setFixedWidth(26)
-        btn_seed_up.clicked.connect(self.inp_seed.stepUp)
-        btn_seed_down = SkeetButton("-")
-        btn_seed_down.setFixedWidth(26)
+        btn_seed_down = SkeetButton("◀")
+        btn_seed_down.setFixedSize(20, 20)
+        btn_seed_down.setStyleSheet(f"""
+            QPushButton {{
+                background: #181818; border: 1px solid #333; color: {FG_DIM};
+                padding: 0; font-size: 10px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:hover {{ background: #222; color: {FG_ACCENT}; border: 1px solid {FG_ACCENT}; }}
+            QPushButton:disabled {{ background: #111; color: #333; border: 1px solid #222; }}
+        """)
         btn_seed_down.clicked.connect(self.inp_seed.stepDown)
-        seed_row.addWidget(btn_seed_up)
-        seed_row.addWidget(self.inp_seed)
+        btn_seed_up = SkeetButton("▶")
+        btn_seed_up.setFixedSize(20, 20)
+        btn_seed_up.setStyleSheet(f"""
+            QPushButton {{
+                background: #181818; border: 1px solid #333; color: {FG_DIM};
+                padding: 0; font-size: 10px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:hover {{ background: #222; color: {FG_ACCENT}; border: 1px solid {FG_ACCENT}; }}
+            QPushButton:disabled {{ background: #111; color: #333; border: 1px solid #222; }}
+        """)
+        btn_seed_up.clicked.connect(self.inp_seed.stepUp)
+        seed_row.addWidget(lbl_seed)
         seed_row.addWidget(btn_seed_down)
+        seed_row.addWidget(self.inp_seed)
+        seed_row.addWidget(btn_seed_up)
         seed_row.addStretch()
         config_layout.addLayout(seed_row)
         
@@ -284,19 +299,20 @@ class SDModule(QWidget):
         self.inp_steps.valueChanged.connect(self._queue_save_config)
         self.inp_strength.valueChanged.connect(self._queue_save_config)
         self.inp_seed.valueChanged.connect(self._queue_save_config)
-        self.chk_seed.toggled.connect(self._queue_save_config)
 
     def _load_config(self):
         if self.config_path.exists():
             try:
                 with open(self.config_path, 'r') as f:
-                    return json.load(f)
+                    config = json.load(f)
+                return self._normalize_config(config)
             except Exception:
                 pass
         if self.legacy_config_path.exists():
             try:
                 with open(self.legacy_config_path, 'r') as f:
                     config = json.load(f)
+                config = self._normalize_config(config)
                 with open(self.config_path, 'w') as f:
                     json.dump(config, f, indent=2)
                 return config
@@ -306,17 +322,24 @@ class SDModule(QWidget):
             "model_path": "",
             "steps": 25,
             "guidance_scale": 7.5,
-            "seed": 42,
-            "use_seed": False
+            "seed": -1
         }
+
+    def _normalize_config(self, config):
+        use_seed = config.get("use_seed")
+        if use_seed is False:
+            config["seed"] = -1
+        config.pop("use_seed", None)
+        if "seed" not in config:
+            config["seed"] = -1
+        return config
 
     def _save_config(self):
         config = {
             "model_path": self.model_path,
             "steps": self.inp_steps.value(),
             "guidance_scale": self.inp_strength.value(),
-            "seed": self.inp_seed.value(),
-            "use_seed": self.chk_seed.isChecked()
+            "seed": self.inp_seed.value()
         }
         with open(self.config_path, 'w') as f:
             json.dump(config, f, indent=2)
@@ -376,13 +399,14 @@ class SDModule(QWidget):
         self.btn_save.setEnabled(False)
         self._set_status("INITIALIZING", FG_ACCENT)
 
+        seed_value = self.inp_seed.value()
+        seed = None if seed_value < 0 else seed_value
         self.worker = SDWorker(
             prompt,
             model_path,
             self.inp_steps.value(),
             self.inp_strength.value(),
-            self.inp_seed.value(),
-            self.chk_seed.isChecked()
+            seed
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_finished)
