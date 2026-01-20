@@ -210,13 +210,13 @@ class AudioGenModule(QWidget):
             }}
         """)
         duration_row.addWidget(lbl_duration)
-        btn_duration_up = SkeetTriangleButton("◀")
-        btn_duration_up.clicked.connect(self.inp_duration.stepUp)
-        btn_duration_down = SkeetTriangleButton("▶")
+        btn_duration_down = SkeetTriangleButton("◀")
         btn_duration_down.clicked.connect(self.inp_duration.stepDown)
-        duration_row.addWidget(btn_duration_up)
-        duration_row.addWidget(self.inp_duration)
+        btn_duration_up = SkeetTriangleButton("▶")
+        btn_duration_up.clicked.connect(self.inp_duration.stepUp)
         duration_row.addWidget(btn_duration_down)
+        duration_row.addWidget(self.inp_duration)
+        duration_row.addWidget(btn_duration_up)
         duration_row.addStretch()
         audio_layout.addLayout(duration_row)
 
