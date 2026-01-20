@@ -1,10 +1,10 @@
 import os
 import json
-import numpy as np
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QFrame, QComboBox, QDoubleSpinBox, QPushButton
+    QFrame, QComboBox, QDoubleSpinBox, QFileDialog,
+    QAbstractSpinBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -77,10 +77,10 @@ class AudioGenWorker(QThread):
     finished = Signal(object, int)
     error = Signal(str)
 
-    def __init__(self, prompt, model_id, duration, sample_rate):
+    def __init__(self, prompt, model_path, duration, sample_rate):
         super().__init__()
         self.prompt = prompt
-        self.model_id = model_id
+        self.model_path = model_path
         self.duration = duration
         self.sample_rate = sample_rate
 
@@ -92,7 +92,7 @@ class AudioGenWorker(QThread):
             
             self.progress.emit("Loading model...")
             
-            model = MusicGen.get_pretrained(self.model_id)
+            model = MusicGen.get_pretrained(self.model_path)
             model.set_generation_params(duration=self.duration)
             
             self.progress.emit("Generating audio...")
@@ -117,14 +117,19 @@ class AudioGenModule(QWidget):
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         
         self.config = self._load_config()
+        self.model_path = self.config.get("model_path", "")
         self.current_audio = None
         self.current_sample_rate = None
         self.current_filepath = None
         self.worker = None
         self._config_timer = QTimer(self)
-        self._config_timer.setInterval(250)
+        self._config_timer.setInterval(1000)
         self._config_timer.setSingleShot(True)
         self._config_timer.timeout.connect(self._save_config)
+        self._status_reset_timer = QTimer(self)
+        self._status_reset_timer.setInterval(1000)
+        self._status_reset_timer.setSingleShot(True)
+        self._status_reset_timer.timeout.connect(self._reset_status)
         
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
@@ -144,6 +149,28 @@ class AudioGenModule(QWidget):
 
         grp_model = SkeetGroupBox("MODEL LOADER")
         model_layout = QVBoxLayout()
+        model_path_row = QHBoxLayout()
+        lbl_model_path = QLabel("MODEL PATH")
+        lbl_model_path.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_model_path.setFixedWidth(80)
+        self.inp_model_path = QLineEdit(self.model_path)
+        self.inp_model_path.setReadOnly(True)
+        self.inp_model_path.setPlaceholderText("Select an AudioGen model file...")
+        self.inp_model_path.setToolTip(self.model_path)
+        self.inp_model_path.setStyleSheet(f"""
+            QLineEdit {{
+                background: {BG_INPUT}; color: {FG_TEXT};
+                border: 1px solid {BORDER_DARK}; padding: 4px;
+            }}
+        """)
+        btn_browse = SkeetButton("BROWSE...")
+        btn_browse.setFixedWidth(90)
+        btn_browse.clicked.connect(self._browse_model)
+        model_path_row.addWidget(lbl_model_path)
+        model_path_row.addWidget(self.inp_model_path)
+        model_path_row.addWidget(btn_browse)
+        model_layout.addLayout(model_path_row)
+
         model_row = QHBoxLayout()
         lbl_model = QLabel("MODEL ID")
         lbl_model.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
@@ -151,6 +178,7 @@ class AudioGenModule(QWidget):
         self.inp_model_id = QLineEdit()
         self.inp_model_id.setPlaceholderText("facebook/musicgen-small")
         self.inp_model_id.setText(self.config.get("model_id", "facebook/musicgen-small"))
+        self.inp_model_id.setReadOnly(True)
         self.inp_model_id.setStyleSheet(f"""
             QLineEdit {{
                 background: {BG_INPUT}; color: {FG_TEXT};
@@ -160,25 +188,6 @@ class AudioGenModule(QWidget):
         model_row.addWidget(lbl_model)
         model_row.addWidget(self.inp_model_id)
         model_layout.addLayout(model_row)
-
-        size_row = QHBoxLayout()
-        lbl_size = QLabel("SIZE")
-        lbl_size.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
-        lbl_size.setFixedWidth(80)
-        self.cmb_model = QComboBox()
-        self.cmb_model.addItems(["small", "medium", "large"])
-        self.cmb_model.setStyleSheet(f"""
-            QComboBox {{
-                background: {BG_INPUT}; color: {FG_TEXT};
-                border: 1px solid {BORDER_DARK}; padding: 4px;
-            }}
-            QComboBox::drop-down {{ border: none; }}
-            QComboBox::down-arrow {{ image: none; }}
-        """)
-        size_row.addWidget(lbl_size)
-        size_row.addWidget(self.cmb_model)
-        size_row.addStretch()
-        model_layout.addLayout(size_row)
         grp_model.add_layout(model_layout)
         config_layout.addWidget(grp_model)
 
@@ -193,6 +202,7 @@ class AudioGenModule(QWidget):
         self.inp_duration.setRange(1.0, 30.0)
         self.inp_duration.setValue(self.config.get("duration", 5.0))
         self.inp_duration.setSingleStep(0.5)
+        self.inp_duration.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.inp_duration.setStyleSheet(f"""
             QDoubleSpinBox {{
                 background: {BG_INPUT}; color: {FG_TEXT};
@@ -200,7 +210,15 @@ class AudioGenModule(QWidget):
             }}
         """)
         duration_row.addWidget(lbl_duration)
+        btn_duration_up = SkeetButton("+")
+        btn_duration_up.setFixedWidth(26)
+        btn_duration_up.clicked.connect(self.inp_duration.stepUp)
+        btn_duration_down = SkeetButton("-")
+        btn_duration_down.setFixedWidth(26)
+        btn_duration_down.clicked.connect(self.inp_duration.stepDown)
+        duration_row.addWidget(btn_duration_up)
         duration_row.addWidget(self.inp_duration)
+        duration_row.addWidget(btn_duration_down)
         duration_row.addStretch()
         audio_layout.addLayout(duration_row)
 
@@ -279,52 +297,31 @@ class AudioGenModule(QWidget):
         grp.add_layout(inner)
         layout.addWidget(grp)
 
-        self._sync_model_size_from_id()
-        self.inp_model_id.textChanged.connect(self._queue_save_config)
         self.inp_duration.valueChanged.connect(self._queue_save_config)
         self.cmb_sr.currentTextChanged.connect(self._queue_save_config)
-        self.cmb_model.currentTextChanged.connect(self._on_model_size_changed)
 
     def _load_config(self):
         if self.config_path.exists():
             try:
                 with open(self.config_path, 'r') as f:
                     config = json.load(f)
-                if "model_id" not in config and "model_size" in config:
-                    model_size = config.get("model_size", "small")
-                    config["model_id"] = f"facebook/musicgen-{model_size}"
-                    config.pop("model_size", None)
-                    try:
-                        with open(self.config_path, 'w') as f:
-                            json.dump(config, f, indent=2)
-                    except Exception:
-                        pass
                 return config
             except:
                 pass
         return {
+            "model_path": "",
             "model_id": "facebook/musicgen-small",
             "duration": 5.0,
             "sample_rate": 32000
         }
 
-    def _sync_model_size_from_id(self):
-        model_id = self.inp_model_id.text()
-        size = None
-        if model_id.startswith("facebook/musicgen-"):
-            suffix = model_id.split("facebook/musicgen-")[-1]
-            if suffix in {"small", "medium", "large"}:
-                size = suffix
-        if size:
-            self.cmb_model.setCurrentText(size)
-        else:
-            self.cmb_model.setCurrentText("small")
-
     def _queue_save_config(self):
+        self._status_reset_timer.stop()
         self._config_timer.start()
 
     def _save_config(self):
         config = {
+            "model_path": self.model_path,
             "model_id": self.inp_model_id.text().strip() or self.inp_model_id.placeholderText(),
             "duration": self.inp_duration.value(),
             "sample_rate": int(self.cmb_sr.currentText())
@@ -333,13 +330,32 @@ class AudioGenModule(QWidget):
             json.dump(config, f, indent=2)
         self.config = config
         self._set_status("CONFIG SAVED", FG_ACCENT)
+        self._status_reset_timer.start()
 
-    def _on_model_size_changed(self, size):
-        self.inp_model_id.setText(f"facebook/musicgen-{size}")
+    def _browse_model(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Audio Model", "", "All Files (*)")
+        if not path:
+            return
+        path = os.path.abspath(path)
+        try:
+            from audiocraft.models import MusicGen
+            MusicGen.get_pretrained(path)
+        except Exception as exc:
+            self._set_status(f"ERROR: {str(exc)}", FG_ERROR)
+            self.inp_model_path.setText(self.model_path)
+            self.inp_model_path.setToolTip(self.model_path)
+            return
+        self.model_path = path
+        self.inp_model_path.setText(path)
+        self.inp_model_path.setToolTip(path)
+        self._queue_save_config()
 
     def _set_status(self, status, color):
         self.lbl_status.setText(status)
         self.lbl_status.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold;")
+
+    def _reset_status(self):
+        self._set_status("IDLE", FG_TEXT)
 
     def _start_generate(self):
         if not AUDIOCRAFT_AVAILABLE:
@@ -356,9 +372,14 @@ class AudioGenModule(QWidget):
         self.btn_save.setEnabled(False)
         self._set_status("INITIALIZING", FG_ACCENT)
 
+        model_path = self.model_path
+        if not model_path:
+            self._set_status("ERROR: No model selected", FG_ERROR)
+            return
+
         self.worker = AudioGenWorker(
             prompt,
-            self.inp_model_id.text().strip() or self.inp_model_id.placeholderText(),
+            model_path,
             self.inp_duration.value(),
             int(self.cmb_sr.currentText())
         )

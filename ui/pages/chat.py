@@ -55,6 +55,13 @@ class PageChat(QWidget):
             }}
             QPushButton:checked {{ color: {FG_TEXT}; }}
             QPushButton:hover {{ color: {FG_TEXT}; }}
+            QPushButton::indicator {{
+                width: 6px; height: 6px; border-radius: 3px;
+                border: 1px solid {FG_DIM}; margin-right: 6px;
+            }}
+            QPushButton::indicator:checked {{
+                background: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD};
+            }}
         """)
         config_layout = QVBoxLayout()
         config_layout.setSpacing(12)
