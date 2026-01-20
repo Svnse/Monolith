@@ -44,13 +44,9 @@ class PageChat(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
 
-        main_split = QSplitter(Qt.Vertical)
+        main_split = QSplitter(Qt.Horizontal)
         main_split.setChildrenCollapsible(False)
         layout.addWidget(main_split)
-
-        top_split = QSplitter(Qt.Horizontal)
-        top_split.setChildrenCollapsible(False)
-        main_split.addWidget(top_split)
 
         config_section = CollapsibleSection("⚙ CONFIGURATION")
         config_section.btn_toggle.setStyleSheet(f"""
@@ -217,27 +213,6 @@ class PageChat(QWidget):
 
         operations_group.add_layout(operations_layout)
 
-        right_stack = QSplitter(Qt.Vertical)
-        right_stack.setChildrenCollapsible(False)
-
-        trace_group = SkeetGroupBox("REASONING TRACE")
-        self.trace = QTextEdit()
-        self.trace.setReadOnly(True)
-        self.trace.setStyleSheet(f"""
-            background: {BG_INPUT}; color: {FG_TEXT}; border: 1px solid #222; 
-            font-family: 'Consolas', monospace; font-size: 10px;
-        """)
-        trace_group.add_widget(self.trace)
-
-        right_stack.addWidget(trace_group)
-        right_stack.addWidget(operations_group)
-        right_stack.setStretchFactor(0, 1)
-        right_stack.setStretchFactor(1, 1)
-        right_stack.setSizes([200, 200])
-
-        top_split.addWidget(right_stack)
-        top_split.setStretchFactor(0, 2)
-
         chat_group = SkeetGroupBox("TERMINAL")
         chat_layout = QVBoxLayout()
         chat_layout.setSpacing(10)
@@ -282,9 +257,29 @@ class PageChat(QWidget):
         chat_layout.addLayout(input_row)
         
         chat_group.add_layout(chat_layout)
+
+        right_stack = QSplitter(Qt.Vertical)
+        right_stack.setChildrenCollapsible(False)
+
+        trace_group = SkeetGroupBox("REASONING TRACE")
+        self.trace = QTextEdit()
+        self.trace.setReadOnly(True)
+        self.trace.setStyleSheet(f"""
+            background: {BG_INPUT}; color: {FG_TEXT}; border: 1px solid #222; 
+            font-family: 'Consolas', monospace; font-size: 10px;
+        """)
+        trace_group.add_widget(self.trace)
+
+        right_stack.addWidget(trace_group)
+        right_stack.addWidget(operations_group)
+        right_stack.setStretchFactor(0, 1)
+        right_stack.setStretchFactor(1, 1)
+        right_stack.setSizes([200, 200])
+
         main_split.addWidget(chat_group)
-        main_split.setStretchFactor(0, 2)
-        main_split.setStretchFactor(1, 3)
+        main_split.addWidget(right_stack)
+        main_split.setStretchFactor(0, 3)
+        main_split.setStretchFactor(1, 2)
 
         self._sync_path_display()
         self._update_load_button_text()
@@ -383,11 +378,38 @@ class PageChat(QWidget):
 
     def _start_new_session(self):
         self._set_current_session(self._create_session(), show_reset=True)
+        self.trace.append("--- TRACE RESET ---")
 
     def _prompt_clear_session(self):
         dialog = QMessageBox(self)
         dialog.setWindowTitle("Clear Session")
         dialog.setText("Choose how to clear the current session.")
+        dialog.setStyleSheet(f"""
+            QMessageBox {{
+                background: {BG_INPUT};
+                color: {FG_TEXT};
+            }}
+            QLabel {{
+                color: {FG_TEXT};
+            }}
+            QPushButton {{
+                color: {FG_TEXT};
+                background: transparent;
+                border: 1px solid #333;
+                padding: 6px 12px;
+                font-size: 10px;
+                font-weight: bold;
+                border-radius: 2px;
+            }}
+            QPushButton:hover {{
+                border: 1px solid {ACCENT_GOLD};
+                color: {ACCENT_GOLD};
+            }}
+            QPushButton:checked {{
+                border: 1px solid {ACCENT_GOLD};
+                color: {ACCENT_GOLD};
+            }}
+        """)
         btn_clear = dialog.addButton("Clear Logs", QMessageBox.AcceptRole)
         btn_delete = dialog.addButton("Delete Chat", QMessageBox.DestructiveRole)
         dialog.addButton("Cancel", QMessageBox.RejectRole)
