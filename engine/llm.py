@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, QTimer
 from core.state import AppState, SystemStatus
 from core.llm_config import load_config
 
@@ -100,7 +100,7 @@ class LLMEngine(QObject):
     def set_model_path(self, path: str) -> None:
         self.model_path = path
         self.state.gguf_path = path
-        self.set_status(SystemStatus.READY)
+        QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
 
     def load_model(self):
         if self._status == SystemStatus.LOADING:
@@ -172,7 +172,7 @@ class LLMEngine(QObject):
             del self.llm
             self.llm = None
         self.state.model_loaded = False
-        self.set_status(SystemStatus.READY)
+        QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
         self.sig_trace.emit("→ model unloaded")
 
     def generate(self, payload: dict):

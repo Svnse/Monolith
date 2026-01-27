@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, QTimer
 
 from core.state import AppState, SystemStatus
 from core.task import Task, TaskStatus
@@ -116,16 +116,20 @@ class MonoGuard(QObject):
 
         if new_status == SystemStatus.ERROR:
             task = self.active_tasks.get(engine_key)
+            had_task = task is not None
             if task:
                 task.status = TaskStatus.FAILED
             self.active_tasks[engine_key] = None
             self.sig_status.emit(engine_key, SystemStatus.READY)
-            self.sig_engine_ready.emit(engine_key)
+            if had_task:
+                QTimer.singleShot(0, lambda: self.sig_engine_ready.emit(engine_key))
             return
 
         if new_status == SystemStatus.READY:
             task = self.active_tasks.get(engine_key)
+            had_task = task is not None
             if task and task.status == TaskStatus.RUNNING:
                 task.status = TaskStatus.DONE
             self.active_tasks[engine_key] = None
-            self.sig_engine_ready.emit(engine_key)
+            if had_task:
+                QTimer.singleShot(0, lambda: self.sig_engine_ready.emit(engine_key))

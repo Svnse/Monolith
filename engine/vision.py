@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, QTimer
 
 from core.state import AppState, SystemStatus
 
@@ -129,12 +129,12 @@ class VisionEngine(QObject):
 
     def set_model_path(self, path: str) -> None:
         self.model_path = path
-        self.sig_status.emit(SystemStatus.READY)
+        QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
 
     def load_model(self) -> None:
         if self.loader and self.loader.isRunning():
             self.sig_trace.emit("VISION: load already in progress.")
-            self.sig_status.emit(SystemStatus.READY)
+            QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
             return
 
         if not self.model_path:
@@ -144,7 +144,7 @@ class VisionEngine(QObject):
 
         if self.pipe and self._loaded_path == self.model_path:
             self.sig_trace.emit("VISION: pipeline already loaded.")
-            self.sig_status.emit(SystemStatus.READY)
+            QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
             return
 
         if self.pipe and self._loaded_path != self.model_path:
@@ -219,7 +219,7 @@ class VisionEngine(QObject):
         except Exception:
             pass
 
-        self.sig_status.emit(SystemStatus.READY)
+        QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
 
     def generate(self, payload: dict) -> None:
         if not self.pipe:

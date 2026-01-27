@@ -13,6 +13,7 @@ class MonoDock:
         self.queues: dict[str, Deque[Task]] = {}
         self.cancelled_task_ids: set[str] = set()
         self.cancelled_addons: set[str] = set()
+        self._in_submit: dict[str, bool] = {}
         self.guard.sig_engine_ready.connect(self._on_engine_ready)
 
     def enqueue(self, task: Task) -> None:
@@ -53,20 +54,27 @@ class MonoDock:
         self._try_submit(engine_key)
 
     def _try_submit(self, engine_key: str) -> None:
+        if self._in_submit.get(engine_key):
+            return
         queue = self.queues.get(engine_key)
         if not queue:
             return
 
-        while queue:
-            task = queue[0]
-            if self._is_cancelled(task):
-                task.status = TaskStatus.CANCELLED
-                queue.popleft()
-                continue
-            accepted = self.guard.submit(task)
-            if accepted:
-                queue.popleft()
-            break
+        self._in_submit[engine_key] = True
+        try:
+            while queue:
+                task = queue[0]
+                if self._is_cancelled(task):
+                    task.status = TaskStatus.CANCELLED
+                    if queue:
+                        queue.popleft()
+                    continue
+                accepted = self.guard.submit(task)
+                if accepted and queue:
+                    queue.popleft()
+                break
+        finally:
+            self._in_submit[engine_key] = False
 
     def _is_cancelled(self, task: Task) -> bool:
         return str(task.id) in self.cancelled_task_ids or task.addon_pid in self.cancelled_addons
