@@ -29,6 +29,7 @@ class SDModule(QWidget):
         
         self.config = self._load_config()
         self.model_path = self.config.get("model_path", "")
+        self.is_model_loaded = False
         self.current_image = None
         self._config_timer = QTimer(self)
         self._config_timer.setInterval(1000)
@@ -84,7 +85,7 @@ class SDModule(QWidget):
         loader_row.addWidget(btn_browse, 0)
         self.btn_load = SkeetButton("LOAD MODEL")
         self.btn_load.setCheckable(True)
-        self.btn_load.setChecked(bool(self.model_path))
+        self.btn_load.setChecked(False)
         self.btn_load.clicked.connect(self._load_model)
         loader_layout.addLayout(loader_row)
         loader_layout.addWidget(self.btn_load)
@@ -191,6 +192,7 @@ class SDModule(QWidget):
         btn_row = QHBoxLayout()
         self.btn_generate = SkeetButton("GENERATE", accent=True)
         self.btn_generate.clicked.connect(self._start_generate)
+        self.btn_generate.setEnabled(self.is_model_loaded)
         self.btn_stop = SkeetButton("STOP")
         self.btn_stop.clicked.connect(lambda: self.bridge.stop("vision"))
         self.btn_stop.setEnabled(False)
@@ -298,25 +300,29 @@ class SDModule(QWidget):
             self.inp_model.setText(path)
             self.inp_model.setToolTip(path)
             self.btn_load.setChecked(False)
+            self.btn_load.setText("LOAD MODEL")
+            self.is_model_loaded = False
 
     def _load_model(self):
-        path = self.inp_model.text().strip()
-        if not path:
-            self._set_status("ERROR: No model selected", FG_ERROR)
-            self.btn_load.setChecked(False)
-            return
-        self.model_path = path
-        self.btn_load.setChecked(True)
-        self._queue_save_config()
-        self.bridge.submit(
-            self.bridge.wrap(
-                "vision",
-                "set_path",
-                "vision",
-                payload={"path": path},
+        if self.btn_load.isChecked():
+            path = self.inp_model.text().strip()
+            if not path:
+                self._set_status("ERROR: No model selected", FG_ERROR)
+                self.btn_load.setChecked(False)
+                return
+            self.model_path = path
+            self._queue_save_config()
+            self.bridge.submit(
+                self.bridge.wrap(
+                    "vision",
+                    "set_path",
+                    "vision",
+                    payload={"path": path},
+                )
             )
-        )
-        self.bridge.submit(self.bridge.wrap("vision", "load", "vision"))
+            self.bridge.submit(self.bridge.wrap("vision", "load", "vision"))
+        else:
+            self.bridge.submit(self.bridge.wrap("vision", "unload", "vision"))
 
     def _queue_save_config(self):
         self._status_reset_timer.stop()
@@ -407,7 +413,7 @@ class SDModule(QWidget):
             SystemStatus.RUNNING,
             SystemStatus.UNLOADING,
         )
-        self.btn_generate.setEnabled(not is_busy)
+        self.btn_generate.setEnabled(not is_busy and self.is_model_loaded)
         self.btn_load.setEnabled(not is_busy)
         self.btn_stop.setEnabled(is_busy)
         if status == SystemStatus.LOADING:
@@ -418,6 +424,20 @@ class SDModule(QWidget):
             self._set_status("UNLOADING", FG_ACCENT)
         elif status == SystemStatus.READY:
             self._set_status("READY", FG_TEXT)
+            if self.btn_load.isChecked() and self.model_path:
+                self.is_model_loaded = True
+                self.btn_load.setText("UNLOAD MODEL")
+            else:
+                self.is_model_loaded = False
+                self.btn_load.setChecked(False)
+                self.btn_load.setText("LOAD MODEL")
+            self.btn_generate.setEnabled(self.is_model_loaded and not is_busy)
+        elif status == SystemStatus.ERROR:
+            self._set_status("ERROR", FG_ERROR)
+            self.is_model_loaded = False
+            self.btn_load.setChecked(False)
+            self.btn_load.setText("LOAD MODEL")
+            self.btn_generate.setEnabled(False)
 
     def _on_trace(self, message: str) -> None:
         if "VISION: ERROR:" in message:
