@@ -13,5 +13,6 @@ if TYPE_CHECKING:
 class AddonContext:
     state: AppState
     guard: MonoGuard
+    vision_guard: MonoGuard
     ui: Optional["MonolithUI"]
     host: Optional["AddonHost"]

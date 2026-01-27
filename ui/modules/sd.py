@@ -1,96 +1,24 @@
-import os
 import json
 from pathlib import Path
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QFrame, QScrollArea, QFileDialog, QSpinBox, QDoubleSpinBox,
+    QScrollArea, QFileDialog, QSpinBox, QDoubleSpinBox,
     QAbstractSpinBox
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
 from core.style import BG_INPUT, BORDER_DARK, FG_DIM, FG_TEXT, FG_ACCENT, FG_ERROR
+from core.state import SystemStatus
+from monokernel.guard import MonoGuard
 from ui.components.atoms import SkeetGroupBox, SkeetButton, SkeetTriangleButton, CollapsibleSection
 
-DIFFUSERS_AVAILABLE = False
-try:
-    import importlib
-    importlib.import_module("diffusers")
-    DIFFUSERS_AVAILABLE = True
-except ImportError:
-    DIFFUSERS_AVAILABLE = False
-
-
-class SDWorker(QThread):
-    progress = Signal(str)
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(self, prompt, model_path, steps, guidance, seed):
-        super().__init__()
-        self.prompt = prompt
-        self.model_path = model_path
-        self.steps = steps
-        self.guidance = guidance
-        self.seed = seed
-
-    def run(self):
-        try:
-            import torch
-            if not DIFFUSERS_AVAILABLE:
-                self.error.emit("ERROR: diffusers not installed. pip install diffusers")
-                return
-            try:
-                import diffusers
-            except ImportError:
-                self.error.emit("ERROR: diffusers not installed. pip install diffusers")
-                return
-            from diffusers import StableDiffusionPipeline
-            
-            self.progress.emit("Loading pipeline...")
-            
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype = torch.float16 if device == "cuda" else torch.float32
-            
-            if self.model_path.endswith(".safetensors"):
-                pipe = StableDiffusionPipeline.from_single_file(
-                    self.model_path,
-                    torch_dtype=dtype,
-                    safety_checker=None,
-                    requires_safety_checker=False
-                )
-            else:
-                pipe = StableDiffusionPipeline.from_pretrained(
-                    self.model_path,
-                    torch_dtype=dtype,
-                    safety_checker=None,
-                    requires_safety_checker=False
-                )
-            pipe = pipe.to(device)
-            
-            self.progress.emit("Generating image...")
-            
-            generator = None
-            if self.seed is not None:
-                generator = torch.Generator(device=device).manual_seed(self.seed)
-            
-            result = pipe(
-                self.prompt,
-                num_inference_steps=self.steps,
-                guidance_scale=self.guidance,
-                generator=generator
-            )
-            
-            self.finished.emit(result.images[0])
-            
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 class SDModule(QWidget):
-    def __init__(self):
+    def __init__(self, vision_guard: MonoGuard):
         super().__init__()
-        
+        self.vision_guard = vision_guard
+
         self.config_path = Path("config/vision_config.json")
         self.legacy_config_path = Path("config/sd_config.json")
         self.artifacts_dir = Path("artifacts/vision")
@@ -100,7 +28,6 @@ class SDModule(QWidget):
         self.config = self._load_config()
         self.model_path = self.config.get("model_path", "")
         self.current_image = None
-        self.worker = None
         self._config_timer = QTimer(self)
         self._config_timer.setInterval(1000)
         self._config_timer.setSingleShot(True)
@@ -109,6 +36,8 @@ class SDModule(QWidget):
         self._status_reset_timer.setInterval(1000)
         self._status_reset_timer.setSingleShot(True)
         self._status_reset_timer.timeout.connect(self._reset_status)
+        if self.model_path:
+            self.vision_guard.slot_set_model_path(self.model_path)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -253,10 +182,14 @@ class SDModule(QWidget):
         btn_row = QHBoxLayout()
         self.btn_generate = SkeetButton("GENERATE", accent=True)
         self.btn_generate.clicked.connect(self._start_generate)
+        self.btn_stop = SkeetButton("STOP")
+        self.btn_stop.clicked.connect(self.vision_guard.slot_stop)
+        self.btn_stop.setEnabled(False)
         self.btn_save = SkeetButton("SAVE IMAGE")
         self.btn_save.clicked.connect(self._save_image)
         self.btn_save.setEnabled(False)
         btn_row.addWidget(self.btn_generate)
+        btn_row.addWidget(self.btn_stop)
         btn_row.addWidget(self.btn_save)
         btn_row.addStretch()
 
@@ -294,6 +227,9 @@ class SDModule(QWidget):
         self.inp_steps.valueChanged.connect(self._queue_save_config)
         self.inp_strength.valueChanged.connect(self._queue_save_config)
         self.inp_seed.valueChanged.connect(self._queue_save_config)
+        self.vision_guard.sig_image.connect(self._on_image)
+        self.vision_guard.sig_status.connect(self._on_status)
+        self.vision_guard.sig_trace.connect(self._on_trace)
 
     def _load_config(self):
         if self.config_path.exists():
@@ -363,6 +299,8 @@ class SDModule(QWidget):
         self.model_path = path
         self.btn_load.setChecked(True)
         self._queue_save_config()
+        self.vision_guard.slot_set_model_path(path)
+        self.vision_guard.slot_load_model()
 
     def _queue_save_config(self):
         self._status_reset_timer.stop()
@@ -376,68 +314,23 @@ class SDModule(QWidget):
         self._set_status("IDLE", FG_TEXT)
 
     def _start_generate(self):
-        if not DIFFUSERS_AVAILABLE:
-            self._report_diffusers_missing()
-            return
-            
         prompt = self.inp_prompt.text().strip()
         if not prompt:
             self._set_status("ERROR: No prompt", FG_ERROR)
             return
-            
-        model_path = self.model_path
-        if not model_path or not os.path.exists(model_path):
-            self._set_status("ERROR: Invalid model path", FG_ERROR)
-            return
 
         self.btn_generate.setEnabled(False)
         self.btn_save.setEnabled(False)
-        self._set_status("INITIALIZING", FG_ACCENT)
+        self._set_status("REQUESTED", FG_ACCENT)
 
         seed_value = self.inp_seed.value()
         seed = None if seed_value < 0 else seed_value
-        self.worker = SDWorker(
-            prompt,
-            model_path,
-            self.inp_steps.value(),
-            self.inp_strength.value(),
-            seed
-        )
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished.connect(self._on_finished)
-        self.worker.error.connect(self._on_error)
-        self.worker.start()
-
-    def _on_progress(self, msg):
-        self._set_status(msg, FG_ACCENT)
-
-    def _on_finished(self, pil_image):
-        self.current_image = pil_image
-        
-        # Convert PIL to QPixmap
-        pil_image = pil_image.convert("RGB")
-        data = pil_image.tobytes("raw", "RGB")
-        qimage = QImage(data, pil_image.width, pil_image.height, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimage)
-        
-        self.lbl_preview.setPixmap(pixmap.scaled(
-            self.lbl_preview.width() - 20,
-            self.lbl_preview.height() - 20,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
-        ))
-        
-        self._set_status("DONE", FG_TEXT)
-        self.btn_generate.setEnabled(True)
-        self.btn_save.setEnabled(True)
-
-    def _on_error(self, err_msg):
-        if err_msg == "ERROR: diffusers not installed. pip install diffusers":
-            self._set_status(err_msg, FG_ERROR)
-            self._append_terminal_error(err_msg)
-        else:
-            self._set_status(f"ERROR: {err_msg}", FG_ERROR)
-        self.btn_generate.setEnabled(True)
+        config = {
+            "steps": self.inp_steps.value(),
+            "guidance_scale": self.inp_strength.value(),
+            "seed": seed,
+        }
+        self.vision_guard.slot_generate(prompt, config)
 
     def _save_image(self):
         if not self.current_image:
@@ -448,15 +341,56 @@ class SDModule(QWidget):
         filepath = self.artifacts_dir / filename
         
         try:
-            self.current_image.save(filepath)
+            if isinstance(self.current_image, QImage):
+                self.current_image.save(str(filepath))
+            else:
+                self.current_image.save(filepath)
             self._set_status(f"SAVED: {filename}", FG_ACCENT)
         except Exception as e:
             self._set_status(f"SAVE ERROR: {str(e)}", FG_ERROR)
 
-    def _append_terminal_error(self, message):
-        self.chat.append(f"<span style='color:{FG_ERROR}'>{message}</span>")
+    def _on_image(self, image):
+        self.current_image = image
+        if isinstance(image, QImage):
+            qimage = image
+        else:
+            pil_image = image.convert("RGB")
+            data = pil_image.tobytes("raw", "RGB")
+            qimage = QImage(
+                data,
+                pil_image.width,
+                pil_image.height,
+                QImage.Format_RGB888,
+            ).copy()
 
-    def _report_diffusers_missing(self):
-        message = "ERROR: diffusers not installed. pip install diffusers"
-        self._set_status(message, FG_ERROR)
-        self._append_terminal_error(message)
+        pixmap = QPixmap.fromImage(qimage)
+        self.lbl_preview.setPixmap(pixmap.scaled(
+            self.lbl_preview.width() - 20,
+            self.lbl_preview.height() - 20,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        ))
+        self._set_status("DONE", FG_TEXT)
+        self.btn_save.setEnabled(True)
+
+    def _on_status(self, status: SystemStatus) -> None:
+        is_busy = status in (
+            SystemStatus.LOADING,
+            SystemStatus.RUNNING,
+            SystemStatus.UNLOADING,
+        )
+        self.btn_generate.setEnabled(not is_busy)
+        self.btn_load.setEnabled(not is_busy)
+        self.btn_stop.setEnabled(is_busy)
+        if status == SystemStatus.LOADING:
+            self._set_status("LOADING", FG_ACCENT)
+        elif status == SystemStatus.RUNNING:
+            self._set_status("RUNNING", FG_ACCENT)
+        elif status == SystemStatus.UNLOADING:
+            self._set_status("UNLOADING", FG_ACCENT)
+        elif status == SystemStatus.READY:
+            self._set_status("READY", FG_TEXT)
+
+    def _on_trace(self, message: str) -> None:
+        if "VISION: ERROR:" in message:
+            self._set_status(message.replace("VISION: ", ""), FG_ERROR)

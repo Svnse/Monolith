@@ -40,7 +40,7 @@ def injector_factory(ctx: AddonContext):
 
 
 def sd_factory(ctx: AddonContext):
-    return SDModule()
+    return SDModule(ctx.vision_guard)
 
 
 def audiogen_factory(ctx: AddonContext):

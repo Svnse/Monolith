@@ -26,3 +26,11 @@ class EnginePort(Protocol):
 
     def shutdown(self) -> None:
         ...
+
+
+@runtime_checkable
+class VisionEnginePort(Protocol):
+    sig_image: Signal
+
+    def set_model_path(self, path: str) -> None:
+        ...

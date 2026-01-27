@@ -13,6 +13,7 @@ class MonoGuard(QObject):
     sig_trace = Signal(str)
     sig_status = Signal(SystemStatus)
     sig_usage = Signal(int)
+    sig_image = Signal(object)
 
     def __init__(self, state: AppState, engine: EnginePort):
         super().__init__()
@@ -24,12 +25,17 @@ class MonoGuard(QObject):
         self.engine.sig_token.connect(self.sig_token)
         self.engine.sig_trace.connect(self.sig_trace)
         self.engine.sig_usage.connect(self.sig_usage)
-        self.engine.sig_status.connect(self.sig_status)
+        if hasattr(self.engine, "sig_image"):
+            self.engine.sig_image.connect(self.sig_image)
         self.engine.sig_status.connect(self._on_status_changed)
 
     # -------------------------------
     # Command Slots
     # -------------------------------
+    def slot_set_model_path(self, path: str) -> None:
+        if hasattr(self.engine, "set_model_path"):
+            self.engine.set_model_path(path)
+
     def slot_load_model(self):
         if self.state.status in (SystemStatus.RUNNING, SystemStatus.LOADING):
             self._pending = ("load_model", (), {})
@@ -44,12 +50,12 @@ class MonoGuard(QObject):
             return
         self.engine.unload_model()
 
-    def slot_generate(self, user_input: str):
+    def slot_generate(self, user_input: str, config: dict | None = None):
         if self.state.status in (SystemStatus.RUNNING, SystemStatus.LOADING):
-            self._pending = ("generate", (user_input,), {})
+            self._pending = ("generate", (user_input, config), {})
             self._request_stop(clear_pending=False)
             return
-        self.engine.generate(user_input)
+        self.engine.generate(user_input, config)
 
     def slot_stop(self):
         self._request_stop(clear_pending=True)
@@ -64,6 +70,8 @@ class MonoGuard(QObject):
     # Internal Callbacks
     # -------------------------------
     def _on_status_changed(self, new_status: SystemStatus):
+        self.state.status = new_status
+        self.sig_status.emit(new_status)
         if new_status == SystemStatus.READY and self._pending:
             command_name, args, kwargs = self._pending
             self._pending = None
