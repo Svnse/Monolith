@@ -31,7 +31,7 @@ class PipelineLoader(QThread):
                 return
 
             self.trace.emit(f"loading pipeline: {self.model_path}")
-            if self.model_path.endswith(".safetensors"):
+            if self.model_path.endswith((".safetensors", ".ckpt")):
                 pipe = StableDiffusionPipeline.from_single_file(
                     self.model_path,
                     torch_dtype=dtype,
@@ -129,17 +129,22 @@ class VisionEngine(QObject):
 
     def set_model_path(self, path: str) -> None:
         self.model_path = path
+        self.sig_status.emit(SystemStatus.READY)
 
     def load_model(self) -> None:
         if self.loader and self.loader.isRunning():
+            self.sig_trace.emit("VISION: load already in progress.")
+            self.sig_status.emit(SystemStatus.READY)
             return
 
         if not self.model_path:
             self.sig_trace.emit("VISION: ERROR: No model selected.")
+            self.sig_status.emit(SystemStatus.ERROR)
             return
 
         if self.pipe and self._loaded_path == self.model_path:
             self.sig_trace.emit("VISION: pipeline already loaded.")
+            self.sig_status.emit(SystemStatus.READY)
             return
 
         if self.pipe and self._loaded_path != self.model_path:
@@ -182,7 +187,7 @@ class VisionEngine(QObject):
 
     def _on_load_error(self, err_msg: str) -> None:
         self.sig_trace.emit(f"VISION: ERROR: {err_msg}")
-        self.sig_status.emit(SystemStatus.READY)
+        self.sig_status.emit(SystemStatus.ERROR)
         self.loader = None
 
     def _cleanup_loader(self, *args, **kwargs) -> None:

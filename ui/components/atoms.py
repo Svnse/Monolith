@@ -55,6 +55,8 @@ class SkeetButton(QPushButton):
         self.setStyleSheet(f"""
             QPushButton {{ background: #181818; border: 1px solid #333; color: {FG_DIM}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
             QPushButton:hover {{ background: #222; color: {col}; border: 1px solid {col}; }}
+            QPushButton:checked {{ background: #222; color: {col}; border: 1px solid {col}; }}
+            QPushButton:pressed {{ background: #111; color: {col}; border: 1px solid {col}; }}
             QPushButton:disabled {{ background: #111; color: #333; border: 1px solid #222; }}
         """)
 

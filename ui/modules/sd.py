@@ -31,6 +31,7 @@ class SDModule(QWidget):
         self.model_path = self.config.get("model_path", "")
         self.is_model_loaded = False
         self.current_image = None
+        self._engine_status = SystemStatus.READY
         self._config_timer = QTimer(self)
         self._config_timer.setInterval(1000)
         self._config_timer.setSingleShot(True)
@@ -69,7 +70,7 @@ class SDModule(QWidget):
         lbl_model.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
         self.inp_model = QLineEdit(self.model_path)
         self.inp_model.setReadOnly(True)
-        self.inp_model.setPlaceholderText("Select a model file (.gguf, .ckpt, or .safetensors)...")
+        self.inp_model.setPlaceholderText("Select a model file (.ckpt or .safetensors)...")
         self.inp_model.setToolTip(self.model_path)
         self.inp_model.setStyleSheet(f"""
             QLineEdit {{
@@ -286,15 +287,20 @@ class SDModule(QWidget):
         with open(self.config_path, 'w') as f:
             json.dump(config, f, indent=2)
         self.config = config
-        self._set_status("CONFIG SAVED", FG_ACCENT)
-        self._status_reset_timer.start()
+        if self._engine_status not in (
+            SystemStatus.LOADING,
+            SystemStatus.RUNNING,
+            SystemStatus.UNLOADING,
+        ):
+            self._set_status("CONFIG SAVED", FG_ACCENT)
+            self._status_reset_timer.start()
 
     def _browse_model(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Vision Model",
             "",
-            "Model Files (*.gguf *.ckpt *.safetensors);;All Files (*)"
+            "Model Files (*.ckpt *.safetensors);;All Files (*)"
         )
         if path:
             self.inp_model.setText(path)
@@ -408,6 +414,7 @@ class SDModule(QWidget):
             engine_key = "vision"
         if engine_key != "vision":
             return
+        self._engine_status = status
         is_busy = status in (
             SystemStatus.LOADING,
             SystemStatus.RUNNING,
@@ -418,6 +425,7 @@ class SDModule(QWidget):
         self.btn_stop.setEnabled(is_busy)
         if status == SystemStatus.LOADING:
             self._set_status("LOADING", FG_ACCENT)
+            self.btn_load.setText("LOADING...")
         elif status == SystemStatus.RUNNING:
             self._set_status("RUNNING", FG_ACCENT)
         elif status == SystemStatus.UNLOADING:

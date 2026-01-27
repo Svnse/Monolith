@@ -100,14 +100,18 @@ class LLMEngine(QObject):
     def set_model_path(self, path: str) -> None:
         self.model_path = path
         self.state.gguf_path = path
+        self.set_status(SystemStatus.READY)
 
     def load_model(self):
         if self._status == SystemStatus.LOADING:
+            self.sig_trace.emit("ERROR: Load already in progress.")
+            self.set_status(SystemStatus.ERROR)
             return
         
         model_path = self.model_path or self.state.gguf_path
         if not model_path:
             self.sig_trace.emit("ERROR: No GGUF selected.")
+            self.set_status(SystemStatus.ERROR)
             return
 
         self.set_status(SystemStatus.LOADING)
@@ -174,10 +178,12 @@ class LLMEngine(QObject):
     def generate(self, payload: dict):
         if not self.state.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
+            self.set_status(SystemStatus.ERROR)
             return
 
         if self._status == SystemStatus.RUNNING:
             self.sig_trace.emit("ERROR: Busy. Wait for completion.")
+            self.set_status(SystemStatus.ERROR)
             return
 
         self.set_status(SystemStatus.RUNNING)
