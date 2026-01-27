@@ -81,12 +81,12 @@ class EngineBridge(QObject):
     def unload_model(self) -> None:
         self.impl.unload_model()
 
-    def generate(self, user_input: str, config: dict | None = None) -> None:
+    def generate(self, payload: dict) -> None:
         self._gen_id += 1
         gid = self._gen_id
         self._active_gid = gid
         self._connect_gated_handlers(gid)
-        self.impl.generate(user_input, config)
+        self.impl.generate(payload)
 
     def stop_generation(self) -> None:
         self._gen_id += 1

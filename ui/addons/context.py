@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
 from core.state import AppState
+from monokernel.bridge import MonoBridge
 from monokernel.guard import MonoGuard
 
 if TYPE_CHECKING:
@@ -13,6 +14,6 @@ if TYPE_CHECKING:
 class AddonContext:
     state: AppState
     guard: MonoGuard
-    vision_guard: MonoGuard
+    bridge: MonoBridge
     ui: Optional["MonolithUI"]
     host: Optional["AddonHost"]

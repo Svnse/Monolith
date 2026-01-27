@@ -216,7 +216,7 @@ class VisionEngine(QObject):
 
         self.sig_status.emit(SystemStatus.READY)
 
-    def generate(self, user_input: str, config: dict | None = None) -> None:
+    def generate(self, payload: dict) -> None:
         if not self.pipe:
             self.sig_trace.emit("VISION: ERROR: Model offline.")
             self.sig_status.emit(SystemStatus.READY)
@@ -226,8 +226,8 @@ class VisionEngine(QObject):
             self.sig_trace.emit("VISION: ERROR: Busy. Wait for completion.")
             return
 
-        if config is None:
-            config = {}
+        config = payload.get("config", payload)
+        prompt = config.get("prompt", payload.get("prompt", ""))
 
         steps = int(config.get("steps", 25))
         guidance_scale = float(config.get("guidance_scale", 7.5))
@@ -238,7 +238,7 @@ class VisionEngine(QObject):
         self.sig_status.emit(SystemStatus.RUNNING)
         self.worker = GenerationWorker(
             self.pipe,
-            user_input,
+            prompt,
             steps,
             guidance_scale,
             seed,

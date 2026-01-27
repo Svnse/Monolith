@@ -1,6 +1,6 @@
 from PySide6.QtCore import QObject, QThread, Signal
 from core.state import AppState, SystemStatus
-from ui.modules.llm_config import load_config
+from core.llm_config import load_config
 
 class ModelLoader(QThread):
     trace = Signal(str)
@@ -84,6 +84,7 @@ class LLMEngine(QObject):
     sig_status = Signal(SystemStatus)
     sig_finished = Signal()
     sig_usage = Signal(int)
+    sig_image = Signal(object)
 
     def __init__(self, state: AppState):
         super().__init__()
@@ -91,22 +92,28 @@ class LLMEngine(QObject):
         self.llm = None
         self.loader = None
         self.worker = None
+        self.model_path: str | None = None
         self._load_cancel_requested: bool = False
         self._shutdown_requested: bool = False
         self._status: SystemStatus = SystemStatus.READY
+
+    def set_model_path(self, path: str) -> None:
+        self.model_path = path
+        self.state.gguf_path = path
 
     def load_model(self):
         if self._status == SystemStatus.LOADING:
             return
         
-        if not self.state.gguf_path:
+        model_path = self.model_path or self.state.gguf_path
+        if not model_path:
             self.sig_trace.emit("ERROR: No GGUF selected.")
             return
 
         self.set_status(SystemStatus.LOADING)
         self._load_cancel_requested = False
         # Keep reference to loader to prevent GC
-        self.loader = ModelLoader(self.state.gguf_path, self.state.ctx_limit)
+        self.loader = ModelLoader(model_path, self.state.ctx_limit)
         self.loader.trace.connect(self.sig_trace)
         self.loader.error.connect(self._on_load_error)
         self.loader.finished.connect(self._on_load_success)
@@ -164,7 +171,7 @@ class LLMEngine(QObject):
         self.set_status(SystemStatus.READY)
         self.sig_trace.emit("→ model unloaded")
 
-    def generate(self, user_input: str, config: dict | None = None):
+    def generate(self, payload: dict):
         if not self.state.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
             return
@@ -175,6 +182,8 @@ class LLMEngine(QObject):
 
         self.set_status(SystemStatus.RUNNING)
 
+        prompt = payload.get("prompt", "")
+        config = payload.get("config")
         if config is None:
             config = load_config()
 
@@ -187,7 +196,7 @@ class LLMEngine(QObject):
         messages = [{"role": "system", "content": system_prompt}]
         if context_injection:
             messages.append({"role": "system", "content": f"CONTEXT: {context_injection}"})
-        messages.append({"role": "user", "content": user_input})
+        messages.append({"role": "user", "content": prompt})
 
         self.worker = GeneratorWorker(
             self.llm, messages, temp,

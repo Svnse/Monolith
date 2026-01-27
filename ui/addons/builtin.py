@@ -11,10 +11,23 @@ from ui.pages.databank import PageFiles
 
 def terminal_factory(ctx: AddonContext):
     w = PageChat(ctx.state)
-    # outgoing (addon -> guard)
-    w.sig_generate.connect(ctx.guard.slot_generate)
-    w.sig_load.connect(ctx.guard.slot_load_model)
-    w.sig_unload.connect(ctx.guard.slot_unload_model)
+    # outgoing (addon -> bridge)
+    w.sig_generate.connect(
+        lambda prompt: ctx.bridge.submit(
+            ctx.bridge.wrap(
+                "terminal",
+                "generate",
+                "llm",
+                payload={"prompt": prompt, "config": w.config},
+            )
+        )
+    )
+    w.sig_load.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "load", "llm"))
+    )
+    w.sig_unload.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "unload", "llm"))
+    )
     ctx.guard.sig_status.connect(w.update_status)
     # incoming (guard -> addon)
     ctx.guard.sig_token.connect(w.append_token)
@@ -40,7 +53,7 @@ def injector_factory(ctx: AddonContext):
 
 
 def sd_factory(ctx: AddonContext):
-    return SDModule(ctx.vision_guard)
+    return SDModule(ctx.bridge, ctx.guard)
 
 
 def audiogen_factory(ctx: AddonContext):

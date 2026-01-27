@@ -17,7 +17,7 @@ from PySide6.QtCore import Signal, Qt, QTimer
 from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
-from ui.modules.llm_config import load_config, save_config
+from core.llm_config import load_config, save_config
 
 class PageChat(QWidget):
     sig_generate = Signal(str)
@@ -365,7 +365,12 @@ class PageChat(QWidget):
     def _update_load_button_text(self):
         self.btn_load.setText("UNLOAD MODEL" if self.state.model_loaded else "LOAD MODEL")
 
-    def update_status(self, status):
+    def update_status(self, engine_key, status=None):
+        if status is None:
+            status = engine_key
+            engine_key = "llm"
+        if engine_key != "llm":
+            return
         is_loading = status in (SystemStatus.LOADING, SystemStatus.RUNNING)
         self.btn_load.setEnabled(not is_loading)
         if is_loading:

@@ -1,97 +1,131 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
 
 from core.state import AppState, SystemStatus
+from core.task import Task, TaskStatus
 from engine.base import EnginePort
+
+ENGINE_DISPATCH = {
+    "set_path": "set_model_path",
+    "load": "load_model",
+    "unload": "unload_model",
+    "generate": "generate",
+}
 
 
 class MonoGuard(QObject):
     sig_token = Signal(str)
     sig_trace = Signal(str)
-    sig_status = Signal(SystemStatus)
+    sig_status = Signal(str, SystemStatus)
+    sig_engine_ready = Signal(str)
     sig_usage = Signal(int)
     sig_image = Signal(object)
+    sig_finished = Signal(str, str)
 
-    def __init__(self, state: AppState, engine: EnginePort):
+    def __init__(self, state: AppState, engines: dict[str, EnginePort]):
         super().__init__()
         self.state = state
-        self.engine = engine
-        self._status: SystemStatus = SystemStatus.READY
-        self._pending: Optional[Tuple[str, tuple, dict]] = None
+        self.engines = engines
+        self.active_tasks: dict[str, Optional[Task]] = {
+            key: None for key in engines.keys()
+        }
 
-        # Pass-through connections
-        self.engine.sig_token.connect(self.sig_token)
-        self.engine.sig_trace.connect(self.sig_trace)
-        self.engine.sig_usage.connect(self.sig_usage)
-        if hasattr(self.engine, "sig_image"):
-            self.engine.sig_image.connect(self.sig_image)
-        self.engine.sig_status.connect(self._on_status_changed)
+        for key, engine in engines.items():
+            engine.sig_status.connect(
+                lambda status, engine_key=key: self._on_status_changed(
+                    engine_key, status
+                )
+            )
+            engine.sig_token.connect(self.sig_token)
+            engine.sig_trace.connect(self.sig_trace)
+            if hasattr(engine, "sig_usage"):
+                engine.sig_usage.connect(self.sig_usage)
+            if hasattr(engine, "sig_image"):
+                engine.sig_image.connect(self.sig_image)
+            if hasattr(engine, "sig_finished"):
+                engine.sig_finished.connect(
+                    lambda engine_key=key: self._on_engine_finished(engine_key)
+                )
 
-    # -------------------------------
-    # Command Slots
-    # -------------------------------
-    def slot_set_model_path(self, path: str) -> None:
-        if hasattr(self.engine, "set_model_path"):
-            self.engine.set_model_path(path)
+    def get_active_task_id(self, engine_key: str) -> str | None:
+        task = self.active_tasks.get(engine_key)
+        return str(task.id) if task else None
 
-    def slot_load_model(self):
-        if self._status in (
-            SystemStatus.RUNNING,
-            SystemStatus.LOADING,
-            SystemStatus.UNLOADING,
-        ):
-            self._pending = ("load_model", (), {})
-            self._request_stop(clear_pending=False)
+    def get_active_task(self, engine_key: str) -> Task | None:
+        return self.active_tasks.get(engine_key)
+
+    def submit(self, task: Task) -> bool:
+        engine = self.engines.get(task.target)
+        if engine is None:
+            self.sig_trace.emit(f"ERROR: Unknown engine target: {task.target}")
+            return False
+
+        if self.active_tasks.get(task.target) is not None:
+            return False
+
+        self.active_tasks[task.target] = task
+        task.status = TaskStatus.RUNNING
+        method_name = ENGINE_DISPATCH.get(task.command)
+        if not method_name:
+            self.sig_trace.emit(f"ERROR: Unknown command: {task.command}")
+            self.active_tasks[task.target] = None
+            task.status = TaskStatus.FAILED
+            return False
+
+        handler = getattr(engine, method_name, None)
+        if not handler:
+            self.sig_trace.emit(f"ERROR: Engine lacks handler: {method_name}")
+            self.active_tasks[task.target] = None
+            task.status = TaskStatus.FAILED
+            return False
+
+        if task.command == "set_path":
+            handler(task.payload.get("path"))
+        elif task.command == "generate":
+            handler(task.payload)
+        else:
+            handler()
+        return True
+
+    def stop(self, target: str = "all") -> None:
+        if target == "all":
+            keys = list(self.engines.keys())
+        else:
+            keys = [target]
+
+        for key in keys:
+            engine = self.engines.get(key)
+            if not engine:
+                continue
+            engine.stop_generation()
+            task = self.active_tasks.get(key)
+            if task:
+                task.status = TaskStatus.CANCELLED
+            self.active_tasks[key] = None
+
+    def _on_engine_finished(self, engine_key: str) -> None:
+        task = self.active_tasks.get(engine_key)
+        if task:
+            self.sig_finished.emit(engine_key, str(task.id))
+
+    def _on_status_changed(self, engine_key: str, new_status: SystemStatus) -> None:
+        self.sig_status.emit(engine_key, new_status)
+
+        if new_status == SystemStatus.ERROR:
+            task = self.active_tasks.get(engine_key)
+            if task:
+                task.status = TaskStatus.FAILED
+            self.active_tasks[engine_key] = None
+            self.sig_status.emit(engine_key, SystemStatus.READY)
+            self.sig_engine_ready.emit(engine_key)
             return
-        self.engine.load_model()
 
-    def slot_unload_model(self):
-        if self._status in (
-            SystemStatus.RUNNING,
-            SystemStatus.LOADING,
-            SystemStatus.UNLOADING,
-        ):
-            self._pending = ("unload_model", (), {})
-            self._request_stop(clear_pending=False)
-            return
-        self.engine.unload_model()
-
-    def slot_generate(self, user_input: str, config: dict | None = None):
-        if self._status in (
-            SystemStatus.RUNNING,
-            SystemStatus.LOADING,
-            SystemStatus.UNLOADING,
-        ):
-            self._pending = ("generate", (user_input, config), {})
-            self._request_stop(clear_pending=False)
-            return
-        self.engine.generate(user_input, config)
-
-    def slot_stop(self):
-        self._request_stop(clear_pending=True)
-
-    def _request_stop(self, clear_pending: bool) -> None:
-        """Interrupt current execution and optionally clear pending command."""
-        if clear_pending:
-            self._pending = None
-        self.engine.stop_generation()
-
-    # -------------------------------
-    # Internal Callbacks
-    # -------------------------------
-    def _on_status_changed(self, new_status: SystemStatus):
-        self._status = new_status
-        self.sig_status.emit(new_status)
-        if new_status == SystemStatus.READY and self._pending:
-            command_name, args, kwargs = self._pending
-            self._pending = None
-
-            if command_name == "load_model":
-                self.engine.load_model()
-            elif command_name == "unload_model":
-                self.engine.unload_model()
-            elif command_name == "generate":
-                self.engine.generate(*args, **kwargs)
+        if new_status == SystemStatus.READY:
+            task = self.active_tasks.get(engine_key)
+            if task and task.status == TaskStatus.RUNNING:
+                task.status = TaskStatus.DONE
+            self.active_tasks[engine_key] = None
+            self.sig_engine_ready.emit(engine_key)

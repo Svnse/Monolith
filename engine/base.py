@@ -7,10 +7,14 @@ from PySide6.QtCore import Signal
 
 @runtime_checkable
 class EnginePort(Protocol):
-    sig_token: Signal
-    sig_trace: Signal
     sig_status: Signal
-    sig_usage: Signal
+    sig_trace: Signal
+    sig_token: Signal
+    sig_image: Signal
+    sig_finished: Signal
+
+    def set_model_path(self, path: str) -> None:
+        ...
 
     def load_model(self) -> None:
         ...
@@ -18,7 +22,7 @@ class EnginePort(Protocol):
     def unload_model(self) -> None:
         ...
 
-    def generate(self, user_input: str, config: dict | None = None) -> None:
+    def generate(self, payload: dict) -> None:
         ...
 
     def stop_generation(self) -> None:
@@ -26,4 +30,3 @@ class EnginePort(Protocol):
 
     def shutdown(self) -> None:
         ...
-

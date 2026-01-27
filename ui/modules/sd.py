@@ -11,13 +11,15 @@ from PySide6.QtGui import QPixmap, QImage
 
 from core.style import BG_INPUT, BORDER_DARK, FG_DIM, FG_TEXT, FG_ACCENT, FG_ERROR
 from core.state import SystemStatus
+from monokernel.bridge import MonoBridge
 from monokernel.guard import MonoGuard
 from ui.components.atoms import SkeetGroupBox, SkeetButton, SkeetTriangleButton, CollapsibleSection
 
 class SDModule(QWidget):
-    def __init__(self, vision_guard: MonoGuard):
+    def __init__(self, bridge: MonoBridge, guard: MonoGuard):
         super().__init__()
-        self.vision_guard = vision_guard
+        self.bridge = bridge
+        self.guard = guard
 
         self.config_path = Path("config/vision_config.json")
         self.legacy_config_path = Path("config/sd_config.json")
@@ -37,7 +39,14 @@ class SDModule(QWidget):
         self._status_reset_timer.setSingleShot(True)
         self._status_reset_timer.timeout.connect(self._reset_status)
         if self.model_path:
-            self.vision_guard.slot_set_model_path(self.model_path)
+            self.bridge.submit(
+                self.bridge.wrap(
+                    "vision",
+                    "set_path",
+                    "vision",
+                    payload={"path": self.model_path},
+                )
+            )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -183,7 +192,7 @@ class SDModule(QWidget):
         self.btn_generate = SkeetButton("GENERATE", accent=True)
         self.btn_generate.clicked.connect(self._start_generate)
         self.btn_stop = SkeetButton("STOP")
-        self.btn_stop.clicked.connect(self.vision_guard.slot_stop)
+        self.btn_stop.clicked.connect(lambda: self.bridge.stop("vision"))
         self.btn_stop.setEnabled(False)
         self.btn_save = SkeetButton("SAVE IMAGE")
         self.btn_save.clicked.connect(self._save_image)
@@ -227,9 +236,9 @@ class SDModule(QWidget):
         self.inp_steps.valueChanged.connect(self._queue_save_config)
         self.inp_strength.valueChanged.connect(self._queue_save_config)
         self.inp_seed.valueChanged.connect(self._queue_save_config)
-        self.vision_guard.sig_image.connect(self._on_image)
-        self.vision_guard.sig_status.connect(self._on_status)
-        self.vision_guard.sig_trace.connect(self._on_trace)
+        self.guard.sig_image.connect(self._on_image)
+        self.guard.sig_status.connect(self._on_status)
+        self.guard.sig_trace.connect(self._on_trace)
 
     def _load_config(self):
         if self.config_path.exists():
@@ -299,8 +308,15 @@ class SDModule(QWidget):
         self.model_path = path
         self.btn_load.setChecked(True)
         self._queue_save_config()
-        self.vision_guard.slot_set_model_path(path)
-        self.vision_guard.slot_load_model()
+        self.bridge.submit(
+            self.bridge.wrap(
+                "vision",
+                "set_path",
+                "vision",
+                payload={"path": path},
+            )
+        )
+        self.bridge.submit(self.bridge.wrap("vision", "load", "vision"))
 
     def _queue_save_config(self):
         self._status_reset_timer.stop()
@@ -330,7 +346,14 @@ class SDModule(QWidget):
             "guidance_scale": self.inp_strength.value(),
             "seed": seed,
         }
-        self.vision_guard.slot_generate(prompt, config)
+        self.bridge.submit(
+            self.bridge.wrap(
+                "vision",
+                "generate",
+                "vision",
+                payload={"prompt": prompt, "config": config},
+            )
+        )
 
     def _save_image(self):
         if not self.current_image:
@@ -373,7 +396,12 @@ class SDModule(QWidget):
         self._set_status("DONE", FG_TEXT)
         self.btn_save.setEnabled(True)
 
-    def _on_status(self, status: SystemStatus) -> None:
+    def _on_status(self, engine_key: str, status: SystemStatus | None = None) -> None:
+        if status is None:
+            status = engine_key
+            engine_key = "vision"
+        if engine_key != "vision":
+            return
         is_busy = status in (
             SystemStatus.LOADING,
             SystemStatus.RUNNING,
