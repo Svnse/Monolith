@@ -216,7 +216,7 @@ class VisionEngine(QObject):
 
         self.sig_status.emit(SystemStatus.READY)
 
-    def generate(self, prompt: str, config: dict | None = None) -> None:
+    def generate(self, user_input: str, config: dict | None = None) -> None:
         if not self.pipe:
             self.sig_trace.emit("VISION: ERROR: Model offline.")
             self.sig_status.emit(SystemStatus.READY)
@@ -238,7 +238,7 @@ class VisionEngine(QObject):
         self.sig_status.emit(SystemStatus.RUNNING)
         self.worker = GenerationWorker(
             self.pipe,
-            prompt,
+            user_input,
             steps,
             guidance_scale,
             seed,

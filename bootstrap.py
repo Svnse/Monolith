@@ -33,7 +33,6 @@ def main():
     # global chrome-only wiring stays here
     guard.sig_status.connect(ui.update_status)
     guard.sig_usage.connect(ui.update_ctx)
-    vision_guard.sig_status.connect(ui.update_status)
     app.aboutToQuit.connect(guard.slot_stop)
     app.aboutToQuit.connect(engine.shutdown)
     app.aboutToQuit.connect(vision_guard.slot_stop)

@@ -93,9 +93,10 @@ class LLMEngine(QObject):
         self.worker = None
         self._load_cancel_requested: bool = False
         self._shutdown_requested: bool = False
+        self._status: SystemStatus = SystemStatus.READY
 
     def load_model(self):
-        if self.state.status == SystemStatus.LOADING:
+        if self._status == SystemStatus.LOADING:
             return
         
         if not self.state.gguf_path:
@@ -146,12 +147,12 @@ class LLMEngine(QObject):
         self.loader = None
 
     def unload_model(self):
-        if self.state.status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
+        if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
             self._load_cancel_requested = True
             self.sig_trace.emit("→ unload requested during load; will cancel when init completes")
             return
 
-        if self.state.status == SystemStatus.RUNNING:
+        if self._status == SystemStatus.RUNNING:
             self.sig_trace.emit("ERROR: Cannot unload while generating.")
             return
 
@@ -163,12 +164,12 @@ class LLMEngine(QObject):
         self.set_status(SystemStatus.READY)
         self.sig_trace.emit("→ model unloaded")
 
-    def generate(self, user_input, config=None):
+    def generate(self, user_input: str, config: dict | None = None):
         if not self.state.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
             return
 
-        if self.state.status == SystemStatus.RUNNING:
+        if self._status == SystemStatus.RUNNING:
             self.sig_trace.emit("ERROR: Busy. Wait for completion.")
             return
 
@@ -199,7 +200,7 @@ class LLMEngine(QObject):
         self.worker.start()
 
     def stop_generation(self):
-        if self.state.status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
+        if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
             self._load_cancel_requested = True
             self.sig_trace.emit("→ load cancel requested; will stop after initialization completes")
             return
@@ -216,7 +217,7 @@ class LLMEngine(QObject):
         self.sig_finished.emit()
 
     def set_status(self, s):
-        self.state.status = s
+        self._status = s
         self.sig_status.emit(s)
 
     def shutdown(self):
