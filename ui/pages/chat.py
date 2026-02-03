@@ -17,7 +17,7 @@ from PySide6.QtCore import Signal, Qt, QTimer
 from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
-from core.llm_config import load_config, save_config
+from core.llm_config import DEFAULT_CONFIG, load_config, save_config
 
 class PageChat(QWidget):
     sig_generate = Signal(str)
@@ -40,6 +40,10 @@ class PageChat(QWidget):
         self._current_session = self._create_session()
         self._active_assistant_index = None
         self._last_status = None
+
+        capabilities_signal = getattr(self.state, "sig_model_capabilities", None)
+        if capabilities_signal is not None:
+            capabilities_signal.connect(self._on_model_capabilities)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -285,6 +289,8 @@ class PageChat(QWidget):
         self._sync_path_display()
         self._update_load_button_text()
         self._refresh_archive_list()
+        if not self.state.model_loaded:
+            self._apply_default_limits()
 
     def send(self):
         txt = self.input.text().strip()
@@ -338,6 +344,50 @@ class PageChat(QWidget):
         self.config[key] = value
         self._save_config()
 
+    def _set_slider_limits(self, slider, max_value, value):
+        qt_slider = slider.slider
+        qt_slider.blockSignals(True)
+        if slider.is_int:
+            min_value = qt_slider.minimum()
+            if max_value < min_value:
+                min_value = max_value
+            qt_slider.setRange(int(min_value), int(max_value))
+            qt_slider.setValue(int(value))
+            slider.val_lbl.setText(str(int(value)))
+        else:
+            min_value = qt_slider.minimum()
+            max_scaled = int(max_value * 100)
+            if max_scaled < min_value:
+                min_value = max_scaled
+            qt_slider.setRange(min_value, max_scaled)
+            qt_slider.setValue(int(value * 100))
+            slider.val_lbl.setText(f"{value:.2f}")
+        qt_slider.blockSignals(False)
+
+    def _apply_default_limits(self):
+        self._set_slider_limits(
+            self.s_ctx,
+            DEFAULT_CONFIG["ctx_limit"],
+            DEFAULT_CONFIG["ctx_limit"],
+        )
+        self._set_slider_limits(
+            self.s_tok,
+            DEFAULT_CONFIG["max_tokens"],
+            DEFAULT_CONFIG["max_tokens"],
+        )
+
+    def _on_model_capabilities(self, payload):
+        model_ctx_length = payload.get("model_ctx_length")
+        if model_ctx_length is None:
+            self._apply_default_limits()
+            return
+        self._set_slider_limits(self.s_ctx, model_ctx_length, model_ctx_length)
+        self._set_slider_limits(
+            self.s_tok,
+            model_ctx_length,
+            min(8192, model_ctx_length),
+        )
+
     def _on_ctx_limit_changed(self, value):
         self.state.ctx_limit = int(value)
         self._update_config_value("ctx_limit", int(value))
@@ -377,6 +427,8 @@ class PageChat(QWidget):
             self.btn_load.setText("PROCESSING...")
         else:
             self._update_load_button_text()
+        if status == SystemStatus.READY and not self.state.model_loaded:
+            self._apply_default_limits()
         if self._last_status == SystemStatus.RUNNING and status == SystemStatus.READY:
             if len(self._current_session["messages"]) > 0:
                 try:

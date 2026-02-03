@@ -4,7 +4,7 @@ from core.llm_config import load_config
 
 class ModelLoader(QThread):
     trace = Signal(str)
-    finished = Signal(object)
+    finished = Signal(object, int)
     error = Signal(str)
 
     def __init__(self, path, n_ctx=8192, n_gpu_layers=-1):
@@ -28,7 +28,8 @@ class ModelLoader(QThread):
                 n_gpu_layers=self.n_gpu_layers,
                 verbose=False
             )
-            self.finished.emit(llm_instance)
+            model_ctx_length = llm_instance._model.n_ctx_train()
+            self.finished.emit(llm_instance, model_ctx_length)
         except Exception as e:
             self.error.emit(f"Load Failed: {str(e)}")
 
@@ -85,6 +86,7 @@ class LLMEngine(QObject):
     sig_finished = Signal()
     sig_usage = Signal(int)
     sig_image = Signal(object)
+    sig_model_capabilities = Signal(dict)
 
     def __init__(self, state: AppState):
         super().__init__()
@@ -96,6 +98,8 @@ class LLMEngine(QObject):
         self._load_cancel_requested: bool = False
         self._shutdown_requested: bool = False
         self._status: SystemStatus = SystemStatus.READY
+        self.state.model_ctx_length = None
+        self.state.sig_model_capabilities = self.sig_model_capabilities
 
     def set_model_path(self, path: str) -> None:
         self.model_path = path
@@ -117,7 +121,12 @@ class LLMEngine(QObject):
         self.set_status(SystemStatus.LOADING)
         self._load_cancel_requested = False
         # Keep reference to loader to prevent GC
-        self.loader = ModelLoader(model_path, self.state.ctx_limit)
+        n_ctx = (
+            min(self.state.ctx_limit, self.state.model_ctx_length)
+            if self.state.model_ctx_length
+            else self.state.ctx_limit
+        )
+        self.loader = ModelLoader(model_path, n_ctx)
         self.loader.trace.connect(self.sig_trace)
         self.loader.error.connect(self._on_load_error)
         self.loader.finished.connect(self._on_load_success)
@@ -125,7 +134,7 @@ class LLMEngine(QObject):
         self.loader.error.connect(self._cleanup_loader)
         self.loader.start()
 
-    def _on_load_success(self, llm_instance):
+    def _on_load_success(self, llm_instance, model_ctx_length):
         if self._shutdown_requested:
             del llm_instance
             self.set_status(SystemStatus.READY)
@@ -141,6 +150,14 @@ class LLMEngine(QObject):
             return
 
         self.llm = llm_instance
+        self.state.model_ctx_length = int(model_ctx_length)
+        self.state.ctx_limit = min(self.state.ctx_limit, self.state.model_ctx_length)
+        self.sig_model_capabilities.emit(
+            {
+                "model_ctx_length": self.state.model_ctx_length,
+                "ctx_limit": self.state.ctx_limit,
+            }
+        )
         self.state.model_loaded = True
         self.set_status(SystemStatus.READY)
         self.sig_trace.emit("→ system online")
@@ -172,6 +189,9 @@ class LLMEngine(QObject):
             del self.llm
             self.llm = None
         self.state.model_loaded = False
+        config = load_config()
+        self.state.ctx_limit = int(config.get("ctx_limit", self.state.ctx_limit))
+        self.state.model_ctx_length = None
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
         self.sig_trace.emit("→ model unloaded")
 
