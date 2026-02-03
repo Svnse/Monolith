@@ -40,6 +40,8 @@ class PageChat(QWidget):
         self._session_counter = 0
         self._current_session = self._create_session()
         self._active_assistant_index = None
+        self._rewrite_assistant_index = None
+        self._assistant_block_map = {}
         self._last_status = None
         self._is_running = False
         self._pending_update_text = None
@@ -309,10 +311,12 @@ class PageChat(QWidget):
         self.input.clear()
         safe_txt = html.escape(txt)
         self.chat.append(f"<span style='color:{ACCENT_GOLD}'><b>USER:</b></span> {safe_txt}")
-        self.chat.append(f"<span style='color:{FG_TEXT}'><b>MONOLITH:</b></span>")
+        self.chat.append(f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span>")
         self.chat.moveCursor(QTextCursor.End)
         self._add_message("user", txt)
         self._active_assistant_index = self._add_message("assistant", "")
+        block = self.chat.document().lastBlock().blockNumber()
+        self._assistant_block_map[self._active_assistant_index] = block
         self.sig_generate.emit(txt)
 
     def handle_send_click(self):
@@ -366,6 +370,7 @@ class PageChat(QWidget):
 
     def _submit_update(self, update_text):
         self._set_send_button_state(is_running=True)
+        self._rewrite_assistant_index = self._active_assistant_index
         partial = "(no output yet)"
         if self._active_assistant_index is not None:
             txt = self._current_session["messages"][self._active_assistant_index]["text"]
@@ -407,6 +412,39 @@ Continue from the interruption point. Do not repeat earlier content.
             return
         chunk = "".join(self._token_buf)
         self._token_buf.clear()
+        if self._rewrite_assistant_index is not None:
+            block_number = self._assistant_block_map.get(self._rewrite_assistant_index)
+            if block_number is not None:
+                doc = self.chat.document()
+                start_block = doc.findBlockByNumber(block_number)
+                if start_block.isValid():
+                    msg = self._current_session["messages"][self._rewrite_assistant_index]
+                    safe = html.escape(msg.get("text", ""))
+                    scroll = self.chat.verticalScrollBar()
+                    at_bottom = scroll.value() == scroll.maximum()
+                    value = scroll.value()
+                    current_cursor = self.chat.textCursor()
+                    cursor = QTextCursor(start_block)
+                    next_block_number = min(
+                        (number for number in self._assistant_block_map.values() if number > block_number),
+                        default=None,
+                    )
+                    if next_block_number is not None:
+                        end_block = doc.findBlockByNumber(next_block_number)
+                        cursor.setPosition(end_block.position(), QTextCursor.KeepAnchor)
+                    else:
+                        end_cursor = QTextCursor(doc)
+                        end_cursor.movePosition(QTextCursor.End)
+                        cursor.setPosition(end_cursor.position(), QTextCursor.KeepAnchor)
+                    cursor.insertHtml(
+                        f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span> {safe}"
+                    )
+                    self.chat.setTextCursor(current_cursor)
+                    if at_bottom:
+                        scroll.setValue(scroll.maximum())
+                    else:
+                        scroll.setValue(value)
+                    return
         self.chat.moveCursor(QTextCursor.End)
         self.chat.insertPlainText(chunk)
         self.chat.moveCursor(QTextCursor.End)
@@ -535,6 +573,7 @@ Continue from the interruption point. Do not repeat earlier content.
             self._set_send_button_state(is_running=True)
         elif status == SystemStatus.READY:
             self._set_send_button_state(is_running=False)
+            self._rewrite_assistant_index = None
         elif status == SystemStatus.LOADING:
             self._set_send_button_state(is_running=False)
             self.btn_send.setEnabled(False)
@@ -713,6 +752,8 @@ Continue from the interruption point. Do not repeat earlier content.
     def _set_current_session(self, session, show_reset=False):
         self._current_session = session
         self._active_assistant_index = None
+        self._rewrite_assistant_index = None
+        self._assistant_block_map = {}
         self._render_session(session, show_reset=show_reset)
 
     def _render_session(self, session, show_reset=False):
@@ -722,7 +763,7 @@ Continue from the interruption point. Do not repeat earlier content.
             if show_reset:
                 self.chat.append(f"<span style='color:{FG_DIM}'>--- SESSION RESET ---</span>")
             return
-        for msg in session["messages"]:
+        for idx, msg in enumerate(session["messages"]):
             safe = html.escape(msg.get("text", ""))
             if msg.get("role") == "user":
                 self.chat.append(
@@ -730,8 +771,10 @@ Continue from the interruption point. Do not repeat earlier content.
                 )
             else:
                 self.chat.append(
-                    f"<span style='color:{FG_TEXT}'><b>MONOLITH:</b></span> {safe}"
+                    f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span> {safe}"
                 )
+                block = self.chat.document().lastBlock().blockNumber()
+                self._assistant_block_map[idx] = block
         self.chat.moveCursor(QTextCursor.End)
 
     def _add_message(self, role, text):
@@ -747,9 +790,13 @@ Continue from the interruption point. Do not repeat earlier content.
         return len(self._current_session["messages"]) - 1
 
     def _append_assistant_token(self, token):
-        if self._active_assistant_index is None:
-            self._active_assistant_index = self._add_message("assistant", "")
-        msg = self._current_session["messages"][self._active_assistant_index]
+        target_index = self._rewrite_assistant_index
+        if target_index is None:
+            target_index = self._active_assistant_index
+        if target_index is None:
+            target_index = self._add_message("assistant", "")
+            self._active_assistant_index = target_index
+        msg = self._current_session["messages"][target_index]
         msg["text"] += token
         msg["time"] = self._now_iso()
         self._current_session["updated_at"] = msg["time"]
