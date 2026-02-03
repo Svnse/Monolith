@@ -1,7 +1,8 @@
 import math
+import re
 from PySide6.QtWidgets import (
-    QWidget, QFrame, QLabel, QDialog, QHBoxLayout, QVBoxLayout, 
-    QPushButton, QProgressBar, QGridLayout
+    QWidget, QFrame, QLabel, QDialog, QHBoxLayout, QVBoxLayout,
+    QPushButton, QProgressBar, QGridLayout, QLineEdit, QCompleter
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QRectF
 from PySide6.QtGui import (
@@ -239,6 +240,129 @@ class GradientLine(QFrame):
         grad.setColorAt(0.5, c_gold)
         grad.setColorAt(1.0, c_dark)
         painter.fillRect(self.rect(), grad)
+
+
+class TagLineEdit(QLineEdit):
+    backspaceOnEmpty = Signal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Backspace and not self.text():
+            self.backspaceOnEmpty.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class BehaviorTagInput(QFrame):
+    tagsChanged = Signal(list)
+
+    def __init__(self, known_tags, parent=None):
+        super().__init__(parent)
+        self._known_tags = {tag.lower() for tag in known_tags}
+        self._tags = []
+
+        self.setStyleSheet(
+            f"background: {BG_INPUT}; border: 1px solid #333; border-radius: 2px;"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+
+        self._chip_layout = QHBoxLayout()
+        self._chip_layout.setContentsMargins(0, 0, 0, 0)
+        self._chip_layout.setSpacing(6)
+        layout.addLayout(self._chip_layout)
+
+        self._input = TagLineEdit()
+        self._input.setPlaceholderText("Type tags...")
+        self._input.setStyleSheet(f"background: transparent; color: {FG_TEXT}; border: none;")
+        self._input.textEdited.connect(self._on_text_edited)
+        self._input.returnPressed.connect(self._commit_current_text)
+        self._input.backspaceOnEmpty.connect(self._remove_last_tag)
+        completer = QCompleter(sorted(self._known_tags))
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._input.setCompleter(completer)
+        layout.addWidget(self._input, stretch=1)
+
+    def set_tags(self, tags):
+        self._clear_tags()
+        for tag in tags:
+            self._add_tag(tag, emit_signal=False)
+        self.tagsChanged.emit(self._tags.copy())
+
+    def tags(self):
+        return self._tags.copy()
+
+    def _clear_tags(self):
+        while self._chip_layout.count():
+            item = self._chip_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._tags = []
+
+    def _normalize_tag(self, tag):
+        return tag.strip().lower()
+
+    def _add_tag(self, tag, emit_signal=True):
+        normalized = self._normalize_tag(tag)
+        if not normalized or normalized not in self._known_tags:
+            return
+        if normalized in self._tags:
+            return
+        chip = QPushButton(normalized)
+        chip.setCursor(Qt.PointingHandCursor)
+        chip.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: #1a1a1a; border: 1px solid #333; color: {FG_TEXT};
+                padding: 2px 6px; font-size: 10px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:hover {{ color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD}; }}
+            """
+        )
+        chip.clicked.connect(lambda _, t=normalized: self._remove_tag(t))
+        self._chip_layout.addWidget(chip)
+        self._tags.append(normalized)
+        if emit_signal:
+            self.tagsChanged.emit(self._tags.copy())
+
+    def _remove_tag(self, tag):
+        if tag not in self._tags:
+            return
+        self._tags = [t for t in self._tags if t != tag]
+        for index in range(self._chip_layout.count() - 1, -1, -1):
+            widget = self._chip_layout.itemAt(index).widget()
+            if widget and widget.text() == tag:
+                self._chip_layout.takeAt(index)
+                widget.deleteLater()
+                break
+        self.tagsChanged.emit(self._tags.copy())
+
+    def _remove_last_tag(self):
+        if not self._tags:
+            return
+        self._remove_tag(self._tags[-1])
+
+    def _commit_current_text(self):
+        text = self._input.text()
+        if text:
+            self._add_tag(text)
+        self._input.clear()
+
+    def _on_text_edited(self, text):
+        if not text:
+            return
+        if "," not in text and " " not in text:
+            return
+        parts = [part for part in re.split(r"[,\s]+", text) if part]
+        trailing = ""
+        if text and text[-1] not in {",", " "}:
+            trailing = parts.pop() if parts else text
+        for part in parts:
+            self._add_tag(part)
+        self._input.blockSignals(True)
+        self._input.setText(trailing)
+        self._input.blockSignals(False)
 
 class SplitControlBlock(QWidget):
     minClicked = Signal()

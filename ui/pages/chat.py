@@ -17,7 +17,8 @@ from PySide6.QtCore import Signal, Qt, QTimer
 from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD, FG_ERROR
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
-from core.llm_config import DEFAULT_CONFIG, load_config, save_config
+from ui.components.complex import BehaviorTagInput
+from core.llm_config import DEFAULT_CONFIG, load_config, save_config, MASTER_PROMPT, TAG_MAP
 
 class PageChat(QWidget):
     sig_generate = Signal(str)
@@ -46,6 +47,9 @@ class PageChat(QWidget):
         self._is_running = False
         self._pending_update_text = None
         self._awaiting_update_restart = False
+        self._update_trace_state = None
+        self._update_token_count = 0
+        self._update_progress_index = 0
 
         capabilities_signal = getattr(self.state, "sig_model_capabilities", None)
         if capabilities_signal is not None:
@@ -118,19 +122,16 @@ class PageChat(QWidget):
             "Context Limit", 1024, 16384, self.config.get("ctx_limit", 8192), is_int=True
         )
         self.s_ctx.valueChanged.connect(self._on_ctx_limit_changed)
-        lbl_sys = QLabel("System Prompt")
+        lbl_sys = QLabel("Behavior Tags")
         lbl_sys.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; margin-top: 5px;")
-        self.inp_sys = QLineEdit(self.config.get("system_prompt", "You are Monolith. Be precise."))
-        self.inp_sys.setStyleSheet(
-            f"background: {BG_INPUT}; color: #aaa; border: 1px solid #333; padding: 5px;"
-        )
-        self.inp_sys.textChanged.connect(self._on_system_prompt_changed)
+        self.behavior_tags = BehaviorTagInput(TAG_MAP.keys())
+        self.behavior_tags.tagsChanged.connect(self._on_behavior_tags_changed)
         grp_ai.add_widget(self.s_temp)
         grp_ai.add_widget(self.s_top)
         grp_ai.add_widget(self.s_tok)
         grp_ai.add_widget(self.s_ctx)
         grp_ai.add_widget(lbl_sys)
-        grp_ai.add_widget(self.inp_sys)
+        grp_ai.add_widget(self.behavior_tags)
         ai_col.addWidget(grp_ai)
         ai_col.addStretch()
 
@@ -300,6 +301,8 @@ class PageChat(QWidget):
         self._sync_path_display()
         self._update_load_button_text()
         self._refresh_archive_list()
+        self._apply_behavior_prompt(self.config.get("behavior_tags", []))
+        self.behavior_tags.set_tags(self.config.get("behavior_tags", []))
         if not self.state.model_loaded:
             self._apply_default_limits()
 
@@ -310,7 +313,10 @@ class PageChat(QWidget):
         self._set_send_button_state(is_running=True)
         self.input.clear()
         safe_txt = html.escape(txt)
-        self.chat.append(f"<span style='color:{ACCENT_GOLD}'><b>USER:</b></span> {safe_txt}")
+        self.chat.append(
+            f"<span style='color:white'><b>USER:</b></span> "
+            f"<span style='color:{FG_DIM}'>{safe_txt}</span>"
+        )
         self.chat.append(f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span>")
         self.chat.moveCursor(QTextCursor.End)
         self._add_message("user", txt)
@@ -334,6 +340,7 @@ class PageChat(QWidget):
         self._pending_update_text = txt
         self._awaiting_update_restart = True
         self.btn_send.setEnabled(False)
+        self._begin_update_trace(txt)
         self.sig_stop.emit()
 
     def _set_send_button_state(self, is_running: bool, stopping: bool = False):
@@ -401,9 +408,11 @@ Continue from the interruption point. Do not repeat earlier content.
         self.input.clear()
         safe_update = html.escape(update_text)
         self.chat.append(
-            f"<span style='color:{ACCENT_GOLD}'><b>USER:</b></span> {safe_update}"
+            f"<span style='color:white'><b>USER:</b></span> "
+            f"<span style='color:{FG_DIM}'>{safe_update}</span>"
         )
         self._add_message("user", update_text)
+        self._start_update_streaming()
         self.sig_generate.emit(injected)
 
     def _flush_tokens(self):
@@ -437,7 +446,8 @@ Continue from the interruption point. Do not repeat earlier content.
                         end_cursor.movePosition(QTextCursor.End)
                         cursor.setPosition(end_cursor.position(), QTextCursor.KeepAnchor)
                     cursor.insertHtml(
-                        f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span> {safe}"
+                        f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span> "
+                        f"<span style='color:white'>{safe}</span>"
                     )
                     self.chat.setTextCursor(current_cursor)
                     if at_bottom:
@@ -446,16 +456,23 @@ Continue from the interruption point. Do not repeat earlier content.
                         scroll.setValue(value)
                     return
         self.chat.moveCursor(QTextCursor.End)
-        self.chat.insertPlainText(chunk)
+        safe_chunk = html.escape(chunk)
+        cursor = self.chat.textCursor()
+        cursor.insertHtml(f"<span style='color:{FG_DIM}'>{safe_chunk}</span>")
         self.chat.moveCursor(QTextCursor.End)
 
     def append_token(self, t):
         self._token_buf.append(t)
         self._append_assistant_token(t)
+        self._update_progress_markers()
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
     def append_trace(self, html):
+        if self._update_trace_state in {"requested", "streaming"}:
+            lowered = html.lower()
+            if "inference aborted" in lowered or "inference complete" in lowered:
+                return
         if "→" in html:
             html = html.replace("→", f"<span style='color:{ACCENT_GOLD}'>→</span>")
         self.trace.append(html)
@@ -526,8 +543,8 @@ Continue from the interruption point. Do not repeat earlier content.
         self.state.ctx_limit = int(value)
         self._update_config_value("ctx_limit", int(value))
 
-    def _on_system_prompt_changed(self, text):
-        self._update_config_value("system_prompt", text)
+    def _on_behavior_tags_changed(self, tags):
+        self._apply_behavior_prompt(tags)
 
     def _on_context_injection_changed(self, text):
         self._update_config_value("context_injection", text)
@@ -574,6 +591,8 @@ Continue from the interruption point. Do not repeat earlier content.
         elif status == SystemStatus.READY:
             self._set_send_button_state(is_running=False)
             self._rewrite_assistant_index = None
+            if self._update_trace_state == "streaming":
+                self._finalize_update_progress()
         elif status == SystemStatus.LOADING:
             self._set_send_button_state(is_running=False)
             self.btn_send.setEnabled(False)
@@ -767,15 +786,74 @@ Continue from the interruption point. Do not repeat earlier content.
             safe = html.escape(msg.get("text", ""))
             if msg.get("role") == "user":
                 self.chat.append(
-                    f"<span style='color:{ACCENT_GOLD}'><b>USER:</b></span> {safe}"
+                    f"<span style='color:white'><b>USER:</b></span> "
+                    f"<span style='color:{FG_DIM}'>{safe}</span>"
                 )
             else:
                 self.chat.append(
-                    f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span> {safe}"
+                    f"<span style='color:{ACCENT_GOLD}'><b>MONOLITH:</b></span> "
+                    f"<span style='color:{FG_DIM}'>{safe}</span>"
                 )
                 block = self.chat.document().lastBlock().blockNumber()
                 self._assistant_block_map[idx] = block
         self.chat.moveCursor(QTextCursor.End)
+
+    def _compile_behavior_prompt(self, tags):
+        lines = []
+        for tag in tags:
+            content = TAG_MAP.get(tag)
+            if content:
+                lines.append(content)
+        return "\n".join(lines).strip()
+
+    def _apply_behavior_prompt(self, tags):
+        filtered = [tag for tag in tags if tag in TAG_MAP]
+        self.config["behavior_tags"] = filtered
+        behavior_prompt = self._compile_behavior_prompt(filtered)
+        if behavior_prompt:
+            self.config["system_prompt"] = f"{MASTER_PROMPT}\n\n{behavior_prompt}"
+        else:
+            self.config["system_prompt"] = MASTER_PROMPT
+        self._save_config()
+
+    def _begin_update_trace(self, update_text):
+        self._update_trace_state = "requested"
+        self._update_token_count = 0
+        self._update_progress_index = 0
+        self.trace.append("⟐ UPDATE REQUESTED")
+        self.trace.append(f'⟐ USER PATCH: "{update_text}"')
+
+    def _start_update_streaming(self):
+        self._update_trace_state = "streaming"
+        self._update_token_count = 0
+        self._update_progress_index = 0
+
+    def _update_progress_markers(self):
+        if self._update_trace_state != "streaming":
+            return
+        self._update_token_count += 1
+        thresholds = [25, 50, 100]
+        pct = min(
+            100,
+            int((self._update_token_count / self.config["max_tokens"]) * 100),
+        )
+        while self._update_progress_index < len(thresholds):
+            if pct >= thresholds[self._update_progress_index]:
+                percent = thresholds[self._update_progress_index]
+                self.trace.append(f"⟐ UPDATE PROGRESS {percent}%")
+                self._update_progress_index += 1
+                continue
+            break
+
+    def _finalize_update_progress(self):
+        if self._update_trace_state != "streaming":
+            return
+        thresholds = [25, 50, 100]
+        while self._update_progress_index < len(thresholds):
+            percent = thresholds[self._update_progress_index]
+            self.trace.append(f"⟐ UPDATE PROGRESS {percent}%")
+            self._update_progress_index += 1
+        self._update_trace_state = None
 
     def _add_message(self, role, text):
         now = self._now_iso()
