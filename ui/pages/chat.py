@@ -41,6 +41,7 @@ class PageChat(QWidget):
         self._current_session = self._create_session()
         self._active_assistant_index = None
         self._last_status = None
+        self._is_running = False
 
         capabilities_signal = getattr(self.state, "sig_model_capabilities", None)
         if capabilities_signal is not None:
