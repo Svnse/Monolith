@@ -36,7 +36,7 @@ class ModelLoader(QThread):
 class GeneratorWorker(QThread):
     token = Signal(str)
     trace = Signal(str)
-    done = Signal()
+    done = Signal(bool, str)
     usage = Signal(int)
 
     def __init__(self, llm, messages, temp, top_p, max_tokens):
@@ -49,6 +49,8 @@ class GeneratorWorker(QThread):
 
     def run(self):
         self.trace.emit("→ inference started")
+        assistant_chunks = []
+        completed = False
         try:
             if self.isInterruptionRequested():
                 return
@@ -69,15 +71,18 @@ class GeneratorWorker(QThread):
 
                 if "content" in chunk["choices"][0]["delta"]:
                     text = chunk["choices"][0]["delta"]["content"]
+                    assistant_chunks.append(text)
                     self.token.emit(text)
                     total_generated += 1
                     self.usage.emit(total_generated)
-            
-            self.trace.emit("→ inference complete")
+
+            if not self.isInterruptionRequested():
+                completed = True
+                self.trace.emit("→ inference complete")
         except Exception as e:
             self.trace.emit(f"<span style='color:red'>ERROR: {e}</span>")
         finally:
-            self.done.emit()
+            self.done.emit(completed, "".join(assistant_chunks))
 
 class LLMEngine(QObject):
     sig_token = Signal(str)
@@ -95,6 +100,8 @@ class LLMEngine(QObject):
         self.loader = None
         self.worker = None
         self.model_path: str | None = None
+        self.conversation_history: list[dict] = []
+        self._pending_user_index: int | None = None
         self._load_cancel_requested: bool = False
         self._shutdown_requested: bool = False
         self._status: SystemStatus = SystemStatus.READY
@@ -160,6 +167,10 @@ class LLMEngine(QObject):
         )
         self.state.model_loaded = True
         self.set_status(SystemStatus.READY)
+        config = load_config()
+        system_prompt = config.get("system_prompt", "You are Monolith. Be precise.")
+        context_injection = config.get("context_injection", "")
+        self.reset_conversation(system_prompt, context_injection)
         self.sig_trace.emit("→ system online")
         self.loader = None
 
@@ -192,8 +203,19 @@ class LLMEngine(QObject):
         config = load_config()
         self.state.ctx_limit = int(config.get("ctx_limit", self.state.ctx_limit))
         self.state.model_ctx_length = None
+        system_prompt = config.get("system_prompt", "You are Monolith. Be precise.")
+        context_injection = config.get("context_injection", "")
+        self.reset_conversation(system_prompt, context_injection)
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
         self.sig_trace.emit("→ model unloaded")
+
+    def reset_conversation(self, system_prompt, context_injection):
+        self.conversation_history = [{"role": "system", "content": system_prompt}]
+        if context_injection:
+            self.conversation_history.append(
+                {"role": "system", "content": f"CONTEXT: {context_injection}"}
+            )
+        self._pending_user_index = None
 
     def generate(self, payload: dict):
         if not self.state.model_loaded:
@@ -219,13 +241,41 @@ class LLMEngine(QObject):
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
 
-        messages = [{"role": "system", "content": system_prompt}]
-        if context_injection:
-            messages.append({"role": "system", "content": f"CONTEXT: {context_injection}"})
-        messages.append({"role": "user", "content": prompt})
+        if not self.conversation_history:
+            self.reset_conversation(system_prompt, context_injection)
+        else:
+            system_entry = {"role": "system", "content": system_prompt}
+            if (
+                self.conversation_history[0].get("role") != "system"
+                or self.conversation_history[0].get("content") != system_prompt
+            ):
+                self.conversation_history[0] = system_entry
+
+            context_block = {"role": "system", "content": f"CONTEXT: {context_injection}"}
+            has_context = (
+                len(self.conversation_history) > 1
+                and self.conversation_history[1].get("role") == "system"
+                and self.conversation_history[1].get("content", "").startswith("CONTEXT:")
+            )
+            if context_injection:
+                if has_context:
+                    if self.conversation_history[1].get("content") != context_block["content"]:
+                        self.conversation_history[1] = context_block
+                else:
+                    self.conversation_history.insert(1, context_block)
+            else:
+                if has_context:
+                    del self.conversation_history[1]
+
+        is_update = prompt.startswith("You were interrupted mid-generation.")
+        if not is_update:
+            self.conversation_history.append({"role": "user", "content": prompt})
+            self._pending_user_index = len(self.conversation_history) - 1
+        else:
+            self._pending_user_index = None
 
         self.worker = GeneratorWorker(
-            self.llm, messages, temp,
+            self.llm, self.conversation_history, temp,
             top_p, max_tokens
         )
         self.worker.token.connect(self.sig_token)
@@ -246,7 +296,19 @@ class LLMEngine(QObject):
     def _on_usage_update(self, count):
         self.sig_usage.emit(count)
 
-    def _on_gen_finish(self):
+    def _on_gen_finish(self, completed, assistant_text):
+        if completed:
+            self.conversation_history.append(
+                {"role": "assistant", "content": assistant_text}
+            )
+        else:
+            if (
+                self._pending_user_index is not None
+                and self._pending_user_index == len(self.conversation_history) - 1
+                and self.conversation_history[self._pending_user_index].get("role") == "user"
+            ):
+                del self.conversation_history[self._pending_user_index]
+        self._pending_user_index = None
         self.sig_token.emit("\n")
         self.set_status(SystemStatus.READY)
         self.sig_finished.emit()
