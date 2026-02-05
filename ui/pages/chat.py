@@ -280,8 +280,16 @@ class PageChat(QWidget):
         self.trace = QTextEdit()
         self.trace.setReadOnly(True)
         self.trace.setStyleSheet(f"""
-            background: {BG_INPUT}; color: {FG_TEXT}; border: 1px solid #222; 
-            font-family: 'Consolas', monospace; font-size: 10px;
+            QTextEdit {{
+                background-color: {BG_INPUT};
+                color: {FG_TEXT};
+                border: 1px solid #222;
+                font-family: 'Consolas', monospace;
+                font-size: 10px;
+            }}
+            QTextEdit::viewport {{
+                background-color: {BG_INPUT};
+            }}
             {SCROLLBAR_STYLE}
         """)
         self.lbl_config_update = QLabel("")
