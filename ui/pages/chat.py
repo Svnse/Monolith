@@ -648,10 +648,7 @@ Continue from the interruption point. Do not repeat earlier content.
     def _update_load_button_text(self):
         self.btn_load.setText("UNLOAD MODEL" if self.state.model_loaded else "LOAD MODEL")
 
-    def update_status(self, engine_key, status=None):
-        if status is None:
-            status = engine_key
-            engine_key = "llm"
+    def update_status(self, engine_key: str, status: SystemStatus):
         if engine_key != "llm":
             return
         is_loading = status in (SystemStatus.LOADING, SystemStatus.RUNNING)

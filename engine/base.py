@@ -28,7 +28,7 @@ class EnginePort(Protocol):
     sig_trace: Signal
     sig_token: Signal
 
-    def set_model_path(self, path: str) -> None:
+    def set_model_path(self, payload: dict) -> None:
         ...
 
     def load_model(self) -> None:

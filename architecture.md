@@ -11,7 +11,7 @@
 1. [System Overview](#system-overview)
 2. [Component Hierarchy](#component-hierarchy)
 3. [Signal Flow Architecture](#signal-flow-architecture)
-4. [MonoKernel Contract (v1 — FROZEN)](#monokernel-contract-v1--frozen)
+4. [MonoKernel Contract (v2)](#monokernel-contract-v2)
 5. [Engine Architecture](#engine-architecture)
 6. [Addon System](#addon-system)
 7. [Task Queue System](#task-queue-system)
@@ -213,7 +213,10 @@ PageChat.sig_stop
 
 ---
 
-## MONOKERNEL CONTRACT (v1 — FROZEN)
+## MONOKERNEL CONTRACT (v2)
+
+> Note: The authoritative contract is `monokernel/Kernel_Contract_v2.txt`.
+
 
 ### Purpose (Non-Negotiable)
 MonoGuard is the **sole authority** between UI and engines. Its role is **arbitration, not computation**.
@@ -311,7 +314,7 @@ class EnginePort(Protocol):
     sig_token: Signal   # Text output stream
     
     # Required methods
-    def set_model_path(self, path: str) -> None: ...
+    def set_model_path(self, payload: dict) -> None: ...
     def load_model(self) -> None: ...
     def unload_model(self) -> None: ...
     def generate(self, payload: dict) -> None: ...
@@ -822,7 +825,7 @@ class YourEngine(QObject):
         self.state = state
         self._status = SystemStatus.READY
     
-    def set_model_path(self, path: str) -> None: ...
+    def set_model_path(self, payload: dict) -> None: ...
     def load_model(self) -> None: ...
     def unload_model(self) -> None: ...
     def generate(self, payload: dict) -> None: ...
@@ -966,7 +969,7 @@ btn_your.clicked.connect(lambda: self.sig_launch_addon.emit("your_addon"))
 
 ### Core Contracts
 - `monokernel/kernel_contract.md` — Kernel rules (FROZEN)
-- `monokernel/Kernel_Contract_v2.txt` — Legacy contract (superseded)
+- `monokernel/Kernel_Contract_v2.txt` — Authoritative kernel contract (v2).
 - `engine/base.py` — EnginePort protocol
 
 ### Signal Routing

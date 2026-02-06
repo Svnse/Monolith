@@ -20,6 +20,7 @@ ENGINE_DISPATCH = {
 }
 
 IMMEDIATE_COMMANDS = {"set_history", "set_path"}
+PAYLOAD_COMMANDS = {"generate"}
 
 
 class MonoGuard(QObject):
@@ -86,12 +87,7 @@ class MonoGuard(QObject):
         if task.command in IMMEDIATE_COMMANDS:
             self.sig_trace.emit(f"GUARD: IMMEDIATE {task.command} task={task.id}")
             task.status = TaskStatus.RUNNING
-            if task.command == "set_path":
-                handler(task.payload.get("path"))
-            elif task.command == "set_history":
-                handler(task.payload.get("history", []))
-            else:
-                handler()
+            handler(task.payload)
             task.status = TaskStatus.DONE
             return True
 
@@ -103,7 +99,7 @@ class MonoGuard(QObject):
         self.active_tasks[task.target] = task
         task.status = TaskStatus.RUNNING
 
-        if task.command == "generate":
+        if task.command in PAYLOAD_COMMANDS:
             handler(task.payload)
         else:
             handler()
@@ -169,7 +165,19 @@ class MonoGuard(QObject):
             except Exception as exc:
                 self.sig_trace.emit(f"OVERSEER: viztracer unavailable: {exc}")
                 return
-            self._viztracer = VizTracer()
+            try:
+                self._viztracer = VizTracer(
+                    min_duration=5000,
+                    ignore_frozen=True,
+                    exclude_files=["*/site-packages/*"],
+                )
+            except TypeError:
+                self._viztracer = VizTracer(
+                    min_duration=5000,
+                    ignore_frozen=True,
+                )
+            except Exception:
+                self._viztracer = VizTracer()
             self._viztracer.start()
             self.sig_trace.emit("OVERSEER: viztracer started")
             return

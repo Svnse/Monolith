@@ -129,7 +129,8 @@ class VisionEngine(QObject):
         self._load_cancel_requested = False
         self._shutdown_requested = False
 
-    def set_model_path(self, path: str) -> None:
+    def set_model_path(self, payload: dict) -> None:
+        path = payload.get("path") if isinstance(payload, dict) else None
         self.model_path = path
         QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
 

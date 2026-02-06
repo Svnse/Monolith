@@ -408,10 +408,7 @@ class SDModule(QWidget):
         self._set_status("DONE", FG_TEXT)
         self.btn_save.setEnabled(True)
 
-    def _on_status(self, engine_key: str, status: SystemStatus | None = None) -> None:
-        if status is None:
-            status = engine_key
-            engine_key = "vision"
+    def _on_status(self, engine_key: str, status: SystemStatus) -> None:
         if engine_key != "vision":
             return
         self._engine_status = status
