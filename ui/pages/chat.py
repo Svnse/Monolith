@@ -1,22 +1,21 @@
-import html
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
     QLineEdit, QPushButton, QLabel, QFileDialog,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
     QMessageBox, QButtonGroup
 )
-from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Signal, Qt, QTimer, QDateTime
 
 from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD, FG_ERROR, SCROLLBAR_STYLE
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
 from ui.components.complex import BehaviorTagInput
+from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, MASTER_PROMPT, load_config, save_config
 from core.paths import ARCHIVE_DIR
 
@@ -46,7 +45,7 @@ class PageChat(QWidget):
         self._title_generated = False
         self._active_assistant_index = None
         self._rewrite_assistant_index = None
-        self._assistant_block_map = {}
+        self._active_widget: MessageWidget | None = None
         self._last_status = None
         self._is_running = False
         self._pending_update_text = None
@@ -239,14 +238,16 @@ class PageChat(QWidget):
         chat_layout = QVBoxLayout()
         chat_layout.setSpacing(10)
 
-        self.chat = QTextEdit()
-        self.chat.setReadOnly(True)
-        self.chat.setStyleSheet(f"""
-            background: {BG_INPUT}; color: #ccc; border: 1px solid #222; 
-            font-family: 'Consolas', monospace; font-size: 12px;
+        self.message_list = QListWidget()
+        self.message_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {BG_INPUT}; color: #ccc; border: 1px solid #222;
+                font-family: 'Consolas', monospace; font-size: 12px;
+            }}
+            QListWidget::item {{ border: none; }}
             {SCROLLBAR_STYLE}
         """)
-        chat_layout.addWidget(self.chat)
+        chat_layout.addWidget(self.message_list)
         
         input_row = QHBoxLayout()
         self.input = QLineEdit()
@@ -336,17 +337,17 @@ class PageChat(QWidget):
         right_stack.setChildrenCollapsible(False)
 
         trace_group = SkeetGroupBox("REASONING TRACE")
-        self.trace = QTextEdit()
+        self.trace = QPlainTextEdit()
         self.trace.setReadOnly(True)
         self.trace.setStyleSheet(f"""
-            QTextEdit {{
+            QPlainTextEdit {{
                 background-color: {BG_INPUT};
                 color: {FG_TEXT};
                 border: 1px solid #222;
                 font-family: 'Consolas', monospace;
                 font-size: 10px;
             }}
-            QTextEdit::viewport {{
+            QPlainTextEdit::viewport {{
                 background-color: {BG_INPUT};
             }}
             {SCROLLBAR_STYLE}
@@ -386,17 +387,12 @@ class PageChat(QWidget):
             return
         self._set_send_button_state(is_running=True)
         self.input.clear()
-        safe_txt = html.escape(txt)
-        self.chat.append(
-            f"<span style='color:white'><b>USER:</b></span> "
-            f"<span style='color:{FG_DIM}'>{safe_txt}</span>"
-        )
-        self.chat.append(f"<span style='color:{ACCENT_GOLD}'><b>ASSISTANT:</b></span>")
-        self.chat.moveCursor(QTextCursor.End)
-        self._add_message("user", txt)
+        user_idx = self._add_message("user", txt)
+        self._append_message_widget(user_idx)
         self._active_assistant_index = self._add_message("assistant", "")
-        block = self.chat.document().lastBlock().blockNumber()
-        self._assistant_block_map[self._active_assistant_index] = block
+        self._active_widget = self._append_message_widget(self._active_assistant_index)
+        self._sync_widget_indices()
+        self.message_list.scrollToBottom()
         self.sig_generate.emit(txt, self._thinking_mode)
 
     def handle_send_click(self):
@@ -485,12 +481,10 @@ Continue from the interruption point. Do not repeat earlier content.
 """
 
         self.input.clear()
-        safe_update = html.escape(update_text)
-        self.chat.append(
-            f"<span style='color:white'><b>USER:</b></span> "
-            f"<span style='color:{FG_DIM}'>{safe_update}</span>"
-        )
-        self._add_message("user", update_text)
+        user_idx = self._add_message("user", update_text)
+        self._append_message_widget(user_idx)
+        self._sync_widget_indices()
+        self.message_list.scrollToBottom()
         self._start_update_streaming()
         self.sig_generate.emit(injected, self._thinking_mode)
 
@@ -500,55 +494,22 @@ Continue from the interruption point. Do not repeat earlier content.
             return
         chunk = "".join(self._token_buf)
         self._token_buf.clear()
-        if self._rewrite_assistant_index is not None:
-            block_number = self._assistant_block_map.get(self._rewrite_assistant_index)
-            if block_number is not None:
-                doc = self.chat.document()
-                start_block = doc.findBlockByNumber(block_number)
-                if start_block.isValid():
-                    msg = self._current_session["messages"][self._rewrite_assistant_index]
-                    safe = html.escape(msg.get("text", ""))
-                    scroll = self.chat.verticalScrollBar()
-                    at_bottom = scroll.value() == scroll.maximum()
-                    value = scroll.value()
-                    current_cursor = self.chat.textCursor()
-                    cursor = QTextCursor(start_block)
-                    next_block_number = min(
-                        (number for number in self._assistant_block_map.values() if number > block_number),
-                        default=None,
-                    )
-                    if next_block_number is not None:
-                        end_block = doc.findBlockByNumber(next_block_number)
-                        cursor.setPosition(end_block.position(), QTextCursor.KeepAnchor)
-                    else:
-                        end_cursor = QTextCursor(doc)
-                        end_cursor.movePosition(QTextCursor.End)
-                        cursor.setPosition(end_cursor.position(), QTextCursor.KeepAnchor)
-                    cursor.insertHtml(
-                        f"<span style='color:{ACCENT_GOLD}'><b>ASSISTANT:</b></span> "
-                        f"<span style='color:white'>{safe}</span>"
-                    )
-                    self.chat.setTextCursor(current_cursor)
-                    if at_bottom:
-                        scroll.setValue(scroll.maximum())
-                    else:
-                        scroll.setValue(value)
-                    return
-        scroll = self.chat.verticalScrollBar()
-        threshold = scroll.pageStep() * 0.15
-        at_bottom = scroll.value() >= (scroll.maximum() - threshold)
-        value = scroll.value()
-        self.chat.moveCursor(QTextCursor.End)
-        safe_chunk = html.escape(chunk)
-        cursor = self.chat.textCursor()
-        cursor.insertHtml(
-            f"<span style='white-space: pre-wrap; color:{FG_DIM}'>{safe_chunk}</span>"
-        )
-        if at_bottom:
-            self.chat.moveCursor(QTextCursor.End)
-            scroll.setValue(scroll.maximum())
-        else:
-            scroll.setValue(value)
+        if self._active_widget is None:
+            target_index = self._rewrite_assistant_index
+            if target_index is None:
+                target_index = self._active_assistant_index
+            if target_index is not None:
+                self._active_widget = self._widget_for_index(target_index)
+        if self._active_widget is None:
+            return
+        self._active_widget.append_token(chunk)
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            widget = self.message_list.itemWidget(item)
+            if widget is self._active_widget:
+                item.setSizeHint(widget.sizeHint())
+                break
+        self.message_list.scrollToBottom()
 
     def append_token(self, t):
         self._token_buf.append(t)
@@ -579,7 +540,7 @@ Continue from the interruption point. Do not repeat earlier content.
             state = "COMPLETE"
         else:
             state = "GENERATING"
-        self.trace.append(f"[{state}] {trace_msg}")
+        self.trace.appendPlainText(f"[{state}] {trace_msg}")
 
     def clear_chat(self):
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
@@ -710,6 +671,9 @@ Continue from the interruption point. Do not repeat earlier content.
         elif status == SystemStatus.READY:
             self._set_send_button_state(is_running=False)
             self._rewrite_assistant_index = None
+            if self._active_widget is not None:
+                self._active_widget.finalize()
+            self._active_widget = None
             if self._update_trace_state == "streaming":
                 self._finalize_update_progress()
             self._maybe_generate_title()
@@ -726,7 +690,7 @@ Continue from the interruption point. Do not repeat earlier content.
 
     def _start_new_session(self):
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
-        self.trace.append("--- TRACE RESET ---")
+        self.trace.appendPlainText("--- TRACE RESET ---")
 
     def _prompt_clear_session(self):
         dialog = QMessageBox(self)
@@ -906,7 +870,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self._undo_snapshot = None
         self._active_assistant_index = None
         self._rewrite_assistant_index = None
-        self._assistant_block_map = {}
+        self._active_widget = None
         self._title_generated = bool(session.get("title"))
         self._render_session(session, show_reset=show_reset)
         if sync_history:
@@ -989,28 +953,48 @@ Continue from the interruption point. Do not repeat earlier content.
     def _render_session(self, session=None, show_reset=False):
         if session is None:
             session = self._current_session
-        self.chat.clear()
+        self.message_list.clear()
         self.trace.clear()
-        self._assistant_block_map = {}
+        self._active_widget = None
         if not session["messages"]:
             if show_reset:
-                self.chat.append(f"<span style='color:{FG_DIM}'>--- SESSION RESET ---</span>")
+                self._append_message_widget(-1, "system", "--- SESSION RESET ---", "")
             return
-        for idx, msg in enumerate(session["messages"]):
-            safe = html.escape(msg.get("text", ""))
-            if msg.get("role") == "user":
-                self.chat.append(
-                    f"<span style='color:white'><b>USER:</b></span> "
-                    f"<span style='color:{FG_DIM}'>{safe}</span>"
-                )
-            else:
-                self.chat.append(
-                    f"<span style='color:{ACCENT_GOLD}'><b>ASSISTANT:</b></span> "
-                    f"<span style='color:{FG_DIM}'>{safe}</span>"
-                )
-                block = self.chat.document().lastBlock().blockNumber()
-                self._assistant_block_map[idx] = block
-        self.chat.moveCursor(QTextCursor.End)
+        for idx, _msg in enumerate(session["messages"]):
+            self._append_message_widget(idx)
+        self._sync_widget_indices()
+        self.message_list.scrollToBottom()
+
+    def _append_message_widget(self, idx: int, role=None, text=None, timestamp=None):
+        if idx >= 0:
+            msg = self._current_session["messages"][idx]
+            role = msg.get("role", "")
+            text = msg.get("text", "")
+            timestamp = msg.get("time", "")
+        item = QListWidgetItem()
+        widget = MessageWidget(idx, role or "", text or "", timestamp or "")
+        widget.sig_delete.connect(self._delete_from_index)
+        widget.sig_edit.connect(self._edit_from_index)
+        widget.sig_regen.connect(lambda _idx: self._regen_last_assistant())
+        item.setSizeHint(widget.sizeHint())
+        self.message_list.addItem(item)
+        self.message_list.setItemWidget(item, widget)
+        return widget
+
+    def _widget_for_index(self, idx: int):
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            widget = self.message_list.itemWidget(item)
+            if isinstance(widget, MessageWidget) and getattr(widget, "_index", None) == idx:
+                return widget
+        return None
+
+    def _sync_widget_indices(self):
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            widget = self.message_list.itemWidget(item)
+            if isinstance(widget, MessageWidget):
+                widget.set_index(row)
 
     def _apply_behavior_prompt(self, tags):
         cleaned = [tag.strip() for tag in tags if tag.strip()]
@@ -1021,8 +1005,8 @@ Continue from the interruption point. Do not repeat earlier content.
         self._update_trace_state = "requested"
         self._update_token_count = 0
         self._update_progress_index = 0
-        self.trace.append("⟐ UPDATE REQUESTED")
-        self.trace.append(f'⟐ USER PATCH: "{update_text}"')
+        self.trace.appendPlainText("⟐ UPDATE REQUESTED")
+        self.trace.appendPlainText(f'⟐ USER PATCH: "{update_text}"')
 
     def _start_update_streaming(self):
         self._update_trace_state = "streaming"
@@ -1041,7 +1025,7 @@ Continue from the interruption point. Do not repeat earlier content.
         while self._update_progress_index < len(thresholds):
             if pct >= thresholds[self._update_progress_index]:
                 percent = thresholds[self._update_progress_index]
-                self.trace.append(f"⟐ UPDATE PROGRESS {percent}%")
+                self.trace.appendPlainText(f"⟐ UPDATE PROGRESS {percent}%")
                 self._update_progress_index += 1
                 continue
             break
@@ -1052,7 +1036,7 @@ Continue from the interruption point. Do not repeat earlier content.
         thresholds = [25, 50, 100]
         while self._update_progress_index < len(thresholds):
             percent = thresholds[self._update_progress_index]
-            self.trace.append(f"⟐ UPDATE PROGRESS {percent}%")
+            self.trace.appendPlainText(f"⟐ UPDATE PROGRESS {percent}%")
             self._update_progress_index += 1
         self._update_trace_state = None
 
