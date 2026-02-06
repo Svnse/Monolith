@@ -42,6 +42,7 @@ class PageChat(QWidget):
         self._archive_dir.mkdir(parents=True, exist_ok=True)
         self._session_counter = 0
         self._current_session = self._create_session()
+        self._undo_snapshot = None
         self._title_generated = False
         self._active_assistant_index = None
         self._rewrite_assistant_index = None
@@ -308,6 +309,26 @@ class PageChat(QWidget):
         input_row.addWidget(self.chk_thinking_mode)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
+
+        mutation_row = QHBoxLayout()
+        self.btn_undo_mutation = SkeetButton("UNDO")
+        self.btn_undo_mutation.clicked.connect(self._undo_last_mutation)
+        self.btn_delete_last = SkeetButton("DEL LAST")
+        self.btn_delete_last.clicked.connect(
+            lambda: self._delete_from_index(len(self._current_session["messages"]) - 1)
+        )
+        self.btn_edit_last = SkeetButton("EDIT LAST")
+        self.btn_edit_last.clicked.connect(
+            lambda: self._edit_from_index(len(self._current_session["messages"]) - 1)
+        )
+        self.btn_regen = SkeetButton("REGEN")
+        self.btn_regen.clicked.connect(self._regen_last_assistant)
+        mutation_row.addWidget(self.btn_undo_mutation)
+        mutation_row.addWidget(self.btn_delete_last)
+        mutation_row.addWidget(self.btn_edit_last)
+        mutation_row.addWidget(self.btn_regen)
+        mutation_row.addStretch()
+        chat_layout.addLayout(mutation_row)
         
         chat_group.add_layout(chat_layout)
 
@@ -428,6 +449,10 @@ class PageChat(QWidget):
         if not self._is_running:
             return
         self._set_send_button_state(is_running=True)
+
+    def _send_message(self, text):
+        self.input.setText(text)
+        self.send()
 
     def _submit_update(self, update_text):
         self._set_send_button_state(is_running=True)
@@ -878,6 +903,7 @@ Continue from the interruption point. Do not repeat earlier content.
 
     def _set_current_session(self, session, show_reset=False, sync_history=False):
         self._current_session = session
+        self._undo_snapshot = None
         self._active_assistant_index = None
         self._rewrite_assistant_index = None
         self._assistant_block_map = {}
@@ -912,9 +938,60 @@ Continue from the interruption point. Do not repeat earlier content.
             history.append({"role": role, "content": text})
         return history
 
-    def _render_session(self, session, show_reset=False):
+    def _snapshot_session(self):
+        self._undo_snapshot = list(self._current_session["messages"])
+
+    def _undo_last_mutation(self):
+        if not self._undo_snapshot:
+            return
+        self._current_session["messages"] = self._undo_snapshot
+        self._undo_snapshot = None
+        self._render_session()
+        self.sig_sync_history.emit(
+            self._build_engine_history_from_session()
+        )
+
+    def _delete_from_index(self, idx: int):
+        self._snapshot_session()
+        msgs = self._current_session["messages"]
+        if idx < 0 or idx >= len(msgs):
+            return
+        del msgs[idx:]
+        self._render_session()
+        self.sig_sync_history.emit(
+            self._build_engine_history_from_session()
+        )
+
+    def _edit_from_index(self, idx: int):
+        msgs = self._current_session["messages"]
+        if idx < 0 or idx >= len(msgs):
+            return
+        text = msgs[idx]["text"]
+        self._delete_from_index(idx)
+        self.input.setText(text)
+
+    def _regen_last_assistant(self):
+        msgs = self._current_session["messages"]
+        if not msgs or msgs[-1]["role"] != "assistant":
+            return
+        self._snapshot_session()
+        del msgs[-1]
+        self._render_session()
+        self.sig_sync_history.emit(
+            self._build_engine_history_from_session()
+        )
+
+        for m in reversed(msgs):
+            if m["role"] == "user":
+                self._send_message(m["text"])
+                break
+
+    def _render_session(self, session=None, show_reset=False):
+        if session is None:
+            session = self._current_session
         self.chat.clear()
         self.trace.clear()
+        self._assistant_block_map = {}
         if not session["messages"]:
             if show_reset:
                 self.chat.append(f"<span style='color:{FG_DIM}'>--- SESSION RESET ---</span>")
