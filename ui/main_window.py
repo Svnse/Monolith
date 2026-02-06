@@ -64,11 +64,15 @@ class MonolithUI(QMainWindow):
         self.module_strip.sig_module_selected.connect(self.switch_to_module)
         self.module_strip.sig_module_closed.connect(self.close_module)
 
+        self.btn_hub = SidebarButton("◉", "HUB")
+        self.btn_hub.clicked.connect(lambda: self.set_page("hub"))
+
         self.btn_addons = SidebarButton("＋", "ADDONS")
         self.btn_addons.clicked.connect(lambda: self.set_page("addons"))
 
         sidebar_layout.addWidget(self.module_strip)
         sidebar_layout.addStretch() 
+        sidebar_layout.addWidget(self.btn_hub)
         sidebar_layout.addWidget(self.btn_addons)
 
         content_layout.addWidget(self.sidebar)
@@ -91,12 +95,16 @@ class MonolithUI(QMainWindow):
 
     def attach_host(self, host: AddonHost) -> None:
         self.host = host
+        hub = host.mount_page("hub")
         addons = host.mount_page("addons")
+
+        self.stack.addWidget(hub)
+        self.pages["hub"] = hub
 
         self.stack.addWidget(addons)
         self.pages["addons"] = addons
 
-        self.set_page("empty")
+        self.set_page("hub")
 
     # ---------------- WINDOW BEHAVIOR ----------------
 
@@ -147,6 +155,7 @@ class MonolithUI(QMainWindow):
                 return
 
     def _update_sidebar_state(self, page_idx=None, module_selection=False):
+        self.btn_hub.setChecked(page_idx == "hub" and not module_selection)
         self.btn_addons.setChecked(page_idx == "addons" and not module_selection)
         if not module_selection: self.module_strip.deselect_all()
 

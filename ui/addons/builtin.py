@@ -7,10 +7,13 @@ from ui.modules.audiogen import AudioGenModule
 from ui.modules.manager import PageAddons
 from ui.pages.chat import PageChat
 from ui.pages.databank import PageFiles
+from ui.pages.hub import PageHub
+from core.operators import OperatorManager
 
 
 def terminal_factory(ctx: AddonContext):
     w = PageChat(ctx.state, ctx.ui_bridge)
+    ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
     # outgoing (addon -> bridge)
     w.sig_generate.connect(
         lambda prompt, thinking_mode: ctx.bridge.submit(
@@ -55,6 +58,32 @@ def addons_page_factory(ctx: AddonContext):
     return w
 
 
+
+def hub_factory(ctx: AddonContext):
+    manager = OperatorManager()
+
+    def _current_terminal_config():
+        if not ctx.ui:
+            return {}
+        for i in range(ctx.ui.stack.count()):
+            widget = ctx.ui.stack.widget(i)
+            if isinstance(widget, PageChat):
+                return dict(widget.config)
+        return {}
+
+    w = PageHub(config_provider=_current_terminal_config, operator_manager=manager)
+
+    def _load_operator(name: str):
+        try:
+            operator_data = manager.load_operator(name)
+        except Exception:
+            return
+        ctx.ui_bridge.sig_apply_operator.emit(operator_data)
+
+    w.sig_load_operator.connect(_load_operator)
+    w.sig_save_operator.connect(lambda name, data: manager.save_operator(name, data))
+    return w
+
 def databank_factory(ctx: AddonContext):
     return PageFiles(ctx.state)
 
@@ -91,6 +120,15 @@ def build_builtin_registry() -> AddonRegistry:
             title="DATABANK",
             icon="▤",
             factory=databank_factory,
+        )
+    )
+    registry.register(
+        AddonSpec(
+            id="hub",
+            kind="page",
+            title="HUB",
+            icon=None,
+            factory=hub_factory,
         )
     )
     registry.register(

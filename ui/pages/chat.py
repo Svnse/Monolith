@@ -25,6 +25,7 @@ class PageChat(QWidget):
     sig_unload = Signal()
     sig_stop = Signal()
     sig_sync_history = Signal(list)
+    sig_operator_loaded = Signal(str)
 
     def __init__(self, state, ui_bridge):
         super().__init__()
@@ -692,6 +693,58 @@ Continue from the interruption point. Do not repeat earlier content.
     def _switch_ops_tab(self, index, checked):
         if checked:
             self.ops_stack.setCurrentIndex(index)
+
+
+    def apply_operator(self, operator_data: dict):
+        if not isinstance(operator_data, dict):
+            return
+        config = operator_data.get("config")
+        if not isinstance(config, dict):
+            return
+
+        slider_values = {
+            "temp": float(config.get("temp", self.config.get("temp", 0.7))),
+            "top_p": float(config.get("top_p", self.config.get("top_p", 0.9))),
+            "max_tokens": int(config.get("max_tokens", self.config.get("max_tokens", 2048))),
+            "ctx_limit": int(config.get("ctx_limit", self.config.get("ctx_limit", 8192))),
+        }
+
+        self.config.update(config)
+
+        self.s_temp.slider.blockSignals(True)
+        self.s_top.slider.blockSignals(True)
+        self.s_tok.slider.blockSignals(True)
+        self.s_ctx.slider.blockSignals(True)
+        self.s_temp.slider.setValue(int(slider_values["temp"] * 100))
+        self.s_temp.val_lbl.setText(f"{slider_values['temp']:.2f}")
+        self.s_top.slider.setValue(int(slider_values["top_p"] * 100))
+        self.s_top.val_lbl.setText(f"{slider_values['top_p']:.2f}")
+        self.s_tok.slider.setValue(int(slider_values["max_tokens"]))
+        self.s_tok.val_lbl.setText(str(int(slider_values["max_tokens"])))
+        self.s_ctx.slider.setValue(int(slider_values["ctx_limit"]))
+        self.s_ctx.val_lbl.setText(str(int(slider_values["ctx_limit"])))
+        self.s_temp.slider.blockSignals(False)
+        self.s_top.slider.blockSignals(False)
+        self.s_tok.slider.blockSignals(False)
+        self.s_ctx.slider.blockSignals(False)
+
+        self.state.ctx_limit = int(slider_values["ctx_limit"])
+
+        tags = config.get("behavior_tags", [])
+        self.behavior_tags.set_tags(tags if isinstance(tags, list) else [])
+
+        thinking_mode = bool(config.get("thinking_mode", False))
+        self._thinking_mode = thinking_mode
+        self.chk_thinking_mode.blockSignals(True)
+        self.chk_thinking_mode.setChecked(thinking_mode)
+        self.chk_thinking_mode.blockSignals(False)
+
+        self.state.gguf_path = config.get("gguf_path")
+        self._sync_path_display()
+
+        self._start_new_session()
+        self._set_config_dirty(True)
+        self.sig_operator_loaded.emit(str(operator_data.get("name", "")))
 
     def _start_new_session(self):
         self._title_generated = False
