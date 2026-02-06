@@ -404,7 +404,6 @@ class PageChat(QWidget):
 
         if not txt:
             self._set_send_button_state(is_running=True, stopping=True)
-            self._maybe_generate_title()
             self.sig_stop.emit()
             return
 
@@ -676,6 +675,10 @@ Continue from the interruption point. Do not repeat earlier content.
             self._active_widget = None
             if self._update_trace_state == "streaming":
                 self._finalize_update_progress()
+            # Title generation is finalized ONLY on READY.
+            # READY is emitted after _on_gen_finish completes and assistant text is final.
+            # STOP also transitions to READY; _maybe_generate_title self-guards.
+            # Do NOT call this method from token flush, send paths, or mutation handlers.
             self._maybe_generate_title()
         elif status == SystemStatus.LOADING:
             self._set_send_button_state(is_running=False)
@@ -1069,8 +1072,8 @@ Continue from the interruption point. Do not repeat earlier content.
     def _maybe_generate_title(self):
         if self._title_generated:
             return
-        assistant_msgs = [m for m in self._current_session["messages"] if m.get("role") == "assistant" and m.get("text", "").strip()]
-        if len(assistant_msgs) < 2 and not self._topic_dominant():
+        user_msgs = [m for m in self._current_session["messages"] if m.get("role") == "user" and m.get("text", "").strip()]
+        if len(user_msgs) < 2 and not self._topic_dominant():
             return
         title = self._derive_title(self._current_session["messages"])
         self._current_session["title"] = title
@@ -1093,12 +1096,45 @@ Continue from the interruption point. Do not repeat earlier content.
         self.ui_bridge.sig_terminal_header.emit(title, dt)
 
     def _derive_title(self, messages):
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from",
+            "how", "i", "if", "in", "into", "is", "it", "me", "my", "of", "on", "or",
+            "our", "please", "so", "that", "the", "their", "them", "then", "there", "these",
+            "this", "to", "us", "we", "what", "when", "where", "which", "who", "why", "with",
+            "you", "your",
+        }
+        user_texts = []
         for msg in messages:
-            if msg.get("role") == "user":
-                text = msg.get("text", "").strip()
-                if text:
-                    return text[:60]
-        return "Untitled Chat"
+            if msg.get("role") != "user":
+                continue
+            text = " ".join((msg.get("text") or "").lower().split())
+            if text:
+                user_texts.append(text)
+            if len(user_texts) == 3:
+                break
+
+        if not user_texts:
+            return "chat"
+
+        candidates = []
+        counts = {}
+        for text in user_texts:
+            for token in re.findall(r"[a-z0-9]+", text):
+                if token in stopwords or len(token) < 3:
+                    continue
+                if token not in counts:
+                    candidates.append(token)
+                    counts[token] = 0
+                counts[token] += 1
+
+        ranked = sorted(candidates, key=lambda token: (-counts[token], candidates.index(token)))
+        title_tokens = ranked[:6]
+        title = " ".join(title_tokens)
+        title = re.sub(r"\s+", " ", title).strip()
+        title = re.sub(r"[^a-z0-9\- ]+", "", title)
+        if len(title) > 40:
+            title = title[:40].rstrip()
+        return title or "chat"
 
     def _build_summary(self, messages):
         summary = []
