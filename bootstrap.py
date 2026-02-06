@@ -14,6 +14,7 @@ from ui.addons.context import AddonContext
 from ui.addons.host import AddonHost
 from ui.bridge import UIBridge
 from ui.main_window import MonolithUI
+from ui.overseer import OverseerWindow
 
 
 def main():
@@ -29,16 +30,22 @@ def main():
 
     ui_bridge = UIBridge()
     ui = MonolithUI(state, ui_bridge)
+    overseer = OverseerWindow(guard, ui_bridge)
 
     registry = build_builtin_registry()
     ctx = AddonContext(state=state, guard=guard, bridge=bridge, ui=ui, host=None, ui_bridge=ui_bridge)
     host = AddonHost(registry, ctx)
     ui.attach_host(host)
 
+    ui_bridge.sig_open_overseer.connect(overseer.show)
+    ui_bridge.sig_overseer_viz_toggle.connect(guard.enable_viztracer)
+
     # global chrome-only wiring stays here
     guard.sig_status.connect(ui.update_status)
     guard.sig_usage.connect(ui.update_ctx)
     app.aboutToQuit.connect(guard.stop)
+    app.aboutToQuit.connect(overseer.db.close)
+    app.aboutToQuit.connect(lambda: guard.enable_viztracer(False) if guard._viztracer is not None else None)
     app.aboutToQuit.connect(engine.shutdown)
     app.aboutToQuit.connect(vision_engine.shutdown)
 

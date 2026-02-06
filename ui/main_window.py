@@ -202,7 +202,12 @@ class MonolithUI(QMainWindow):
         btn_vitals.setFixedSize(75, 26)
         btn_vitals.clicked.connect(self.toggle_vitals)
 
+        btn_overseer = SkeetButton("OVERSEER")
+        btn_overseer.setFixedSize(95, 26)
+        btn_overseer.clicked.connect(self.ui_bridge.sig_open_overseer.emit)
+
         layout.addWidget(btn_vitals)
+        layout.addWidget(btn_overseer)
         layout.addWidget(self.lbl_status)
         layout.addStretch()
 

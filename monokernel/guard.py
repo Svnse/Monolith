@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
+
+from core.paths import LOG_DIR
 
 from PySide6.QtCore import QObject, Signal, QTimer
 
@@ -35,6 +38,7 @@ class MonoGuard(QObject):
         self.active_tasks: dict[str, Optional[Task]] = {
             key: None for key in engines.keys()
         }
+        self._viztracer = None
 
         for key, engine in engines.items():
             engine.sig_status.connect(
@@ -79,6 +83,7 @@ class MonoGuard(QObject):
             return False
 
         if task.command in IMMEDIATE_COMMANDS:
+            self.sig_trace.emit(f"GUARD: IMMEDIATE {task.command} task={task.id}")
             task.status = TaskStatus.RUNNING
             if task.command == "set_path":
                 handler(task.payload.get("path"))
@@ -90,8 +95,10 @@ class MonoGuard(QObject):
             return True
 
         if self.active_tasks.get(task.target) is not None:
+            self.sig_trace.emit(f"GUARD: rejected task={task.id} target={task.target} (busy)")
             return False
 
+        self.sig_trace.emit(f"GUARD: accepted task={task.id} target={task.target} command={task.command}")
         self.active_tasks[task.target] = task
         task.status = TaskStatus.RUNNING
 
@@ -102,6 +109,7 @@ class MonoGuard(QObject):
         return True
 
     def stop(self, target: str = "all") -> None:
+        self.sig_trace.emit(f"GUARD: STOP target={target}")
         if target == "all":
             keys = list(self.engines.keys())
         else:
@@ -121,6 +129,7 @@ class MonoGuard(QObject):
         task = self.active_tasks.get(engine_key)
         if task:
             self.sig_finished.emit(engine_key, str(task.id))
+            self.sig_trace.emit(f"GUARD: finished engine={engine_key} task={task.id}")
 
     def _on_status_changed(self, engine_key: str, new_status: SystemStatus) -> None:
         self.sig_status.emit(engine_key, new_status)
@@ -144,3 +153,28 @@ class MonoGuard(QObject):
             self.active_tasks[engine_key] = None
             if had_task:
                 QTimer.singleShot(0, lambda: self.sig_engine_ready.emit(engine_key))
+
+
+    def enable_viztracer(self, enabled: bool) -> None:
+        if enabled:
+            if self._viztracer is not None:
+                return
+            try:
+                from viztracer import VizTracer
+            except Exception as exc:
+                self.sig_trace.emit(f"OVERSEER: viztracer unavailable: {exc}")
+                return
+            self._viztracer = VizTracer()
+            self._viztracer.start()
+            self.sig_trace.emit("OVERSEER: viztracer started")
+            return
+
+        tracer = self._viztracer
+        if tracer is None:
+            return
+        tracer.stop()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = LOG_DIR / f"viztrace_{ts}.json"
+        tracer.save(str(out_path))
+        self.sig_trace.emit(f"OVERSEER: viztracer saved {out_path}")
+        self._viztracer = None
