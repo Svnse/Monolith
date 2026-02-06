@@ -168,9 +168,7 @@ class LLMEngine(QObject):
         )
         self.state.model_loaded = True
         self.set_status(SystemStatus.READY)
-        config = load_config()
-        system_prompt = config.get("system_prompt", MASTER_PROMPT)
-        self.reset_conversation(system_prompt)
+        self.reset_conversation(MASTER_PROMPT)
         self.sig_trace.emit("→ system online")
         self.loader = None
 
@@ -203,8 +201,7 @@ class LLMEngine(QObject):
         config = load_config()
         self.state.ctx_limit = int(config.get("ctx_limit", self.state.ctx_limit))
         self.state.model_ctx_length = None
-        system_prompt = config.get("system_prompt", MASTER_PROMPT)
-        self.reset_conversation(system_prompt)
+        self.reset_conversation(MASTER_PROMPT)
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
         self.sig_trace.emit("→ model unloaded")
 
@@ -217,6 +214,13 @@ class LLMEngine(QObject):
             return
         self.conversation_history = [h for h in history if isinstance(h, dict)]
         self._pending_user_index = None
+
+    def _compile_system_prompt(self, config):
+        tags = config.get("behavior_tags", [])
+        cleaned = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
+        if not cleaned:
+            return MASTER_PROMPT
+        return f"{MASTER_PROMPT}\n\n[BEHAVIOR TAGS]\n" + "\n".join(cleaned)
 
     def generate(self, payload: dict):
         if not self.state.model_loaded:
@@ -236,37 +240,42 @@ class LLMEngine(QObject):
         if config is None:
             config = load_config()
 
-        system_prompt = config.get("system_prompt", MASTER_PROMPT)
+        system_prompt = self._compile_system_prompt(config)
         temp = float(config.get("temp", 0.7))
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
 
         self._ephemeral_generation = bool(payload.get("ephemeral", False))
+        thinking_mode = bool(payload.get("thinking_mode", False))
 
         if not self.conversation_history:
-            self.reset_conversation(system_prompt)
+            self.reset_conversation(MASTER_PROMPT)
+
+        system_entry = {"role": "system", "content": system_prompt}
+        if self.conversation_history[0].get("role") != "system":
+            self.conversation_history.insert(0, system_entry)
         else:
-            system_entry = {"role": "system", "content": system_prompt}
-            if (
-                self.conversation_history[0].get("role") != "system"
-                or self.conversation_history[0].get("content") != system_prompt
-            ):
-                self.conversation_history[0] = system_entry
+            self.conversation_history[0] = system_entry
 
         is_update = prompt.startswith("You were interrupted mid-generation.")
-        if not is_update:
+        if not self._ephemeral_generation and not is_update:
             self.conversation_history.append({"role": "user", "content": prompt})
             self._pending_user_index = len(self.conversation_history) - 1
+            messages = self.conversation_history
         else:
-            self._pending_user_index = None
-
-        if self._ephemeral_generation:
             messages = list(self.conversation_history)
             if not is_update:
-                messages = messages[:-1]
-            messages = messages + ([{"role": "user", "content": prompt}] if not is_update else [])
-        else:
-            messages = self.conversation_history
+                messages.append({"role": "user", "content": prompt})
+            self._pending_user_index = None
+
+        if thinking_mode and not self._ephemeral_generation:
+            messages = list(messages)
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "Use private reasoning to think step-by-step, then provide a concise final answer.",
+                }
+            )
 
         self.worker = GeneratorWorker(
             self.llm, messages, temp,
@@ -296,13 +305,6 @@ class LLMEngine(QObject):
             self.conversation_history.append(
                 {"role": "assistant", "content": assistant_text}
             )
-        else:
-            if (
-                self._pending_user_index is not None
-                and self._pending_user_index == len(self.conversation_history) - 1
-                and self.conversation_history[self._pending_user_index].get("role") == "user"
-            ):
-                del self.conversation_history[self._pending_user_index]
         self._pending_user_index = None
         self._ephemeral_generation = False
         self.sig_token.emit("\n")

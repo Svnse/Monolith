@@ -13,12 +13,12 @@ def terminal_factory(ctx: AddonContext):
     w = PageChat(ctx.state, ctx.ui_bridge)
     # outgoing (addon -> bridge)
     w.sig_generate.connect(
-        lambda prompt: ctx.bridge.submit(
+        lambda prompt, thinking_mode: ctx.bridge.submit(
             ctx.bridge.wrap(
                 "terminal",
                 "generate",
                 "llm",
-                payload={"prompt": prompt, "config": w.config},
+                payload={"prompt": prompt, "config": w.config, "thinking_mode": thinking_mode},
             )
         )
     )

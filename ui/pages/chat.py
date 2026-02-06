@@ -18,10 +18,10 @@ from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD, FG_ERROR, SCROLLBAR_STYLE
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
 from ui.components.complex import BehaviorTagInput
-from core.llm_config import DEFAULT_CONFIG, load_config, save_config, MASTER_PROMPT
+from core.llm_config import DEFAULT_CONFIG, load_config, save_config
 
 class PageChat(QWidget):
-    sig_generate = Signal(str)
+    sig_generate = Signal(str, bool)
     sig_load = Signal()
     sig_unload = Signal()
     sig_stop = Signal()
@@ -53,6 +53,7 @@ class PageChat(QWidget):
         self._update_token_count = 0
         self._update_progress_index = 0
         self._config_dirty = False
+        self._thinking_mode = bool(self.config.get("thinking_mode", False))
 
         capabilities_signal = getattr(self.state, "sig_model_capabilities", None)
         if capabilities_signal is not None:
@@ -276,8 +277,34 @@ class PageChat(QWidget):
         """
         self._set_send_button_state(is_running=False)
         self.btn_send.clicked.connect(self.handle_send_click)
+
+        self.chk_thinking_mode = QPushButton("THINK")
+        self.chk_thinking_mode.setCheckable(True)
+        self.chk_thinking_mode.setChecked(self._thinking_mode)
+        self.chk_thinking_mode.setCursor(Qt.PointingHandCursor)
+        self.chk_thinking_mode.setStyleSheet(f"""
+            QPushButton {{
+                background: {BG_INPUT};
+                border: 1px solid #333;
+                color: {FG_DIM};
+                padding: 8px;
+                font-size: 10px;
+                font-weight: bold;
+                border-radius: 2px;
+            }}
+            QPushButton:checked {{
+                border: 1px solid {ACCENT_GOLD};
+                color: {ACCENT_GOLD};
+            }}
+            QPushButton:hover {{
+                border: 1px solid {FG_TEXT};
+                color: {FG_TEXT};
+            }}
+        """)
+        self.chk_thinking_mode.toggled.connect(self._on_thinking_mode_toggled)
         
         input_row.addWidget(self.input)
+        input_row.addWidget(self.chk_thinking_mode)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
         
@@ -348,7 +375,7 @@ class PageChat(QWidget):
         self._active_assistant_index = self._add_message("assistant", "")
         block = self.chat.document().lastBlock().blockNumber()
         self._assistant_block_map[self._active_assistant_index] = block
-        self.sig_generate.emit(txt)
+        self.sig_generate.emit(txt, self._thinking_mode)
 
     def handle_send_click(self):
         txt = self.input.text().strip()
@@ -439,7 +466,7 @@ Continue from the interruption point. Do not repeat earlier content.
         )
         self._add_message("user", update_text)
         self._start_update_streaming()
-        self.sig_generate.emit(injected)
+        self.sig_generate.emit(injected, self._thinking_mode)
 
     def _flush_tokens(self):
         if not self._token_buf:
@@ -507,6 +534,12 @@ Continue from the interruption point. Do not repeat earlier content.
     def on_guard_finished(self, engine_key, task_id):
         if engine_key != "llm":
             return
+        if not self._current_session.get("messages"):
+            return
+        try:
+            self._save_chat_archive()
+        except Exception:
+            pass
 
     def append_trace(self, trace_msg):
         lowered = trace_msg.lower()
@@ -603,6 +636,11 @@ Continue from the interruption point. Do not repeat earlier content.
 
     def _on_behavior_tags_changed(self, tags):
         self._apply_behavior_prompt(tags)
+
+    def _on_thinking_mode_toggled(self, checked):
+        self._thinking_mode = bool(checked)
+        self.config["thinking_mode"] = self._thinking_mode
+        self._set_config_dirty(True)
 
     def pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select GGUF", "", "GGUF (*.gguf)")
@@ -869,17 +907,9 @@ Continue from the interruption point. Do not repeat earlier content.
                 self._assistant_block_map[idx] = block
         self.chat.moveCursor(QTextCursor.End)
 
-    def _compile_behavior_prompt(self, tags):
-        return "\n".join([tag.strip() for tag in tags if tag.strip()]).strip()
-
     def _apply_behavior_prompt(self, tags):
         cleaned = [tag.strip() for tag in tags if tag.strip()]
         self.config["behavior_tags"] = cleaned
-        behavior_prompt = self._compile_behavior_prompt(cleaned)
-        if behavior_prompt:
-            self.config["system_prompt"] = f"{MASTER_PROMPT}\n\n[BEHAVIOR TAGS]\n{behavior_prompt}"
-        else:
-            self.config["system_prompt"] = MASTER_PROMPT
         self._set_config_dirty(True)
 
     def _begin_update_trace(self, update_text):
