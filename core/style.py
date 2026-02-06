@@ -18,6 +18,17 @@ FG_WARN = "#e0b020"       # Warning Yellow
 
 ACCENT_GOLD = "#D4AF37"   # Monolith Identity Gold
 
+# Glassmorphic surfaces
+GLASS_BG = "rgba(12, 12, 12, 220)"
+GLASS_BORDER = "rgba(212, 175, 55, 40)"
+GLASS_HOVER = "rgba(212, 175, 55, 15)"
+
+# Overseer palette
+OVERSEER_BG = "#080808"
+OVERSEER_FG = "#33ff33"
+OVERSEER_DIM = "#1a7a1a"
+OVERSEER_BORDER = "#1a1a1a"
+
 SCROLLBAR_STYLE = f"""
 QScrollBar:vertical {{
     background: {BG_INPUT};
