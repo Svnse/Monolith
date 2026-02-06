@@ -33,6 +33,7 @@ def terminal_factory(ctx: AddonContext):
     # incoming (guard -> addon)
     ctx.guard.sig_token.connect(w.append_token)
     ctx.guard.sig_trace.connect(w.append_trace)
+    ctx.guard.sig_finished.connect(w.on_guard_finished)
     return w
 
 

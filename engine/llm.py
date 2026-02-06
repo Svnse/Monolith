@@ -105,6 +105,7 @@ class LLMEngine(QObject):
         self._load_cancel_requested: bool = False
         self._shutdown_requested: bool = False
         self._status: SystemStatus = SystemStatus.READY
+        self._ephemeral_generation: bool = False
         self.state.model_ctx_length = None
         self.state.sig_model_capabilities = self.sig_model_capabilities
 
@@ -169,8 +170,7 @@ class LLMEngine(QObject):
         self.set_status(SystemStatus.READY)
         config = load_config()
         system_prompt = config.get("system_prompt", MASTER_PROMPT)
-        context_injection = config.get("context_injection", "")
-        self.reset_conversation(system_prompt, context_injection)
+        self.reset_conversation(system_prompt)
         self.sig_trace.emit("→ system online")
         self.loader = None
 
@@ -204,17 +204,18 @@ class LLMEngine(QObject):
         self.state.ctx_limit = int(config.get("ctx_limit", self.state.ctx_limit))
         self.state.model_ctx_length = None
         system_prompt = config.get("system_prompt", MASTER_PROMPT)
-        context_injection = config.get("context_injection", "")
-        self.reset_conversation(system_prompt, context_injection)
+        self.reset_conversation(system_prompt)
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
         self.sig_trace.emit("→ model unloaded")
 
-    def reset_conversation(self, system_prompt, context_injection):
+    def reset_conversation(self, system_prompt):
         self.conversation_history = [{"role": "system", "content": system_prompt}]
-        if context_injection:
-            self.conversation_history.append(
-                {"role": "system", "content": f"CONTEXT: {context_injection}"}
-            )
+        self._pending_user_index = None
+
+    def set_history(self, history):
+        if not isinstance(history, list):
+            return
+        self.conversation_history = [h for h in history if isinstance(h, dict)]
         self._pending_user_index = None
 
     def generate(self, payload: dict):
@@ -236,13 +237,14 @@ class LLMEngine(QObject):
             config = load_config()
 
         system_prompt = config.get("system_prompt", MASTER_PROMPT)
-        context_injection = config.get("context_injection", "")
         temp = float(config.get("temp", 0.7))
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
 
+        self._ephemeral_generation = bool(payload.get("ephemeral", False))
+
         if not self.conversation_history:
-            self.reset_conversation(system_prompt, context_injection)
+            self.reset_conversation(system_prompt)
         else:
             system_entry = {"role": "system", "content": system_prompt}
             if (
@@ -251,22 +253,6 @@ class LLMEngine(QObject):
             ):
                 self.conversation_history[0] = system_entry
 
-            context_block = {"role": "system", "content": f"CONTEXT: {context_injection}"}
-            has_context = (
-                len(self.conversation_history) > 1
-                and self.conversation_history[1].get("role") == "system"
-                and self.conversation_history[1].get("content", "").startswith("CONTEXT:")
-            )
-            if context_injection:
-                if has_context:
-                    if self.conversation_history[1].get("content") != context_block["content"]:
-                        self.conversation_history[1] = context_block
-                else:
-                    self.conversation_history.insert(1, context_block)
-            else:
-                if has_context:
-                    del self.conversation_history[1]
-
         is_update = prompt.startswith("You were interrupted mid-generation.")
         if not is_update:
             self.conversation_history.append({"role": "user", "content": prompt})
@@ -274,8 +260,16 @@ class LLMEngine(QObject):
         else:
             self._pending_user_index = None
 
+        if self._ephemeral_generation:
+            messages = list(self.conversation_history)
+            if not is_update:
+                messages = messages[:-1]
+            messages = messages + ([{"role": "user", "content": prompt}] if not is_update else [])
+        else:
+            messages = self.conversation_history
+
         self.worker = GeneratorWorker(
-            self.llm, self.conversation_history, temp,
+            self.llm, messages, temp,
             top_p, max_tokens
         )
         self.worker.token.connect(self.sig_token)
@@ -290,6 +284,7 @@ class LLMEngine(QObject):
             self.sig_trace.emit("→ load cancel requested; will stop after initialization completes")
             return
 
+        self._ephemeral_generation = False
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
 
@@ -297,7 +292,7 @@ class LLMEngine(QObject):
         self.sig_usage.emit(count)
 
     def _on_gen_finish(self, completed, assistant_text):
-        if completed:
+        if completed and not self._ephemeral_generation:
             self.conversation_history.append(
                 {"role": "assistant", "content": assistant_text}
             )
@@ -309,6 +304,7 @@ class LLMEngine(QObject):
             ):
                 del self.conversation_history[self._pending_user_index]
         self._pending_user_index = None
+        self._ephemeral_generation = False
         self.sig_token.emit("\n")
         self.set_status(SystemStatus.READY)
         self.sig_finished.emit()
