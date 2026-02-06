@@ -52,6 +52,7 @@ class PageChat(QWidget):
         self._update_trace_state = None
         self._update_token_count = 0
         self._update_progress_index = 0
+        self._config_dirty = False
 
         capabilities_signal = getattr(self.state, "sig_model_capabilities", None)
         if capabilities_signal is not None:
@@ -134,6 +135,15 @@ class PageChat(QWidget):
         grp_ai.add_widget(self.s_ctx)
         grp_ai.add_widget(lbl_sys)
         grp_ai.add_widget(self.behavior_tags)
+        save_row = QHBoxLayout()
+        self.lbl_config_state = QLabel("SAVED")
+        self.lbl_config_state.setStyleSheet(f"color: {FG_DIM}; font-size: 10px; font-weight: bold;")
+        self.btn_save_config = SkeetButton("SAVE SETTINGS")
+        self.btn_save_config.clicked.connect(self._save_config)
+        save_row.addWidget(self.lbl_config_state)
+        save_row.addStretch()
+        save_row.addWidget(self.btn_save_config)
+        grp_ai.add_layout(save_row)
         ai_col.addWidget(grp_ai)
         ai_col.addStretch()
 
@@ -317,6 +327,7 @@ class PageChat(QWidget):
         self._refresh_archive_list()
         self._apply_behavior_prompt(self.config.get("behavior_tags", []))
         self.behavior_tags.set_tags(self.config.get("behavior_tags", []))
+        self._set_config_dirty(False)
         if not self.state.model_loaded:
             self._apply_default_limits()
 
@@ -493,6 +504,10 @@ Continue from the interruption point. Do not repeat earlier content.
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
+    def on_guard_finished(self, engine_key, task_id):
+        if engine_key != "llm":
+            return
+
     def append_trace(self, trace_msg):
         lowered = trace_msg.lower()
         if "token" in lowered:
@@ -518,6 +533,13 @@ Continue from the interruption point. Do not repeat earlier content.
             self.path_display.clear()
             self.path_display.setToolTip("")
 
+    def _set_config_dirty(self, dirty=True):
+        self._config_dirty = dirty
+        self.lbl_config_state.setText("DIRTY" if dirty else "SAVED")
+        self.lbl_config_state.setStyleSheet(
+            f"color: {ACCENT_GOLD if dirty else FG_DIM}; font-size: 10px; font-weight: bold;"
+        )
+
     def _save_config(self):
         save_config(self.config)
         self._last_config_update = QDateTime.currentDateTime()
@@ -525,10 +547,11 @@ Continue from the interruption point. Do not repeat earlier content.
         self.lbl_config_update.setText(f"USER (UPDATED): {stamp}")
         self.lbl_config_update.show()
         self._config_update_fade.start(2500)
+        self._set_config_dirty(False)
 
     def _update_config_value(self, key, value):
         self.config[key] = value
-        self._save_config()
+        self._set_config_dirty(True)
 
     def _set_slider_limits(self, slider, max_value, value):
         qt_slider = slider.slider
@@ -581,16 +604,13 @@ Continue from the interruption point. Do not repeat earlier content.
     def _on_behavior_tags_changed(self, tags):
         self._apply_behavior_prompt(tags)
 
-    def _on_context_injection_changed(self, text):
-        self._update_config_value("context_injection", text)
-
     def pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select GGUF", "", "GGUF (*.gguf)")
         if path:
             self.state.gguf_path = path
             self.config["gguf_path"] = path
             self._sync_path_display()
-            self._save_config()
+            self._set_config_dirty(True)
 
     def toggle_load(self):
         if self.state.model_loaded:
@@ -634,12 +654,6 @@ Continue from the interruption point. Do not repeat earlier content.
             self.btn_send.setEnabled(False)
         if status == SystemStatus.READY and not self.state.model_loaded:
             self._apply_default_limits()
-        if self._last_status == SystemStatus.RUNNING and status == SystemStatus.READY:
-            if len(self._current_session["messages"]) > 0:
-                try:
-                    self._save_chat_archive()
-                except Exception:
-                    pass
         self._last_status = status
 
     def _switch_ops_tab(self, index, checked):
@@ -866,7 +880,7 @@ Continue from the interruption point. Do not repeat earlier content.
             self.config["system_prompt"] = f"{MASTER_PROMPT}\n\n[BEHAVIOR TAGS]\n{behavior_prompt}"
         else:
             self.config["system_prompt"] = MASTER_PROMPT
-        self._save_config()
+        self._set_config_dirty(True)
 
     def _begin_update_trace(self, update_text):
         self._update_trace_state = "requested"

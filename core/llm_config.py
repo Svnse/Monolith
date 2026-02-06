@@ -44,7 +44,6 @@ DEFAULT_CONFIG = {
     "max_tokens": 2048,
     "ctx_limit": 8192,
     "system_prompt": MASTER_PROMPT,
-    "context_injection": "",
     "behavior_tags": [],
 }
 
@@ -59,13 +58,13 @@ def load_config():
             with CONFIG_PATH.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
                 if isinstance(data, dict):
-                    if "system_prompt" in data:
+                    if "system_prompt" in data or "context_injection" in data:
                         data.pop("system_prompt", None)
+                        data.pop("context_injection", None)
                         resave_config = True
                     config.update(data)
         except Exception:
             pass
-    config.setdefault("context_injection", "")
     config.setdefault("behavior_tags", [])
     if not isinstance(config.get("behavior_tags"), list):
         config["behavior_tags"] = []
@@ -76,6 +75,9 @@ def load_config():
 
 
 def save_config(config):
+    persisted = dict(config)
+    persisted.pop("system_prompt", None)
+    persisted.pop("context_injection", None)
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CONFIG_PATH.open("w", encoding="utf-8") as handle:
-        json.dump(config, handle, indent=2)
+        json.dump(persisted, handle, indent=2)

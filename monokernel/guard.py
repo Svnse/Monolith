@@ -10,10 +10,13 @@ from engine.base import EnginePort
 
 ENGINE_DISPATCH = {
     "set_path": "set_model_path",
+    "set_history": "set_history",
     "load": "load_model",
     "unload": "unload_model",
     "generate": "generate",
 }
+
+IMMEDIATE_COMMANDS = {"set_history", "set_path"}
 
 
 class MonoGuard(QObject):
@@ -63,28 +66,36 @@ class MonoGuard(QObject):
             self.sig_trace.emit(f"ERROR: Unknown engine target: {task.target}")
             return False
 
-        if self.active_tasks.get(task.target) is not None:
-            return False
-
-        self.active_tasks[task.target] = task
-        task.status = TaskStatus.RUNNING
         method_name = ENGINE_DISPATCH.get(task.command)
         if not method_name:
             self.sig_trace.emit(f"ERROR: Unknown command: {task.command}")
-            self.active_tasks[task.target] = None
             task.status = TaskStatus.FAILED
             return False
 
         handler = getattr(engine, method_name, None)
         if not handler:
             self.sig_trace.emit(f"ERROR: Engine lacks handler: {method_name}")
-            self.active_tasks[task.target] = None
             task.status = TaskStatus.FAILED
             return False
 
-        if task.command == "set_path":
-            handler(task.payload.get("path"))
-        elif task.command == "generate":
+        if task.command in IMMEDIATE_COMMANDS:
+            task.status = TaskStatus.RUNNING
+            if task.command == "set_path":
+                handler(task.payload.get("path"))
+            elif task.command == "set_history":
+                handler(task.payload.get("history", []))
+            else:
+                handler()
+            task.status = TaskStatus.DONE
+            return True
+
+        if self.active_tasks.get(task.target) is not None:
+            return False
+
+        self.active_tasks[task.target] = task
+        task.status = TaskStatus.RUNNING
+
+        if task.command == "generate":
             handler(task.payload)
         else:
             handler()
