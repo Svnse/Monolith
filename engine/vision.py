@@ -55,8 +55,7 @@ class PipelineLoader(QThread):
 class GenerationWorker(QThread):
     image = Signal(object)
     trace = Signal(str)
-    done = Signal()
-    error = Signal(str)
+    done = Signal(bool, str)
 
     def __init__(
         self,
@@ -74,6 +73,8 @@ class GenerationWorker(QThread):
         self.seed = seed
 
     def run(self) -> None:
+        completed = False
+        err_msg = ""
         try:
             import torch
 
@@ -102,10 +103,11 @@ class GenerationWorker(QThread):
                 return
             self.image.emit(result.images[0])
             self.trace.emit("generation complete")
+            completed = True
         except Exception as exc:
-            self.error.emit(str(exc))
+            err_msg = str(exc)
         finally:
-            self.done.emit()
+            self.done.emit(completed, err_msg)
 
 
 class VisionEngine(QObject):
@@ -250,7 +252,6 @@ class VisionEngine(QObject):
         )
         self.worker.image.connect(self.sig_image)
         self.worker.trace.connect(self._emit_trace)
-        self.worker.error.connect(self._on_gen_error)
         self.worker.done.connect(self._on_gen_finish)
         self.worker.start()
 
@@ -265,16 +266,16 @@ class VisionEngine(QObject):
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
 
-    def _on_gen_error(self, err_msg: str) -> None:
-        if err_msg == "Generation interrupted":
+    def _on_gen_finish(self, completed: bool, err_msg: str) -> None:
+        if completed:
+            self.sig_finished.emit()
+            self.sig_status.emit(SystemStatus.READY)
+        elif err_msg == "Generation interrupted":
             self.sig_trace.emit("VISION: generation interrupted")
+            self.sig_status.emit(SystemStatus.READY)
         else:
             self.sig_trace.emit(f"VISION: ERROR: {err_msg}")
-        self.sig_status.emit(SystemStatus.READY)
-
-    def _on_gen_finish(self) -> None:
-        self.sig_finished.emit()
-        self.sig_status.emit(SystemStatus.READY)
+            self.sig_status.emit(SystemStatus.ERROR)
         self.worker = None
 
     def shutdown(self) -> None:

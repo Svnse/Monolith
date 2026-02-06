@@ -38,6 +38,7 @@ class MonoGuard(QObject):
         self.active_tasks: dict[str, Optional[Task]] = {
             key: None for key in engines.keys()
         }
+        self._stop_requested: dict[str, bool] = {key: False for key in engines.keys()}
         self._viztracer = None
 
         for key, engine in engines.items():
@@ -119,11 +120,10 @@ class MonoGuard(QObject):
             engine = self.engines.get(key)
             if not engine:
                 continue
-            engine.stop_generation()
             task = self.active_tasks.get(key)
-            if task:
-                task.status = TaskStatus.CANCELLED
-            self.active_tasks[key] = None
+            if task is not None:
+                self._stop_requested[key] = True
+            engine.stop_generation()
 
     def _on_engine_finished(self, engine_key: str) -> None:
         task = self.active_tasks.get(engine_key)
@@ -140,6 +140,7 @@ class MonoGuard(QObject):
             if task:
                 task.status = TaskStatus.FAILED
             self.active_tasks[engine_key] = None
+            self._stop_requested[engine_key] = False
             self.sig_status.emit(engine_key, SystemStatus.READY)
             if had_task:
                 QTimer.singleShot(0, lambda: self.sig_engine_ready.emit(engine_key))
@@ -149,8 +150,12 @@ class MonoGuard(QObject):
             task = self.active_tasks.get(engine_key)
             had_task = task is not None
             if task and task.status == TaskStatus.RUNNING:
-                task.status = TaskStatus.DONE
+                if self._stop_requested.get(engine_key, False):
+                    task.status = TaskStatus.CANCELLED
+                else:
+                    task.status = TaskStatus.DONE
             self.active_tasks[engine_key] = None
+            self._stop_requested[engine_key] = False
             if had_task:
                 QTimer.singleShot(0, lambda: self.sig_engine_ready.emit(engine_key))
 

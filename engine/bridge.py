@@ -17,62 +17,36 @@ class EngineBridge(QObject):
         self.impl = impl
         self._gen_id = 0
         self._active_gid = 0
-        self._token_conn = None
-        self._trace_conn = None
-        self._usage_conn = None
-        self._image_conn = None
 
         impl.sig_status.connect(self.sig_status)
         if hasattr(impl, "sig_finished"):
             impl.sig_finished.connect(self.sig_finished)
 
-        self._connect_gated_handlers(self._active_gid)
+        impl.sig_token.connect(self._on_token)
+        impl.sig_trace.connect(self._on_trace)
+        if hasattr(impl, "sig_usage"):
+            impl.sig_usage.connect(self._on_usage)
+        if hasattr(impl, "sig_image"):
+            impl.sig_image.connect(self._on_image)
 
-    def _disconnect_gated_handlers(self) -> None:
-        """Safely disconnect all generation-gated signal handlers."""
-        connections = [
-            (self.impl.sig_token, self._token_conn),
-            (self.impl.sig_trace, self._trace_conn),
-        ]
-        if hasattr(self.impl, "sig_usage"):
-            connections.append((self.impl.sig_usage, self._usage_conn))
-        if hasattr(self.impl, "sig_image"):
-            connections.append((self.impl.sig_image, self._image_conn))
-        for signal, conn in connections:
-            if conn is not None:
-                try:
-                    signal.disconnect(conn)
-                except (RuntimeError, TypeError):
-                    pass
-        self._token_conn = None
-        self._trace_conn = None
-        self._usage_conn = None
-        self._image_conn = None
+    def _is_current_generation(self) -> bool:
+        return self._active_gid == self._gen_id
 
-    def _connect_gated_handlers(self, gid: int) -> None:
-        self._disconnect_gated_handlers()
-        self._token_conn = self.impl.sig_token.connect(
-            lambda t, gid=gid: self.sig_token.emit(t)
-            if self._active_gid == gid
-            else None
-        )
-        self._trace_conn = self.impl.sig_trace.connect(
-            lambda t, gid=gid: self.sig_trace.emit(t)
-            if self._active_gid == gid
-            else None
-        )
-        if hasattr(self.impl, "sig_usage"):
-            self._usage_conn = self.impl.sig_usage.connect(
-                lambda u, gid=gid: self.sig_usage.emit(u)
-                if self._active_gid == gid
-                else None
-            )
-        if hasattr(self.impl, "sig_image"):
-            self._image_conn = self.impl.sig_image.connect(
-                lambda image, gid=gid: self.sig_image.emit(image)
-                if self._active_gid == gid
-                else None
-            )
+    def _on_token(self, token: str) -> None:
+        if self._is_current_generation():
+            self.sig_token.emit(token)
+
+    def _on_trace(self, message: str) -> None:
+        if self._is_current_generation():
+            self.sig_trace.emit(message)
+
+    def _on_usage(self, usage: int) -> None:
+        if self._is_current_generation():
+            self.sig_usage.emit(usage)
+
+    def _on_image(self, image: object) -> None:
+        if self._is_current_generation():
+            self.sig_image.emit(image)
 
     def set_model_path(self, path: str) -> None:
         if hasattr(self.impl, "set_model_path"):
@@ -86,15 +60,12 @@ class EngineBridge(QObject):
 
     def generate(self, payload: dict) -> None:
         self._gen_id += 1
-        gid = self._gen_id
-        self._active_gid = gid
-        self._connect_gated_handlers(gid)
+        self._active_gid = self._gen_id
         self.impl.generate(payload)
 
     def stop_generation(self) -> None:
         self._gen_id += 1
-        self._active_gid = self._gen_id
-        self._connect_gated_handlers(self._active_gid)
+        self._active_gid = 0
         self.impl.stop_generation()
 
     def shutdown(self) -> None:

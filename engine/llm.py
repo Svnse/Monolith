@@ -261,7 +261,7 @@ class LLMEngine(QObject):
         if not self._ephemeral_generation and not is_update:
             self.conversation_history.append({"role": "user", "content": prompt})
             self._pending_user_index = len(self.conversation_history) - 1
-            messages = self.conversation_history
+            messages = list(self.conversation_history)
         else:
             messages = list(self.conversation_history)
             if not is_update:
