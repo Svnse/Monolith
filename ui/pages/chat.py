@@ -43,6 +43,7 @@ class PageChat(QWidget):
         self._current_session = self._create_session()
         self._undo_snapshot = None
         self._title_generated = False
+        self._suppress_title_regen = False
         self._active_assistant_index = None
         self._rewrite_assistant_index = None
         self._active_widget: MessageWidget | None = None
@@ -680,6 +681,7 @@ Continue from the interruption point. Do not repeat earlier content.
             # STOP also transitions to READY; _maybe_generate_title self-guards.
             # Do NOT call this method from token flush, send paths, or mutation handlers.
             self._maybe_generate_title()
+            self._suppress_title_regen = False
         elif status == SystemStatus.LOADING:
             self._set_send_button_state(is_running=False)
             self.btn_send.setEnabled(False)
@@ -934,6 +936,7 @@ Continue from the interruption point. Do not repeat earlier content.
         if idx < 0 or idx >= len(msgs):
             return
         text = msgs[idx]["text"]
+        self._suppress_title_regen = True
         self._delete_from_index(idx)
         self.input.setText(text)
 
@@ -942,6 +945,7 @@ Continue from the interruption point. Do not repeat earlier content.
         if not msgs or msgs[-1]["role"] != "assistant":
             return
         self._snapshot_session()
+        self._suppress_title_regen = True
         del msgs[-1]
         self._render_session()
         self.sig_sync_history.emit(
@@ -1070,6 +1074,8 @@ Continue from the interruption point. Do not repeat earlier content.
 
 
     def _maybe_generate_title(self):
+        if self._suppress_title_regen:
+            return
         if self._title_generated:
             return
         user_msgs = [m for m in self._current_session["messages"] if m.get("role") == "user" and m.get("text", "").strip()]
