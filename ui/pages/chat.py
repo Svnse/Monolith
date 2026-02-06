@@ -17,7 +17,7 @@ from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD, FG_ERROR, SCROLLBAR_STYLE
 from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
 from ui.components.complex import BehaviorTagInput
-from core.llm_config import DEFAULT_CONFIG, load_config, save_config
+from core.llm_config import DEFAULT_CONFIG, MASTER_PROMPT, load_config, save_config
 from core.paths import ARCHIVE_DIR
 
 class PageChat(QWidget):
@@ -25,6 +25,7 @@ class PageChat(QWidget):
     sig_load = Signal()
     sig_unload = Signal()
     sig_stop = Signal()
+    sig_sync_history = Signal(list)
 
     def __init__(self, state, ui_bridge):
         super().__init__()
@@ -556,7 +557,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self.trace.append(f"[{state}] {trace_msg}")
 
     def clear_chat(self):
-        self._set_current_session(self._create_session(), show_reset=True)
+        self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
 
     def _sync_path_display(self):
         if self.state.gguf_path:
@@ -699,7 +700,7 @@ Continue from the interruption point. Do not repeat earlier content.
             self.ops_stack.setCurrentIndex(index)
 
     def _start_new_session(self):
-        self._set_current_session(self._create_session(), show_reset=True)
+        self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self.trace.append("--- TRACE RESET ---")
 
     def _prompt_clear_session(self):
@@ -749,7 +750,7 @@ Continue from the interruption point. Do not repeat earlier content.
                 Path(archive_path).unlink()
             except OSError:
                 pass
-        self._set_current_session(self._create_session(), show_reset=True)
+        self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._refresh_archive_list()
 
     def _delete_selected_archive(self):
@@ -762,7 +763,7 @@ Continue from the interruption point. Do not repeat earlier content.
         except OSError:
             return
         if self._current_session.get("archive_path") == str(archive_path):
-            self._set_current_session(self._create_session(), show_reset=True)
+            self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._refresh_archive_list()
 
     def _save_chat_archive(self):
@@ -833,7 +834,7 @@ Continue from the interruption point. Do not repeat earlier content.
             title=meta.get("title"),
             assistant_tokens=int(meta.get("assistant_tokens", meta.get("token_count", 0)))
         )
-        self._set_current_session(session, show_reset=False)
+        self._set_current_session(session, show_reset=False, sync_history=True)
 
     def _refresh_archive_list(self):
         self.archive_list.clear()
@@ -875,14 +876,41 @@ Continue from the interruption point. Do not repeat earlier content.
             "assistant_tokens": int(assistant_tokens),
         }
 
-    def _set_current_session(self, session, show_reset=False):
+    def _set_current_session(self, session, show_reset=False, sync_history=False):
         self._current_session = session
         self._active_assistant_index = None
         self._rewrite_assistant_index = None
         self._assistant_block_map = {}
         self._title_generated = bool(session.get("title"))
         self._render_session(session, show_reset=show_reset)
+        if sync_history:
+            history = self._build_engine_history_from_session()
+            self.sig_sync_history.emit(history)
         self._notify_header_update()
+
+    def _build_engine_history_from_session(self):
+        """
+        Convert _current_session["messages"] into engine-ready history.
+
+        Always include:
+          {"role": "system", "content": MASTER_PROMPT}
+
+        Then append each session message as:
+          {"role": msg["role"], "content": msg["text"]}
+
+        Behavior tags are NOT included here.
+        Engine recompiles system prompt at generation time.
+        """
+        history = [{"role": "system", "content": MASTER_PROMPT}]
+        for msg in self._current_session.get("messages", []):
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            text = msg.get("text")
+            if not isinstance(role, str) or not isinstance(text, str):
+                continue
+            history.append({"role": role, "content": text})
+        return history
 
     def _render_session(self, session, show_reset=False):
         self.chat.clear()

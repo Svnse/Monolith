@@ -29,6 +29,16 @@ def terminal_factory(ctx: AddonContext):
         lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "unload", "llm"))
     )
     w.sig_stop.connect(lambda: ctx.bridge.stop("llm"))
+    w.sig_sync_history.connect(
+        lambda history: ctx.bridge.submit(
+            ctx.bridge.wrap(
+                "terminal",
+                "set_history",
+                "llm",
+                payload={"history": history},
+            )
+        )
+    )
     ctx.guard.sig_status.connect(w.update_status)
     # incoming (guard -> addon)
     ctx.guard.sig_token.connect(w.append_token)
