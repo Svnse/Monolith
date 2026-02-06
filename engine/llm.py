@@ -308,8 +308,8 @@ class LLMEngine(QObject):
         self._pending_user_index = None
         self._ephemeral_generation = False
         self.sig_token.emit("\n")
-        self.set_status(SystemStatus.READY)
         self.sig_finished.emit()
+        self.set_status(SystemStatus.READY)
 
     def set_status(self, s):
         self._status = s
