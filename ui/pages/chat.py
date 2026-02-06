@@ -7,13 +7,14 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
     QLineEdit, QPushButton, QLabel, QFileDialog,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
-    QMessageBox, QButtonGroup
+    QMessageBox, QButtonGroup, QMenu
 )
 from PySide6.QtCore import Signal, Qt, QTimer, QDateTime
+from PySide6.QtGui import QActionGroup
 
 from core.state import SystemStatus
 from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD, FG_ERROR, SCROLLBAR_STYLE
-from ui.components.atoms import SkeetGroupBox, SkeetButton, CollapsibleSection, SkeetSlider
+from ui.components.atoms import SkeetGroupBox, SkeetButton, SkeetSlider
 from ui.components.complex import BehaviorTagInput
 from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, MASTER_PROMPT, load_config, save_config
@@ -70,29 +71,7 @@ class PageChat(QWidget):
         main_split.setChildrenCollapsible(False)
         layout.addWidget(main_split)
 
-        config_section = CollapsibleSection("⚙ CONFIGURATION")
-        config_section.btn_toggle.setStyleSheet(f"""
-            QPushButton {{
-                color: {FG_TEXT}; background: transparent;
-                border: none; text-align: left; font-weight: bold; font-size: 10px;
-            }}
-            QPushButton:checked {{ color: {FG_TEXT}; }}
-            QPushButton:hover {{ color: {FG_TEXT}; }}
-            QPushButton::indicator {{
-                width: 6px; height: 6px; border-radius: 3px;
-                border: 1px solid {FG_DIM}; margin-right: 6px;
-            }}
-            QPushButton::indicator:checked {{
-                background: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD};
-            }}
-        """)
-        config_layout = QVBoxLayout()
-        config_layout.setSpacing(12)
-
-        config_row = QHBoxLayout()
-        config_row.setSpacing(12)
-
-        loader_col = QVBoxLayout()
+        # === MODEL LOADER (lives in CONTROL tab) ===
         grp_load = SkeetGroupBox("MODEL LOADER")
         self.path_display = QLineEdit()
         self.path_display.setReadOnly(True)
@@ -110,11 +89,8 @@ class PageChat(QWidget):
         self.btn_load.clicked.connect(self.toggle_load)
         grp_load.add_layout(row_file)
         grp_load.add_widget(self.btn_load)
-        loader_col.addWidget(grp_load)
-        loader_col.addStretch()
 
-        ai_col = QVBoxLayout()
-        grp_ai = SkeetGroupBox("AI CONFIGURATION")
+        # === AI CONFIGURATION (lives in SETTINGS tab) ===
         self.s_temp = SkeetSlider("Temperature", 0.1, 2.0, self.config.get("temp", 0.7))
         self.s_temp.valueChanged.connect(lambda v: self._update_config_value("temp", v))
         self.s_top = SkeetSlider("Top-P", 0.1, 1.0, self.config.get("top_p", 0.9))
@@ -129,33 +105,20 @@ class PageChat(QWidget):
             "Context Limit", 1024, 16384, self.config.get("ctx_limit", 8192), is_int=True
         )
         self.s_ctx.valueChanged.connect(self._on_ctx_limit_changed)
-        lbl_sys = QLabel("Behavior Tags")
-        lbl_sys.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; margin-top: 5px;")
-        self.behavior_tags = BehaviorTagInput([])
-        self.behavior_tags.tagsChanged.connect(self._on_behavior_tags_changed)
-        grp_ai.add_widget(self.s_temp)
-        grp_ai.add_widget(self.s_top)
-        grp_ai.add_widget(self.s_tok)
-        grp_ai.add_widget(self.s_ctx)
-        grp_ai.add_widget(lbl_sys)
-        grp_ai.add_widget(self.behavior_tags)
+
         save_row = QHBoxLayout()
         self.lbl_config_state = QLabel("SAVED")
         self.lbl_config_state.setStyleSheet(f"color: {FG_DIM}; font-size: 10px; font-weight: bold;")
         self.btn_save_config = SkeetButton("SAVE SETTINGS")
         self.btn_save_config.clicked.connect(self._save_config)
+        btn_reset_config = SkeetButton("RESET")
+        btn_reset_config.clicked.connect(self._reset_config)
         save_row.addWidget(self.lbl_config_state)
         save_row.addStretch()
+        save_row.addWidget(btn_reset_config)
         save_row.addWidget(self.btn_save_config)
-        grp_ai.add_layout(save_row)
-        ai_col.addWidget(grp_ai)
-        ai_col.addStretch()
 
-        config_row.addLayout(loader_col)
-        config_row.addLayout(ai_col)
-        config_layout.addLayout(config_row)
-        config_section.set_content_layout(config_layout)
-
+        # === OPERATIONS GROUP with 3 tabs ===
         operations_group = SkeetGroupBox("OPERATIONS")
         operations_layout = QVBoxLayout()
         operations_layout.setSpacing(10)
@@ -178,25 +141,31 @@ class PageChat(QWidget):
         self.btn_tab_archive = SkeetButton("ARCHIVE")
         self.btn_tab_archive.setCheckable(True)
         self.btn_tab_archive.setStyleSheet(tab_style)
+        self.btn_tab_settings = SkeetButton("SETTINGS")
+        self.btn_tab_settings.setCheckable(True)
+        self.btn_tab_settings.setStyleSheet(tab_style)
         tab_group = QButtonGroup(self)
         tab_group.setExclusive(True)
         tab_group.addButton(self.btn_tab_control)
         tab_group.addButton(self.btn_tab_archive)
+        tab_group.addButton(self.btn_tab_settings)
         tab_row.addWidget(self.btn_tab_control)
         tab_row.addWidget(self.btn_tab_archive)
+        tab_row.addWidget(self.btn_tab_settings)
         tab_row.addStretch()
         operations_layout.addLayout(tab_row)
 
         self.ops_stack = QStackedWidget()
         operations_layout.addWidget(self.ops_stack)
 
+        # --- CONTROL tab: Model Loader (top-level, no collapsible) ---
         control_tab = QWidget()
         control_layout = QVBoxLayout(control_tab)
         control_layout.setSpacing(12)
-
-        control_layout.addWidget(config_section)
+        control_layout.addWidget(grp_load)
         control_layout.addStretch()
 
+        # --- ARCHIVE tab ---
         archive_tab = QWidget()
         archive_layout = QVBoxLayout(archive_tab)
         archive_layout.setSpacing(10)
@@ -229,10 +198,23 @@ class PageChat(QWidget):
         """)
         archive_layout.addWidget(self.archive_list)
 
+        # --- SETTINGS tab: AI Configuration + Save/Reset ---
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+        settings_layout.setSpacing(10)
+        settings_layout.addWidget(self.s_temp)
+        settings_layout.addWidget(self.s_top)
+        settings_layout.addWidget(self.s_tok)
+        settings_layout.addWidget(self.s_ctx)
+        settings_layout.addLayout(save_row)
+        settings_layout.addStretch()
+
         self.ops_stack.addWidget(control_tab)
         self.ops_stack.addWidget(archive_tab)
+        self.ops_stack.addWidget(settings_tab)
         self.btn_tab_control.toggled.connect(lambda checked: self._switch_ops_tab(0, checked))
         self.btn_tab_archive.toggled.connect(lambda checked: self._switch_ops_tab(1, checked))
+        self.btn_tab_settings.toggled.connect(lambda checked: self._switch_ops_tab(2, checked))
 
         operations_group.add_layout(operations_layout)
 
@@ -243,14 +225,108 @@ class PageChat(QWidget):
         self.message_list = QListWidget()
         self.message_list.setStyleSheet(f"""
             QListWidget {{
-                background: {BG_INPUT}; color: #ccc; border: 1px solid #222;
+                background: #111; color: #ccc; border: 1px solid #222;
                 font-family: 'Consolas', monospace; font-size: 12px;
             }}
-            QListWidget::item {{ border: none; }}
+            QListWidget::item {{
+                border: none;
+                background: transparent;
+                padding: 0px;
+            }}
             {SCROLLBAR_STYLE}
         """)
         chat_layout.addWidget(self.message_list)
         
+        # --- Behavior tags (above input, tag system) ---
+        lbl_behavior = QLabel("BEHAVIOR TAGS")
+        lbl_behavior.setStyleSheet(
+            f"color: #444; font-size: 8px; font-weight: bold; letter-spacing: 1px;"
+        )
+        self.behavior_tags = BehaviorTagInput([])
+        self.behavior_tags.tagsChanged.connect(self._on_behavior_tags_changed)
+        self.behavior_tags.setStyleSheet(
+            f"background: #111; border: 1px solid #1a1a1a; border-radius: 2px;"
+        )
+        self.behavior_tags.setMaximumHeight(36)
+        chat_layout.addWidget(lbl_behavior)
+        chat_layout.addWidget(self.behavior_tags)
+
+        # --- Input toolbar (between separator and input box) ---
+        input_toolbar = QHBoxLayout()
+        input_toolbar.setContentsMargins(0, 0, 0, 0)
+        input_toolbar.setSpacing(4)
+
+        # [+] Actions menu button
+        self.btn_actions = QPushButton("＋")
+        self.btn_actions.setCursor(Qt.PointingHandCursor)
+        self.btn_actions.setFixedSize(26, 22)
+        self.btn_actions.setToolTip("Actions")
+        self.btn_actions.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: 1px solid #222;
+                color: {FG_DIM}; font-size: 14px; font-weight: bold;
+                border-radius: 2px; padding: 0;
+            }}
+            QPushButton:hover {{ color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD}; }}
+        """)
+        self.actions_menu = QMenu(self)
+        self.actions_menu.setStyleSheet(f"""
+            QMenu {{
+                background: #141414; border: 1px solid #333; color: {FG_TEXT};
+                font-size: 10px; padding: 4px;
+            }}
+            QMenu::item {{ padding: 6px 20px; }}
+            QMenu::item:selected {{ background: #222; color: {ACCENT_GOLD}; }}
+        """)
+        act_file = self.actions_menu.addAction("📎  Attach File")
+        act_file.triggered.connect(self._attach_file_placeholder)
+        self.btn_actions.clicked.connect(
+            lambda: self.actions_menu.exec(self.btn_actions.mapToGlobal(self.btn_actions.rect().topLeft()))
+        )
+
+        # Thinking mode dropdown
+        self.btn_thinking = QPushButton("THINK")
+        self.btn_thinking.setCursor(Qt.PointingHandCursor)
+        self.btn_thinking.setFixedHeight(22)
+        self.btn_thinking.setToolTip("Thinking mode")
+        self._update_thinking_button_style()
+        self.thinking_menu = QMenu(self)
+        self.thinking_menu.setStyleSheet(f"""
+            QMenu {{
+                background: #141414; border: 1px solid #333; color: {FG_TEXT};
+                font-size: 10px; padding: 4px;
+            }}
+            QMenu::item {{ padding: 6px 20px; }}
+            QMenu::item:selected {{ background: #222; color: {ACCENT_GOLD}; }}
+            QMenu::item:checked {{ color: {ACCENT_GOLD}; }}
+        """)
+        act_off = self.thinking_menu.addAction("Off")
+        act_off.setCheckable(True)
+        act_standard = self.thinking_menu.addAction("Standard")
+        act_standard.setCheckable(True)
+        act_extended = self.thinking_menu.addAction("Extended")
+        act_extended.setCheckable(True)
+        self._thinking_action_group = QActionGroup(self)
+        self._thinking_action_group.setExclusive(True)
+        for a in (act_off, act_standard, act_extended):
+            self._thinking_action_group.addAction(a)
+        if self._thinking_mode:
+            act_standard.setChecked(True)
+        else:
+            act_off.setChecked(True)
+        act_off.triggered.connect(lambda: self._set_thinking_mode(False, "Off"))
+        act_standard.triggered.connect(lambda: self._set_thinking_mode(True, "Standard"))
+        act_extended.triggered.connect(lambda: self._set_thinking_mode(True, "Extended"))
+        self.btn_thinking.clicked.connect(
+            lambda: self.thinking_menu.exec(self.btn_thinking.mapToGlobal(self.btn_thinking.rect().topLeft()))
+        )
+
+        input_toolbar.addWidget(self.btn_actions)
+        input_toolbar.addStretch()
+        input_toolbar.addWidget(self.btn_thinking)
+        chat_layout.addLayout(input_toolbar)
+
+        # --- Input row ---
         input_row = QHBoxLayout()
         self.input = QLineEdit()
         self.input.setPlaceholderText("Enter command...")
@@ -283,55 +359,9 @@ class PageChat(QWidget):
         self._set_send_button_state(is_running=False)
         self.btn_send.clicked.connect(self.handle_send_click)
 
-        self.chk_thinking_mode = QPushButton("THINK")
-        self.chk_thinking_mode.setCheckable(True)
-        self.chk_thinking_mode.setChecked(self._thinking_mode)
-        self.chk_thinking_mode.setCursor(Qt.PointingHandCursor)
-        self.chk_thinking_mode.setStyleSheet(f"""
-            QPushButton {{
-                background: {BG_INPUT};
-                border: 1px solid #333;
-                color: {FG_DIM};
-                padding: 8px;
-                font-size: 10px;
-                font-weight: bold;
-                border-radius: 2px;
-            }}
-            QPushButton:checked {{
-                border: 1px solid {ACCENT_GOLD};
-                color: {ACCENT_GOLD};
-            }}
-            QPushButton:hover {{
-                border: 1px solid {FG_TEXT};
-                color: {FG_TEXT};
-            }}
-        """)
-        self.chk_thinking_mode.toggled.connect(self._on_thinking_mode_toggled)
-        
         input_row.addWidget(self.input)
-        input_row.addWidget(self.chk_thinking_mode)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
-
-        mutation_row = QHBoxLayout()
-        self.btn_undo_mutation = SkeetButton("UNDO")
-        self.btn_undo_mutation.clicked.connect(self._undo_last_mutation)
-        self.btn_delete_last = SkeetButton("DEL LAST")
-        self.btn_delete_last.clicked.connect(
-            lambda: self._delete_from_index(len(self._current_session["messages"]) - 1)
-        )
-        self.btn_edit_last = SkeetButton("EDIT LAST")
-        self.btn_edit_last.clicked.connect(
-            lambda: self._edit_from_index(len(self._current_session["messages"]) - 1)
-        )
-        self.btn_regen = SkeetButton("REGEN")
-        self.btn_regen.clicked.connect(self._regen_last_assistant)
-        mutation_row.addWidget(self.btn_undo_mutation)
-        mutation_row.addWidget(self.btn_delete_last)
-        mutation_row.addWidget(self.btn_edit_last)
-        mutation_row.addWidget(self.btn_regen)
-        mutation_row.addStretch()
-        chat_layout.addLayout(mutation_row)
         
         chat_group.add_layout(chat_layout)
 
@@ -532,16 +562,35 @@ Continue from the interruption point. Do not repeat earlier content.
 
     def append_trace(self, trace_msg):
         lowered = trace_msg.lower()
-        if "token" in lowered:
+
+        # --- Filter: only show LLM-relevant trace info ---
+        # Skip guard internals, status transitions, and noise
+        skip_patterns = [
+            "guard", "dispatch", "route", "bridge", "dock",
+            "addon", "registry", "host", "mount",
+        ]
+        for pat in skip_patterns:
+            if pat in lowered and "error" not in lowered:
+                return
+
+        # Categorize what we show
+        if "error" in lowered:
+            state = "ERROR"
+        elif "token" in lowered:
             state = "TOKENIZING"
         elif "inference started" in lowered:
-            state = "INFERENCING"
+            state = "INFERENCE"
         elif "inference" in lowered and ("complete" in lowered or "aborted" in lowered):
             state = "COMPLETE"
-        elif "error" in lowered:
-            state = "COMPLETE"
+        elif "init backend" in lowered or "system online" in lowered:
+            state = "MODEL"
+        elif "unload" in lowered or "cancel" in lowered:
+            state = "MODEL"
+        elif "ctx" in lowered or "context" in lowered:
+            state = "CTX"
         else:
-            state = "GENERATING"
+            state = "INFO"
+
         self.trace.appendPlainText(f"[{state}] {trace_msg}")
 
     def clear_chat(self):
@@ -557,10 +606,22 @@ Continue from the interruption point. Do not repeat earlier content.
 
     def _set_config_dirty(self, dirty=True):
         self._config_dirty = dirty
-        self.lbl_config_state.setText("DIRTY" if dirty else "SAVED")
+        self.lbl_config_state.setText("UNSAVED" if dirty else "SAVED")
         self.lbl_config_state.setStyleSheet(
             f"color: {ACCENT_GOLD if dirty else FG_DIM}; font-size: 10px; font-weight: bold;"
         )
+        # Save button: gold when dirty (action needed), gray when clean
+        if dirty:
+            self.btn_save_config.setStyleSheet(f"""
+                QPushButton {{ background: #181818; border: 1px solid {ACCENT_GOLD}; color: {ACCENT_GOLD}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
+                QPushButton:hover {{ background: {ACCENT_GOLD}; color: black; }}
+                QPushButton:pressed {{ background: #b08d2b; color: black; }}
+            """)
+        else:
+            self.btn_save_config.setStyleSheet(f"""
+                QPushButton {{ background: #181818; border: 1px solid #333; color: {FG_DIM}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
+                QPushButton:hover {{ background: #222; color: {FG_DIM}; }}
+            """)
 
     def _save_config(self):
         save_config(self.config)
@@ -612,12 +673,27 @@ Continue from the interruption point. Do not repeat earlier content.
         if model_ctx_length is None:
             self._apply_default_limits()
             return
+        configured_ctx = int(self.config.get("ctx_limit", 8192))
         self._set_slider_limits(self.s_ctx, model_ctx_length, model_ctx_length)
         self._set_slider_limits(
             self.s_tok,
             model_ctx_length,
             min(8192, model_ctx_length),
         )
+        # Surface context capacity info in reasoning trace
+        if configured_ctx < model_ctx_length:
+            pct = int((configured_ctx / model_ctx_length) * 100)
+            self.trace.appendPlainText(
+                f"[CTX] Context: {configured_ctx:,} / {model_ctx_length:,} tokens "
+                f"({pct}% of model capacity)"
+            )
+            self.trace.appendPlainText(
+                f"[CTX] Increase context limit in SETTINGS to use full {model_ctx_length:,} capacity"
+            )
+        else:
+            self.trace.appendPlainText(
+                f"[CTX] Context: {model_ctx_length:,} tokens (full capacity)"
+            )
 
     def _on_ctx_limit_changed(self, value):
         self.state.ctx_limit = int(value)
@@ -629,6 +705,56 @@ Continue from the interruption point. Do not repeat earlier content.
     def _on_thinking_mode_toggled(self, checked):
         self._thinking_mode = bool(checked)
         self.config["thinking_mode"] = self._thinking_mode
+        self._set_config_dirty(True)
+        self._update_thinking_button_style()
+
+    def _set_thinking_mode(self, enabled, label="Off"):
+        self._thinking_mode = enabled
+        self.config["thinking_mode"] = enabled
+        self._set_config_dirty(True)
+        self.btn_thinking.setText(label.upper() if enabled else "THINK")
+        self._update_thinking_button_style()
+
+    def _update_thinking_button_style(self):
+        active = self._thinking_mode
+        color = ACCENT_GOLD if active else FG_DIM
+        border = ACCENT_GOLD if active else "#333"
+        self.btn_thinking.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: 1px solid {border};
+                color: {color}; padding: 2px 10px;
+                font-size: 9px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:hover {{ color: {FG_TEXT}; border: 1px solid {FG_TEXT}; }}
+        """)
+
+    def _attach_file_placeholder(self):
+        """Placeholder for file attachment — backend will be implemented later."""
+        pass
+
+    def _reset_config(self):
+        """Reset all settings to DEFAULT_CONFIG values."""
+        for key, val in DEFAULT_CONFIG.items():
+            self.config[key] = val
+        self.s_temp.slider.blockSignals(True)
+        self.s_top.slider.blockSignals(True)
+        self.s_tok.slider.blockSignals(True)
+        self.s_ctx.slider.blockSignals(True)
+        self.s_temp.slider.setValue(int(DEFAULT_CONFIG["temp"] * 100))
+        self.s_temp.val_lbl.setText(f"{DEFAULT_CONFIG['temp']:.2f}")
+        self.s_top.slider.setValue(int(DEFAULT_CONFIG["top_p"] * 100))
+        self.s_top.val_lbl.setText(f"{DEFAULT_CONFIG['top_p']:.2f}")
+        self.s_tok.slider.setValue(int(DEFAULT_CONFIG["max_tokens"]))
+        self.s_tok.val_lbl.setText(str(int(DEFAULT_CONFIG["max_tokens"])))
+        self.s_ctx.slider.setValue(int(DEFAULT_CONFIG["ctx_limit"]))
+        self.s_ctx.val_lbl.setText(str(int(DEFAULT_CONFIG["ctx_limit"])))
+        self.s_temp.slider.blockSignals(False)
+        self.s_top.slider.blockSignals(False)
+        self.s_tok.slider.blockSignals(False)
+        self.s_ctx.slider.blockSignals(False)
+        self.state.ctx_limit = int(DEFAULT_CONFIG["ctx_limit"])
+        self.behavior_tags.set_tags(DEFAULT_CONFIG.get("behavior_tags", []))
+        self._set_thinking_mode(False)
         self._set_config_dirty(True)
 
     def pick_file(self):
@@ -732,10 +858,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self.behavior_tags.set_tags(tags if isinstance(tags, list) else [])
 
         thinking_mode = bool(config.get("thinking_mode", False))
-        self._thinking_mode = thinking_mode
-        self.chk_thinking_mode.blockSignals(True)
-        self.chk_thinking_mode.setChecked(thinking_mode)
-        self.chk_thinking_mode.blockSignals(False)
+        self._set_thinking_mode(thinking_mode, "Standard" if thinking_mode else "Off")
 
         self.state.gguf_path = config.get("gguf_path")
         self._sync_path_display()
