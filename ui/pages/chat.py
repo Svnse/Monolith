@@ -694,6 +694,8 @@ Continue from the interruption point. Do not repeat earlier content.
             self.ops_stack.setCurrentIndex(index)
 
     def _start_new_session(self):
+        self._title_generated = False
+        self._suppress_title_regen = False
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self.trace.appendPlainText("--- TRACE RESET ---")
 
@@ -829,6 +831,7 @@ Continue from the interruption point. Do not repeat earlier content.
             assistant_tokens=int(meta.get("assistant_tokens", meta.get("token_count", 0)))
         )
         self._set_current_session(session, show_reset=False, sync_history=True)
+        self._notify_header_update()
 
     def _refresh_archive_list(self):
         self.archive_list.clear()
@@ -877,6 +880,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self._rewrite_assistant_index = None
         self._active_widget = None
         self._title_generated = bool(session.get("title"))
+        self._suppress_title_regen = False
         self._render_session(session, show_reset=show_reset)
         if sync_history:
             history = self._build_engine_history_from_session()
@@ -1077,6 +1081,9 @@ Continue from the interruption point. Do not repeat earlier content.
         if self._suppress_title_regen:
             return
         if self._title_generated:
+            return
+        if self._current_session.get("title"):
+            self._title_generated = True
             return
         user_msgs = [m for m in self._current_session["messages"] if m.get("role") == "user" and m.get("text", "").strip()]
         if len(user_msgs) < 2 and not self._topic_dominant():
