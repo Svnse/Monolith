@@ -159,10 +159,7 @@ class MonolithUI(QMainWindow):
         self.btn_addons.setChecked(page_idx == "addons" and not module_selection)
         if not module_selection: self.module_strip.deselect_all()
 
-    def update_status(self, engine_key, status=None):
-        if status is None:
-            status = engine_key
-            engine_key = "llm"
+    def update_status(self, engine_key: str, status: SystemStatus):
         if status == SystemStatus.ERROR:
             self.lbl_status.setStyleSheet(f"color: {FG_ERROR}; font-size: 10px; font-weight: bold;")
         elif status == SystemStatus.LOADING:

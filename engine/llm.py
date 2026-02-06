@@ -109,7 +109,8 @@ class LLMEngine(QObject):
         self.state.model_ctx_length = None
         self.state.sig_model_capabilities = self.sig_model_capabilities
 
-    def set_model_path(self, path: str) -> None:
+    def set_model_path(self, payload: dict) -> None:
+        path = payload.get("path") if isinstance(payload, dict) else None
         self.model_path = path
         self.state.gguf_path = path
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
@@ -198,8 +199,6 @@ class LLMEngine(QObject):
             del self.llm
             self.llm = None
         self.state.model_loaded = False
-        config = load_config()
-        self.state.ctx_limit = int(config.get("ctx_limit", self.state.ctx_limit))
         self.state.model_ctx_length = None
         self.reset_conversation(MASTER_PROMPT)
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
@@ -209,7 +208,8 @@ class LLMEngine(QObject):
         self.conversation_history = [{"role": "system", "content": system_prompt}]
         self._pending_user_index = None
 
-    def set_history(self, history):
+    def set_history(self, payload: dict):
+        history = payload.get("history", []) if isinstance(payload, dict) else []
         if not isinstance(history, list):
             return
         self.conversation_history = [h for h in history if isinstance(h, dict)]

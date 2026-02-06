@@ -74,22 +74,24 @@ class OverseerDB:
             return int(cur.lastrowid)
 
     def get_recent_events(self, limit: int = 500) -> list[dict[str, Any]]:
-        cur = self._get_conn().execute(
-            "SELECT id, ts, engine_key, event, payload FROM events ORDER BY id DESC LIMIT ?",
-            (limit,),
-        )
-        rows = [self._row_to_event_dict(row) for row in cur.fetchall()]
-        rows.reverse()
-        return rows
+        with self._lock:
+            cur = self._get_conn().execute(
+                "SELECT id, ts, engine_key, event, payload FROM events ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = [self._row_to_event_dict(row) for row in cur.fetchall()]
+            rows.reverse()
+            return rows
 
     def get_recent_tasks(self, limit: int = 500) -> list[dict[str, Any]]:
-        cur = self._get_conn().execute(
-            "SELECT id, task_id, engine_key, status, ts FROM tasks ORDER BY id DESC LIMIT ?",
-            (limit,),
-        )
-        rows = [dict(row) for row in cur.fetchall()]
-        rows.reverse()
-        return rows
+        with self._lock:
+            cur = self._get_conn().execute(
+                "SELECT id, task_id, engine_key, status, ts FROM tasks ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+            rows.reverse()
+            return rows
 
     def query_events(
         self,
@@ -117,13 +119,14 @@ class OverseerDB:
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
-        cur = self._get_conn().execute(
-            f"SELECT id, ts, engine_key, event, payload FROM events {where} ORDER BY id DESC LIMIT ?",
-            params,
-        )
-        rows = [self._row_to_event_dict(row) for row in cur.fetchall()]
-        rows.reverse()
-        return rows
+        with self._lock:
+            cur = self._get_conn().execute(
+                f"SELECT id, ts, engine_key, event, payload FROM events {where} ORDER BY id DESC LIMIT ?",
+                params,
+            )
+            rows = [self._row_to_event_dict(row) for row in cur.fetchall()]
+            rows.reverse()
+            return rows
 
     def _row_to_event_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         payload_raw = row["payload"]

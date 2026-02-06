@@ -68,6 +68,7 @@ class MonoDock:
                     task.status = TaskStatus.CANCELLED
                     if queue:
                         queue.popleft()
+                    self.cancelled_task_ids.discard(str(task.id))
                     continue
                 accepted = self.guard.submit(task)
                 if accepted and queue:
