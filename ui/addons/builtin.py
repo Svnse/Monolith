@@ -1,3 +1,5 @@
+import uuid
+
 from ui.addons.context import AddonContext
 from ui.addons.registry import AddonRegistry
 from ui.addons.spec import AddonSpec
@@ -9,44 +11,87 @@ from ui.pages.chat import PageChat
 from ui.pages.databank import PageFiles
 from ui.pages.hub import PageHub
 from core.operators import OperatorManager
+from engine.bridge import EngineBridge
+from engine.llm import LLMEngine
 
 
 def terminal_factory(ctx: AddonContext):
+    instance_id = str(uuid.uuid4())
+    engine_key = f"llm_{instance_id}"
+
+    llm_engine = LLMEngine(ctx.state)
+    engine_bridge = EngineBridge(llm_engine)
+    ctx.guard.register_engine(engine_key, engine_bridge)
+
     w = PageChat(ctx.state, ctx.ui_bridge)
+    w._mod_id = instance_id
+    w._engine_key = engine_key
     ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
+    llm_engine.sig_model_capabilities.connect(w._on_model_capabilities)
+
+    w.sig_set_model_path.connect(
+        lambda path: ctx.bridge.submit(
+            ctx.bridge.wrap("terminal", "set_path", engine_key, payload={"path": path})
+        )
+    )
+    w.sig_set_ctx_limit.connect(
+        lambda limit: None if limit is None else ctx.bridge.submit(
+            ctx.bridge.wrap("terminal", "set_ctx_limit", engine_key, payload={"ctx_limit": int(limit)})
+        )
+    )
+
+    if w.config.get("gguf_path"):
+        w.sig_set_model_path.emit(str(w.config.get("gguf_path")))
+    w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
+
     # outgoing (addon -> bridge)
     w.sig_generate.connect(
         lambda prompt, thinking_mode: ctx.bridge.submit(
             ctx.bridge.wrap(
                 "terminal",
                 "generate",
-                "llm",
-                payload={"prompt": prompt, "config": w.config, "thinking_mode": thinking_mode},
+                engine_key,
+                payload={
+                    "prompt": prompt,
+                    "config": w.config,
+                    "thinking_mode": thinking_mode,
+                    "ctx_limit": int(w.config.get("ctx_limit", 8192)),
+                },
             )
         )
     )
     w.sig_load.connect(
-        lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "load", "llm"))
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "load", engine_key))
     )
     w.sig_unload.connect(
-        lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "unload", "llm"))
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "unload", engine_key))
     )
-    w.sig_stop.connect(lambda: ctx.bridge.stop("llm"))
+    w.sig_stop.connect(lambda: ctx.bridge.stop(engine_key))
     w.sig_sync_history.connect(
         lambda history: ctx.bridge.submit(
             ctx.bridge.wrap(
                 "terminal",
                 "set_history",
-                "llm",
+                engine_key,
                 payload={"history": history},
             )
         )
     )
     ctx.guard.sig_status.connect(w.update_status)
     # incoming (guard -> addon)
-    ctx.guard.sig_token.connect(w.append_token)
-    ctx.guard.sig_trace.connect(w.append_trace)
+    ctx.guard.sig_token.connect(
+        lambda ek, t: w.append_token(t) if ek == engine_key else None
+    )
+    ctx.guard.sig_trace.connect(
+        lambda ek, m: w.append_trace(m) if ek == engine_key else None
+    )
     ctx.guard.sig_finished.connect(w.on_guard_finished)
+
+    def _cleanup_terminal(*_args):
+        ctx.guard.unregister_engine(engine_key)
+        engine_bridge.shutdown()
+
+    w.destroyed.connect(_cleanup_terminal)
     return w
 
 
@@ -55,6 +100,8 @@ def addons_page_factory(ctx: AddonContext):
     # route launcher directly to host (host must exist)
     assert ctx.host is not None, "AddonHost must exist before addons page wiring"
     w.sig_launch_addon.connect(lambda addon_id: ctx.host.launch_module(addon_id))
+    w.sig_open_vitals.connect(lambda: ctx.ui.toggle_vitals() if ctx.ui else None)
+    w.sig_open_overseer.connect(ctx.ui_bridge.sig_open_overseer.emit)
     return w
 
 

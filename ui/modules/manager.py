@@ -6,6 +6,8 @@ from core.style import FG_DIM
 
 class PageAddons(QWidget):
     sig_launch_addon = Signal(str)
+    sig_open_vitals = Signal()
+    sig_open_overseer = Signal()
 
     def __init__(self, state):
         super().__init__()
@@ -55,6 +57,21 @@ class PageAddons(QWidget):
         
         grp_modules.add_layout(mod_layout)
         scroll_layout.addWidget(grp_modules)
+        
+        grp_system = SkeetGroupBox("SYSTEM")
+        system_layout = QVBoxLayout()
+        system_layout.setSpacing(10)
+
+        btn_vitals = SkeetButton("VITALS")
+        btn_vitals.clicked.connect(self.sig_open_vitals.emit)
+
+        btn_overseer = SkeetButton("OVERSEER")
+        btn_overseer.clicked.connect(self.sig_open_overseer.emit)
+
+        system_layout.addWidget(btn_vitals)
+        system_layout.addWidget(btn_overseer)
+        grp_system.add_layout(system_layout)
+        scroll_layout.addWidget(grp_system)
         scroll_layout.addStretch()
         scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area)

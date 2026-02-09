@@ -106,13 +106,24 @@ class LLMEngine(QObject):
         self._shutdown_requested: bool = False
         self._status: SystemStatus = SystemStatus.READY
         self._ephemeral_generation: bool = False
-        self.state.model_ctx_length = None
-        self.state.sig_model_capabilities = self.sig_model_capabilities
+        self.model_loaded: bool = False
+        self.model_ctx_length: int | None = None
+        self.ctx_limit: int = int(getattr(self.state, "ctx_limit", 8192))
+        self.gguf_path: str | None = None
+
+    def set_ctx_limit(self, payload: dict) -> None:
+        value = payload.get("ctx_limit") if isinstance(payload, dict) else None
+        if value is None:
+            return
+        try:
+            self.ctx_limit = int(value)
+        except (TypeError, ValueError):
+            return
 
     def set_model_path(self, payload: dict) -> None:
         path = payload.get("path") if isinstance(payload, dict) else None
         self.model_path = path
-        self.state.gguf_path = path
+        self.gguf_path = path
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
 
     def load_model(self):
@@ -121,7 +132,7 @@ class LLMEngine(QObject):
             self.set_status(SystemStatus.ERROR)
             return
         
-        model_path = self.model_path or self.state.gguf_path
+        model_path = self.model_path or self.gguf_path
         if not model_path:
             self.sig_trace.emit("ERROR: No GGUF selected.")
             self.set_status(SystemStatus.ERROR)
@@ -131,9 +142,9 @@ class LLMEngine(QObject):
         self._load_cancel_requested = False
         # Keep reference to loader to prevent GC
         n_ctx = (
-            min(self.state.ctx_limit, self.state.model_ctx_length)
-            if self.state.model_ctx_length
-            else self.state.ctx_limit
+            min(self.ctx_limit, self.model_ctx_length)
+            if self.model_ctx_length
+            else self.ctx_limit
         )
         self.loader = ModelLoader(model_path, n_ctx)
         self.loader.trace.connect(self.sig_trace)
@@ -152,22 +163,22 @@ class LLMEngine(QObject):
         if self._load_cancel_requested:
             del llm_instance
             self.llm = None
-            self.state.model_loaded = False
+            self.model_loaded = False
             self.set_status(SystemStatus.READY)
             self.sig_trace.emit("→ load cancelled")
             self.loader = None
             return
 
         self.llm = llm_instance
-        self.state.model_ctx_length = int(model_ctx_length)
-        self.state.ctx_limit = min(self.state.ctx_limit, self.state.model_ctx_length)
+        self.model_ctx_length = int(model_ctx_length)
+        self.ctx_limit = min(self.ctx_limit, self.model_ctx_length)
         self.sig_model_capabilities.emit(
             {
-                "model_ctx_length": self.state.model_ctx_length,
-                "ctx_limit": self.state.ctx_limit,
+                "model_ctx_length": self.model_ctx_length,
+                "ctx_limit": self.ctx_limit,
             }
         )
-        self.state.model_loaded = True
+        self.model_loaded = True
         self.set_status(SystemStatus.READY)
         self.reset_conversation(MASTER_PROMPT)
         self.sig_trace.emit("→ system online")
@@ -198,8 +209,8 @@ class LLMEngine(QObject):
             self.set_status(SystemStatus.UNLOADING)
             del self.llm
             self.llm = None
-        self.state.model_loaded = False
-        self.state.model_ctx_length = None
+        self.model_loaded = False
+        self.model_ctx_length = None
         self.reset_conversation(MASTER_PROMPT)
         QTimer.singleShot(0, lambda: self.set_status(SystemStatus.READY))
         self.sig_trace.emit("→ model unloaded")
@@ -223,10 +234,16 @@ class LLMEngine(QObject):
         return f"{MASTER_PROMPT}\n\n[BEHAVIOR TAGS]\n" + "\n".join(cleaned)
 
     def generate(self, payload: dict):
-        if not self.state.model_loaded:
+        if not self.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
             self.set_status(SystemStatus.ERROR)
             return
+
+        if isinstance(payload, dict) and "ctx_limit" in payload:
+            try:
+                self.ctx_limit = int(payload.get("ctx_limit", self.ctx_limit))
+            except (TypeError, ValueError):
+                pass
 
         if self._status == SystemStatus.RUNNING:
             self.sig_trace.emit("ERROR: Busy. Wait for completion.")

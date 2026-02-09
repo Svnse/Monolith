@@ -42,8 +42,7 @@ class MessageWidget(QWidget):
         is_assistant = role == "assistant"
         is_system = role == "system"
         border_color = ACCENT_GOLD if is_assistant else "#1a1a1a"
-        # User messages: transparent, blend into list. Assistant: very subtle lift.
-        bg = "rgba(20, 20, 20, 180)" if is_assistant else "transparent"
+        bg = "transparent"
         if is_system:
             bg = "transparent"
             border_color = "#222"
@@ -52,12 +51,12 @@ class MessageWidget(QWidget):
             MessageWidget {{
                 background: {bg};
                 border-left: 2px solid {border_color};
-                border-top: none; border-right: none; border-bottom: none;
+                border-top: none; border-right: none; border-bottom: 1px solid #222;
             }}
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 6, 10, 6)
+        root.setContentsMargins(10, 3, 10, 3)
         root.setSpacing(4)
 
         # --- Header row ---
@@ -73,7 +72,10 @@ class MessageWidget(QWidget):
         )
         head.addWidget(self.lbl_role)
 
-        self.lbl_time = QLabel(timestamp or "")
+        pretty_ts = (timestamp or "")
+        if "T" in pretty_ts and len(pretty_ts) >= 16:
+            pretty_ts = pretty_ts[11:16]
+        self.lbl_time = QLabel(pretty_ts)
         self.lbl_time.setStyleSheet(f"color: #444; font-size: 9px;")
         head.addWidget(self.lbl_time)
         head.addStretch()

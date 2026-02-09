@@ -39,10 +39,13 @@ class AddonHost:
             instance_id = str(uuid.uuid4())
             widget = spec.factory(self.ctx)
         except Exception as e:
-            self.ctx.guard.sig_trace.emit(f"<span style='color:red'>ADDON ERROR: {e}</span>")
+            self.ctx.guard.sig_trace.emit("system", f"<span style='color:red'>ADDON ERROR: {e}</span>")
             return ""
 
-        widget._mod_id = instance_id
+        if not hasattr(widget, "_mod_id"):
+            widget._mod_id = instance_id
+        else:
+            instance_id = widget._mod_id
         added_stack = False
         added_strip = False
         try:

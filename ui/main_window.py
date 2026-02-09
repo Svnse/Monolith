@@ -11,7 +11,7 @@ from core.state import SystemStatus, AppState
 from ui.bridge import UIBridge
 from core.style import BG_MAIN, BG_SIDEBAR, FG_ACCENT, FG_ERROR, FG_WARN
 from ui.addons.host import AddonHost
-from ui.components.atoms import SidebarButton, SkeetButton
+from ui.components.atoms import SidebarButton
 from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock, FlameLabel
 from ui.components.module_strip import ModuleStrip
 
@@ -23,6 +23,7 @@ class MonolithUI(QMainWindow):
         self.vitals_win = None
         self._drag_pos = None
         self._chat_title = "Untitled Chat"
+        self._terminal_titles: dict[str, tuple[str, str]] = {}
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -152,6 +153,7 @@ class MonolithUI(QMainWindow):
                 self.stack.setCurrentWidget(w)
                 self._update_sidebar_state(module_selection=True)
                 self.module_strip.select_module(mod_id)
+                self.update_terminal_header(mod_id, *self._terminal_titles.get(mod_id, ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm"))))
                 return
 
     def _update_sidebar_state(self, page_idx=None, module_selection=False):
@@ -167,23 +169,42 @@ class MonolithUI(QMainWindow):
         else:
             self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
         status_text = status.value if hasattr(status, "value") else str(status)
-        if engine_key != "llm":
+        if not engine_key.startswith("llm"):
             status_text = f"{engine_key.upper()}: {status_text}"
         self.lbl_status.setText(status_text)
 
     def update_ctx(self, used):
         self.state.ctx_used = used
 
-    def update_terminal_header(self, title, timestamp):
-        self._chat_title = title or "Untitled Chat"
-        self.lbl_chat_title.setText(self._chat_title)
-        self.lbl_chat_time.setText(timestamp or QDateTime.currentDateTime().toString("ddd • HH:mm"))
+    def update_terminal_header(self, mod_id, title, timestamp):
+        if mod_id:
+            self._terminal_titles[mod_id] = (title or "Untitled Chat", timestamp or QDateTime.currentDateTime().toString("ddd • HH:mm"))
+
+        current = self.stack.currentWidget()
+        current_mod = getattr(current, "_mod_id", None) if current is not None else None
+        if not current_mod:
+            self.lbl_chat_title.clear()
+            self.lbl_chat_time.clear()
+            self.lbl_chat_title.hide()
+            self.lbl_chat_time.hide()
+            return
+
+        current_title, current_time = self._terminal_titles.get(
+            current_mod,
+            ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm")),
+        )
+        if current_mod == mod_id or mod_id == "":
+            self.lbl_chat_title.setText(current_title)
+            self.lbl_chat_time.setText(current_time)
+            self.lbl_chat_title.show()
+            self.lbl_chat_time.show()
 
     def set_page(self, page_id):
         target = self.pages.get(page_id)
         if target:
             self.stack.setCurrentWidget(target)
         self._update_sidebar_state(page_idx=page_id)
+        self.update_terminal_header("", "", "")
 
     def _build_top_bar(self):
         bar = QFrame()
@@ -195,16 +216,6 @@ class MonolithUI(QMainWindow):
         self.lbl_status = QLabel("READY")
         self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
 
-        btn_vitals = SkeetButton("VITALS")
-        btn_vitals.setFixedSize(75, 26)
-        btn_vitals.clicked.connect(self.toggle_vitals)
-
-        btn_overseer = SkeetButton("OVERSEER")
-        btn_overseer.setFixedSize(95, 26)
-        btn_overseer.clicked.connect(self.ui_bridge.sig_open_overseer.emit)
-
-        layout.addWidget(btn_vitals)
-        layout.addWidget(btn_overseer)
         layout.addWidget(self.lbl_status)
         layout.addStretch()
 
