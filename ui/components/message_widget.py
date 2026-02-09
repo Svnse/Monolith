@@ -42,21 +42,21 @@ class MessageWidget(QWidget):
         is_assistant = role == "assistant"
         is_system = role == "system"
         border_color = ACCENT_GOLD if is_assistant else "#1a1a1a"
-        bg = "transparent"
         if is_system:
-            bg = "transparent"
             border_color = "#222"
+        bottom_border = "1px solid #1a1a1a" if is_assistant else "none"
 
         self.setStyleSheet(f"""
             MessageWidget {{
-                background: {bg};
+                background: #111;
                 border-left: 2px solid {border_color};
-                border-top: none; border-right: none; border-bottom: 1px solid #222;
+                border-top: none; border-right: none;
+                border-bottom: {bottom_border};
             }}
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 3, 10, 3)
+        root.setContentsMargins(10, 3, 10, 3 if not is_assistant else 8)
         root.setSpacing(4)
 
         # --- Header row ---

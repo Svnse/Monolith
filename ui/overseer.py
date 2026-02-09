@@ -369,6 +369,10 @@ class OverseerWindow(QMainWindow):
     # ---- Signal handlers ----
 
     def _on_trace(self, msg: str) -> None:
+        try:
+            self.db.log_event("guard", "trace", {"message": msg})
+        except RuntimeError:
+            return
         self.db.log_event("guard", "trace", {"message": msg})
         sev = "INFO"
         lowered = msg.lower()

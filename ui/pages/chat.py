@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QLineEdit, QPushButton, QLabel, QFileDialog,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
     QMessageBox, QButtonGroup, QMenu
@@ -366,17 +366,17 @@ class PageChat(QWidget):
         right_stack.setChildrenCollapsible(False)
 
         trace_group = SkeetGroupBox("REASONING TRACE")
-        self.trace = QPlainTextEdit()
+        self.trace = QTextEdit()
         self.trace.setReadOnly(True)
         self.trace.setStyleSheet(f"""
-            QPlainTextEdit {{
+            QTextEdit {{
                 background-color: {BG_INPUT};
                 color: {FG_TEXT};
                 border: 1px solid #222;
                 font-family: 'Consolas', monospace;
                 font-size: 10px;
             }}
-            QPlainTextEdit::viewport {{
+            QTextEdit::viewport {{
                 background-color: {BG_INPUT};
             }}
             {SCROLLBAR_STYLE}
@@ -593,8 +593,13 @@ Continue from the interruption point. Do not repeat earlier content.
         else:
             state = "INFO"
 
-        indent = "" if state == "ERROR" else "    "
-        self.trace.appendPlainText(f"{indent}[{state}] {trace_msg}")
+        display_msg = trace_msg
+        if "→" in display_msg:
+            display_msg = display_msg[display_msg.index("→") + 1:].strip()
+        elif display_msg.startswith("ERROR"):
+            display_msg = display_msg.replace("ERROR:", "").strip()
+
+        self._trace_html(display_msg, state, error=(state == "ERROR"))
 
     def clear_chat(self):
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
@@ -672,6 +677,19 @@ Continue from the interruption point. Do not repeat earlier content.
             DEFAULT_CONFIG["max_tokens"],
         )
 
+    def _trace_html(self, msg, tag="INFO", error=False):
+        arrow_color = FG_ERROR if error else ACCENT_GOLD
+        tag_color = FG_ERROR if error else "#555"
+        self.trace.append(
+            f"<table width='100%' cellpadding='0' cellspacing='0'><tr>"
+            f"<td><span style='color:{arrow_color}'>→</span> {msg}</td>"
+            f"<td align='right' style='color:{tag_color}; white-space:nowrap'>[{tag}]</td>"
+            f"</tr></table>"
+        )
+
+    def _trace_plain(self, msg):
+        self.trace.append(f"<span style='color:#555'>{msg}</span>")
+
     def _on_model_capabilities(self, payload):
         model_ctx_length = payload.get("model_ctx_length")
         if model_ctx_length is None:
@@ -687,16 +705,19 @@ Continue from the interruption point. Do not repeat earlier content.
         # Surface context capacity info in reasoning trace
         if configured_ctx < model_ctx_length:
             pct = int((configured_ctx / model_ctx_length) * 100)
-            self.trace.appendPlainText(
-                f"[CTX] Context: {configured_ctx:,} / {model_ctx_length:,} tokens "
-                f"({pct}% of model capacity)"
+            self._trace_html(
+                f"Context: {configured_ctx:,} / {model_ctx_length:,} tokens "
+                f"({pct}% of model capacity)",
+                "CTX",
             )
-            self.trace.appendPlainText(
-                f"[CTX] Increase context limit in SETTINGS to use full {model_ctx_length:,} capacity"
+            self._trace_html(
+                f"Increase context limit in SETTINGS to use full {model_ctx_length:,} capacity",
+                "CTX",
             )
         else:
-            self.trace.appendPlainText(
-                f"[CTX] Context: {model_ctx_length:,} tokens (full capacity)"
+            self._trace_html(
+                f"Context: {model_ctx_length:,} tokens (full capacity)",
+                "CTX",
             )
 
     def _on_ctx_limit_changed(self, value):
@@ -883,7 +904,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self._title_generated = False
         self._suppress_title_regen = False
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
-        self.trace.appendPlainText("--- TRACE RESET ---")
+        self._trace_plain("--- TRACE RESET ---")
 
     def _prompt_clear_session(self):
         dialog = QMessageBox(self)
@@ -1197,8 +1218,8 @@ Continue from the interruption point. Do not repeat earlier content.
         self._update_trace_state = "requested"
         self._update_token_count = 0
         self._update_progress_index = 0
-        self.trace.appendPlainText("⟐ UPDATE REQUESTED")
-        self.trace.appendPlainText(f'⟐ USER PATCH: "{update_text}"')
+        self._trace_html("UPDATE REQUESTED", "UPDATE")
+        self._trace_html(f'USER PATCH: "{update_text}"', "UPDATE")
 
     def _start_update_streaming(self):
         self._update_trace_state = "streaming"
@@ -1217,7 +1238,7 @@ Continue from the interruption point. Do not repeat earlier content.
         while self._update_progress_index < len(thresholds):
             if pct >= thresholds[self._update_progress_index]:
                 percent = thresholds[self._update_progress_index]
-                self.trace.appendPlainText(f"⟐ UPDATE PROGRESS {percent}%")
+                self._trace_html(f"UPDATE PROGRESS {percent}%", "UPDATE")
                 self._update_progress_index += 1
                 continue
             break
@@ -1228,7 +1249,7 @@ Continue from the interruption point. Do not repeat earlier content.
         thresholds = [25, 50, 100]
         while self._update_progress_index < len(thresholds):
             percent = thresholds[self._update_progress_index]
-            self.trace.appendPlainText(f"⟐ UPDATE PROGRESS {percent}%")
+            self._trace_html(f"UPDATE PROGRESS {percent}%", "UPDATE")
             self._update_progress_index += 1
         self._update_trace_state = None
 
