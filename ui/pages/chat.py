@@ -26,6 +26,8 @@ class PageChat(QWidget):
     sig_unload = Signal()
     sig_stop = Signal()
     sig_sync_history = Signal(list)
+    sig_set_model_path = Signal(str)
+    sig_set_ctx_limit = Signal(int)
     sig_operator_loaded = Signal(str)
 
     def __init__(self, state, ui_bridge):
@@ -33,8 +35,6 @@ class PageChat(QWidget):
         self.state = state
         self.ui_bridge = ui_bridge
         self.config = load_config()
-        self.state.gguf_path = self.config.get("gguf_path")
-        self.state.ctx_limit = int(self.config.get("ctx_limit", self.state.ctx_limit))
         self._token_buf: list[str] = []
         self._flush_timer = QTimer(self)
         self._flush_timer.setInterval(25)
@@ -51,6 +51,7 @@ class PageChat(QWidget):
         self._active_widget: MessageWidget | None = None
         self._last_status = None
         self._is_running = False
+        self._is_model_loaded = False
         self._pending_update_text = None
         self._awaiting_update_restart = False
         self._update_trace_state = None
@@ -59,9 +60,6 @@ class PageChat(QWidget):
         self._config_dirty = False
         self._thinking_mode = bool(self.config.get("thinking_mode", False))
 
-        capabilities_signal = getattr(self.state, "sig_model_capabilities", None)
-        if capabilities_signal is not None:
-            capabilities_signal.connect(self._on_model_capabilities)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -198,6 +196,17 @@ class PageChat(QWidget):
         """)
         archive_layout.addWidget(self.archive_list)
 
+        self.lbl_behavior = QLabel("BEHAVIOR TAGS")
+        self.lbl_behavior.setStyleSheet(
+            f"color: #444; font-size: 8px; font-weight: bold; letter-spacing: 1px;"
+        )
+        self.behavior_tags = BehaviorTagInput([])
+        self.behavior_tags.tagsChanged.connect(self._on_behavior_tags_changed)
+        self.behavior_tags.setStyleSheet(
+            f"background: #111; border: 1px solid #1a1a1a; border-radius: 2px;"
+        )
+        self.behavior_tags.setMaximumHeight(36)
+
         # --- SETTINGS tab: AI Configuration + Save/Reset ---
         settings_tab = QWidget()
         settings_layout = QVBoxLayout(settings_tab)
@@ -206,6 +215,8 @@ class PageChat(QWidget):
         settings_layout.addWidget(self.s_top)
         settings_layout.addWidget(self.s_tok)
         settings_layout.addWidget(self.s_ctx)
+        settings_layout.addWidget(self.lbl_behavior)
+        settings_layout.addWidget(self.behavior_tags)
         settings_layout.addLayout(save_row)
         settings_layout.addStretch()
 
@@ -237,20 +248,6 @@ class PageChat(QWidget):
         """)
         chat_layout.addWidget(self.message_list)
         
-        # --- Behavior tags (above input, tag system) ---
-        lbl_behavior = QLabel("BEHAVIOR TAGS")
-        lbl_behavior.setStyleSheet(
-            f"color: #444; font-size: 8px; font-weight: bold; letter-spacing: 1px;"
-        )
-        self.behavior_tags = BehaviorTagInput([])
-        self.behavior_tags.tagsChanged.connect(self._on_behavior_tags_changed)
-        self.behavior_tags.setStyleSheet(
-            f"background: #111; border: 1px solid #1a1a1a; border-radius: 2px;"
-        )
-        self.behavior_tags.setMaximumHeight(36)
-        chat_layout.addWidget(lbl_behavior)
-        chat_layout.addWidget(self.behavior_tags)
-
         # --- Input toolbar (between separator and input box) ---
         input_toolbar = QHBoxLayout()
         input_toolbar.setContentsMargins(0, 0, 0, 0)
@@ -410,7 +407,7 @@ class PageChat(QWidget):
         self._apply_behavior_prompt(self.config.get("behavior_tags", []))
         self.behavior_tags.set_tags(self.config.get("behavior_tags", []))
         self._set_config_dirty(False)
-        if not self.state.model_loaded:
+        if not self._is_model_loaded:
             self._apply_default_limits()
 
     def send(self):
@@ -551,7 +548,7 @@ Continue from the interruption point. Do not repeat earlier content.
             self._flush_timer.start()
 
     def on_guard_finished(self, engine_key, task_id):
-        if engine_key != "llm":
+        if engine_key != getattr(self, "_engine_key", "llm"):
             return
         if not self._current_session.get("messages"):
             return
@@ -574,6 +571,11 @@ Continue from the interruption point. Do not repeat earlier content.
                 return
 
         # Categorize what we show
+        if "system online" in lowered:
+            self._is_model_loaded = True
+        elif "model unloaded" in lowered:
+            self._is_model_loaded = False
+
         if "error" in lowered:
             state = "ERROR"
         elif "token" in lowered:
@@ -591,15 +593,17 @@ Continue from the interruption point. Do not repeat earlier content.
         else:
             state = "INFO"
 
-        self.trace.appendPlainText(f"[{state}] {trace_msg}")
+        indent = "" if state == "ERROR" else "    "
+        self.trace.appendPlainText(f"{indent}[{state}] {trace_msg}")
 
     def clear_chat(self):
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
 
     def _sync_path_display(self):
-        if self.state.gguf_path:
-            self.path_display.setText(self.state.gguf_path)
-            self.path_display.setToolTip(self.state.gguf_path)
+        gguf_path = self.config.get("gguf_path")
+        if gguf_path:
+            self.path_display.setText(gguf_path)
+            self.path_display.setToolTip(str(gguf_path))
         else:
             self.path_display.clear()
             self.path_display.setToolTip("")
@@ -696,8 +700,8 @@ Continue from the interruption point. Do not repeat earlier content.
             )
 
     def _on_ctx_limit_changed(self, value):
-        self.state.ctx_limit = int(value)
         self._update_config_value("ctx_limit", int(value))
+        self.sig_set_ctx_limit.emit(int(value))
 
     def _on_behavior_tags_changed(self, tags):
         self._apply_behavior_prompt(tags)
@@ -752,7 +756,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self.s_top.slider.blockSignals(False)
         self.s_tok.slider.blockSignals(False)
         self.s_ctx.slider.blockSignals(False)
-        self.state.ctx_limit = int(DEFAULT_CONFIG["ctx_limit"])
+        self.sig_set_ctx_limit.emit(int(DEFAULT_CONFIG["ctx_limit"]))
         self.behavior_tags.set_tags(DEFAULT_CONFIG.get("behavior_tags", []))
         self._set_thinking_mode(False)
         self._set_config_dirty(True)
@@ -760,22 +764,22 @@ Continue from the interruption point. Do not repeat earlier content.
     def pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select GGUF", "", "GGUF (*.gguf)")
         if path:
-            self.state.gguf_path = path
             self.config["gguf_path"] = path
+            self.sig_set_model_path.emit(path)
             self._sync_path_display()
             self._set_config_dirty(True)
 
     def toggle_load(self):
-        if self.state.model_loaded:
+        if self._is_model_loaded:
             self.sig_unload.emit()
         else:
             self.sig_load.emit()
 
     def _update_load_button_text(self):
-        self.btn_load.setText("UNLOAD MODEL" if self.state.model_loaded else "LOAD MODEL")
+        self.btn_load.setText("UNLOAD MODEL" if self._is_model_loaded else "LOAD MODEL")
 
     def update_status(self, engine_key: str, status: SystemStatus):
-        if engine_key != "llm":
+        if engine_key != getattr(self, "_engine_key", "llm"):
             return
         is_loading = status in (SystemStatus.LOADING, SystemStatus.RUNNING)
         self.btn_load.setEnabled(not is_loading)
@@ -794,6 +798,8 @@ Continue from the interruption point. Do not repeat earlier content.
         if status == SystemStatus.RUNNING:
             self._set_send_button_state(is_running=True)
         elif status == SystemStatus.READY:
+            if self._last_status == SystemStatus.LOADING:
+                self._is_model_loaded = True
             self._set_send_button_state(is_running=False)
             self._rewrite_assistant_index = None
             if self._active_widget is not None:
@@ -810,7 +816,10 @@ Continue from the interruption point. Do not repeat earlier content.
         elif status == SystemStatus.LOADING:
             self._set_send_button_state(is_running=False)
             self.btn_send.setEnabled(False)
-        if status == SystemStatus.READY and not self.state.model_loaded:
+        elif status in (SystemStatus.UNLOADING, SystemStatus.ERROR):
+            self._is_model_loaded = False
+
+        if status == SystemStatus.READY and not self._is_model_loaded:
             self._apply_default_limits()
         self._last_status = status
 
@@ -852,7 +861,7 @@ Continue from the interruption point. Do not repeat earlier content.
         self.s_tok.slider.blockSignals(False)
         self.s_ctx.slider.blockSignals(False)
 
-        self.state.ctx_limit = int(slider_values["ctx_limit"])
+        self.sig_set_ctx_limit.emit(int(slider_values["ctx_limit"]))
 
         tags = config.get("behavior_tags", [])
         self.behavior_tags.set_tags(tags if isinstance(tags, list) else [])
@@ -860,7 +869,10 @@ Continue from the interruption point. Do not repeat earlier content.
         thinking_mode = bool(config.get("thinking_mode", False))
         self._set_thinking_mode(thinking_mode, "Standard" if thinking_mode else "Off")
 
-        self.state.gguf_path = config.get("gguf_path")
+        gguf_path = config.get("gguf_path")
+        if gguf_path:
+            self.config["gguf_path"] = gguf_path
+            self.sig_set_model_path.emit(str(gguf_path))
         self._sync_path_display()
 
         self._start_new_session()
@@ -1275,7 +1287,7 @@ Continue from the interruption point. Do not repeat earlier content.
     def _notify_header_update(self):
         dt = QDateTime.currentDateTime().toString("ddd • HH:mm")
         title = self._current_session.get("title") or self._derive_title(self._current_session.get("messages", []))
-        self.ui_bridge.sig_terminal_header.emit(title, dt)
+        self.ui_bridge.sig_terminal_header.emit(getattr(self, "_mod_id", ""), title, dt)
 
     def _derive_title(self, messages):
         stopwords = {

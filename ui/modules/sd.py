@@ -241,7 +241,7 @@ class SDModule(QWidget):
         self.inp_seed.valueChanged.connect(self._queue_save_config)
         self.guard.sig_image.connect(self._on_image)
         self.guard.sig_status.connect(self._on_status)
-        self.guard.sig_trace.connect(self._on_trace)
+        self.guard.sig_trace.connect(lambda _engine_key, message: self._on_trace(message))
 
     def _load_config(self):
         if self.config_path.exists():
