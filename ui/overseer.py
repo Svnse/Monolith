@@ -326,7 +326,7 @@ class OverseerWindow(QMainWindow):
         main_layout.addLayout(controls_layout)
 
         # --- Signal connections ---
-        self.guard.sig_trace.connect(self._on_trace)
+        self.guard.sig_trace.connect(lambda _engine_key, msg: self._on_trace(msg))
         self.guard.sig_status.connect(self._on_status)
         self.guard.sig_finished.connect(self._on_finished)
 

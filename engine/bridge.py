@@ -52,6 +52,10 @@ class EngineBridge(QObject):
         if hasattr(self.impl, "set_model_path"):
             self.impl.set_model_path(payload)
 
+    def set_ctx_limit(self, payload: dict) -> None:
+        if hasattr(self.impl, "set_ctx_limit"):
+            self.impl.set_ctx_limit(payload)
+
     def load_model(self) -> None:
         self.impl.load_model()
 

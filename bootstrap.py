@@ -4,7 +4,6 @@ from PySide6.QtWidgets import QApplication
 
 from core.state import AppState
 from engine.bridge import EngineBridge
-from engine.llm import LLMEngine
 from engine.vision import VisionEngine
 from monokernel.bridge import MonoBridge
 from monokernel.dock import MonoDock
@@ -20,11 +19,9 @@ from ui.overseer import OverseerWindow
 def main():
     app = QApplication(sys.argv)
     state = AppState()
-    engine_impl = LLMEngine(state)
-    engine = EngineBridge(engine_impl)
     vision_engine_impl = VisionEngine(state)
     vision_engine = EngineBridge(vision_engine_impl)
-    guard = MonoGuard(state, {"llm": engine, "vision": vision_engine})
+    guard = MonoGuard(state, {"vision": vision_engine})
     dock = MonoDock(guard)
     bridge = MonoBridge(dock)
 
@@ -42,11 +39,10 @@ def main():
 
     # global chrome-only wiring stays here
     guard.sig_status.connect(ui.update_status)
-    guard.sig_usage.connect(ui.update_ctx)
+    guard.sig_usage.connect(lambda _ek, used: ui.update_ctx(used))
     app.aboutToQuit.connect(guard.stop)
     app.aboutToQuit.connect(overseer.db.close)
     app.aboutToQuit.connect(lambda: guard.enable_viztracer(False) if guard._viztracer is not None else None)
-    app.aboutToQuit.connect(engine.shutdown)
     app.aboutToQuit.connect(vision_engine.shutdown)
 
     ui.show()

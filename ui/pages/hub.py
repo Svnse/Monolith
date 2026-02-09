@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (
     QFrame,
     QPushButton,
     QHBoxLayout,
-    QInputDialog,
+    QDialog,
+    QLineEdit,
     QMessageBox,
 )
 
@@ -18,6 +19,34 @@ from core.style import (
 )
 from ui.components.atoms import SkeetButton
 
+
+class _NameDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("New Operator")
+        self.setModal(True)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {BG_INPUT}; color: {FG_TEXT}; }}
+            QLineEdit {{ background: #101010; color: {FG_TEXT}; border: 1px solid #333; padding: 6px; }}
+            QPushButton {{ color: {FG_TEXT}; background: transparent; border: 1px solid #333; padding: 6px 12px; }}
+            QPushButton:hover {{ border: 1px solid {ACCENT_GOLD}; color: {ACCENT_GOLD}; }}
+        """)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Operator name:"))
+        self.input = QLineEdit()
+        layout.addWidget(self.input)
+        row = QHBoxLayout()
+        row.addStretch()
+        ok_btn = SkeetButton("OK")
+        cancel_btn = SkeetButton("CANCEL")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+        row.addWidget(ok_btn)
+        row.addWidget(cancel_btn)
+        layout.addLayout(row)
+
+    def value(self) -> str:
+        return self.input.text().strip()
 
 class _OperatorCard(QPushButton):
     """Glassmorphic operator card with structured info."""
@@ -207,10 +236,10 @@ class PageHub(QWidget):
         if self._config_provider is None:
             QMessageBox.warning(self, "Operator", "Terminal page is not mounted.")
             return
-        name, ok = QInputDialog.getText(self, "New Operator", "Operator name:")
-        if not ok:
+        dialog = _NameDialog(self)
+        if dialog.exec() != QDialog.Accepted:
             return
-        clean_name = name.strip()
+        clean_name = dialog.value()
         if not clean_name:
             return
         config = dict(self._config_provider() or {})
