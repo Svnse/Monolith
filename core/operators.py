@@ -29,8 +29,10 @@ class OperatorManager:
                     data = json.load(handle)
             except Exception:
                 continue
-            if isinstance(data, dict) and isinstance(data.get("name"), str) and isinstance(data.get("config"), dict):
-                operators.append({"name": data["name"], "path": path})
+            if isinstance(data, dict) and isinstance(data.get("name"), str):
+                # Accept both new format (has "modules") and legacy (has "config")
+                if isinstance(data.get("modules"), list) or isinstance(data.get("config"), dict):
+                    operators.append({"name": data["name"], "path": path})
         operators.sort(key=lambda item: item["name"].lower())
         return operators
 
@@ -45,10 +47,14 @@ class OperatorManager:
     def save_operator(self, name: str, data: dict) -> Path:
         payload = dict(data or {})
         payload["name"] = name
-        payload.setdefault("config", {})
         payload.setdefault("layout", {})
         payload.setdefault("geometry", {})
-        payload["config"].pop("system_prompt", None)
+        # Strip system_prompt from config (legacy format) or module configs (new format)
+        if isinstance(payload.get("config"), dict):
+            payload["config"].pop("system_prompt", None)
+        for mod in payload.get("modules", []):
+            if isinstance(mod.get("config"), dict):
+                mod["config"].pop("system_prompt", None)
         path = self._path_for_name(name)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)

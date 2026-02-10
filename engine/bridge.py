@@ -48,6 +48,10 @@ class EngineBridge(QObject):
         if self._is_current_generation():
             self.sig_image.emit(image)
 
+    def set_history(self, payload: dict) -> None:
+        if hasattr(self.impl, "set_history"):
+            self.impl.set_history(payload)
+
     def set_model_path(self, payload: dict) -> None:
         if hasattr(self.impl, "set_model_path"):
             self.impl.set_model_path(payload)

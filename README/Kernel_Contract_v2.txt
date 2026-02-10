@@ -5,7 +5,7 @@ The Monolith kernel is a four-layer execution hierarchy:
 
 UI → MonoBridge → MonoDock → MonoGuard → Engines
 
-
+SIGNAL PASSTHROUGH LAW: Every command string in ENGINE_DISPATCH must have a matching method on EngineBridge. If guard.py dispatches to it, bridge.py must forward it. Violation = silent permanent queue deadlock. When adding any new command: update ENGINE_DISPATCH, add handler on LLMEngine, and add passthrough on EngineBridge. All three or none.
 Three flows. No exceptions.
 
 Flow	Direction	Behavior

@@ -50,8 +50,9 @@ class _NameDialog(QDialog):
 
 class _OperatorCard(QPushButton):
     """Glassmorphic operator card with structured info."""
+    sig_double_clicked = Signal(str)
 
-    def __init__(self, name: str, gguf_path: str, tag_count: int):
+    def __init__(self, name: str, gguf_path: str, tag_count: int, module_count: int = 0):
         super().__init__()
         self.op_name = name
         self.setCursor(Qt.PointingHandCursor)
@@ -72,9 +73,14 @@ class _OperatorCard(QPushButton):
         lbl_model.setWordWrap(True)
         layout.addWidget(lbl_model)
 
-        lbl_tags = QLabel(f"{tag_count} tag{'s' if tag_count != 1 else ''}")
-        lbl_tags.setStyleSheet(f"color: #444; font-size: 9px; background: transparent;")
-        layout.addWidget(lbl_tags)
+        info_parts = []
+        if module_count > 0:
+            info_parts.append(f"{module_count} module{'s' if module_count != 1 else ''}")
+        if tag_count > 0:
+            info_parts.append(f"{tag_count} tag{'s' if tag_count != 1 else ''}")
+        lbl_info = QLabel(" · ".join(info_parts) if info_parts else "empty")
+        lbl_info.setStyleSheet(f"color: #444; font-size: 9px; background: transparent;")
+        layout.addWidget(lbl_info)
 
         layout.addStretch()
         self._apply_style(False)
@@ -97,6 +103,9 @@ class _OperatorCard(QPushButton):
 
     def set_selected(self, selected: bool):
         self._apply_style(selected)
+
+    def mouseDoubleClickEvent(self, event):
+        self.sig_double_clicked.emit(self.op_name)
 
 
 class PageHub(QWidget):
@@ -183,11 +192,16 @@ class PageHub(QWidget):
         self.btn_new = SkeetButton("＋ NEW")
         self.btn_new.setFixedHeight(28)
         self.btn_new.clicked.connect(self._create_operator_from_current)
+        self.btn_load = SkeetButton("▶ LOAD")
+        self.btn_load.setFixedHeight(28)
+        self.btn_load.clicked.connect(self._load_selected)
+        self.btn_load.setEnabled(False)
         self.btn_delete = SkeetButton("— DELETE")
         self.btn_delete.setFixedHeight(28)
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_delete.setEnabled(False)
         btn_row.addWidget(self.btn_new)
+        btn_row.addWidget(self.btn_load)
         btn_row.addWidget(self.btn_delete)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -211,25 +225,43 @@ class PageHub(QWidget):
                 data = self._operator_manager.load_operator(name)
             except Exception:
                 continue
-            cfg = data.get("config", {})
+            # New format: modules list; legacy: top-level config
+            modules = data.get("modules", [])
+            module_count = len(modules)
+            if modules:
+                # Find first terminal's config for display
+                term = next((m for m in modules if m.get("addon_id") == "terminal"), None)
+                cfg = term.get("config", {}) if term else {}
+            else:
+                cfg = data.get("config", {})
             gguf_path = self._truncate_path(cfg.get("gguf_path"))
             tag_count = len(cfg.get("behavior_tags") or [])
 
-            card = _OperatorCard(name, gguf_path, tag_count)
+            card = _OperatorCard(name, gguf_path, tag_count, module_count)
             card.clicked.connect(lambda _checked=False, op_name=name: self._on_card_clicked(op_name))
+            card.sig_double_clicked.connect(self._load_operator)
             row, col = divmod(idx, 3)
             self.grid.addWidget(card, row + 1, col)  # +1 to skip row 0 (empty_label)
             self._cards[name] = card
 
         if self._selected_name not in self._cards:
             self._selected_name = None
+            self.btn_load.setEnabled(False)
             self.btn_delete.setEnabled(False)
 
     def _on_card_clicked(self, name: str):
         self._selected_name = name
         for op_name, card in self._cards.items():
             card.set_selected(op_name == name)
+        self.btn_load.setEnabled(True)
         self.btn_delete.setEnabled(True)
+
+    def _load_selected(self):
+        if self._selected_name:
+            self.sig_load_operator.emit(self._selected_name)
+
+    def _load_operator(self, name: str):
+        self._on_card_clicked(name)
         self.sig_load_operator.emit(name)
 
     def _create_operator_from_current(self):
@@ -242,8 +274,12 @@ class PageHub(QWidget):
         clean_name = dialog.value()
         if not clean_name:
             return
-        config = dict(self._config_provider() or {})
-        data = {"name": clean_name, "config": config, "layout": {}, "geometry": {}}
+        snapshot = dict(self._config_provider() or {})
+        data = {"name": clean_name, "layout": {}, "geometry": {}}
+        data.update(snapshot)  # merges "modules" and "module_order" into top level
+        # Keep a "config" key for backward compat if snapshot has no modules
+        if "modules" not in data:
+            data["config"] = snapshot
         self.sig_save_operator.emit(clean_name, data)
         self.refresh_cards()
 
@@ -254,6 +290,7 @@ class PageHub(QWidget):
             QMessageBox.warning(self, "Operator", "Delete failed.")
             return
         self._selected_name = None
+        self.btn_load.setEnabled(False)
         self.btn_delete.setEnabled(False)
         self.refresh_cards()
 

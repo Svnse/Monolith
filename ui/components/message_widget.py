@@ -1,5 +1,5 @@
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from core.style import ACCENT_GOLD, FG_DIM, FG_TEXT, BORDER_DARK
 
@@ -38,6 +38,7 @@ class MessageWidget(QWidget):
         self._content = text or ""
 
         self.setAttribute(Qt.WA_Hover, True)
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         is_assistant = role == "assistant"
         is_system = role == "system"
@@ -48,7 +49,7 @@ class MessageWidget(QWidget):
 
         self.setStyleSheet(f"""
             MessageWidget {{
-                background: #111;
+                background: transparent;
                 border-left: 2px solid {border_color};
                 border-top: none; border-right: none;
                 border-bottom: {bottom_border};
@@ -119,6 +120,23 @@ class MessageWidget(QWidget):
         )
         self.lbl_content.setText(self._content)
         root.addWidget(self.lbl_content)
+
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+
+    # ------------------------------------------------------------------
+    def sizeHint(self):
+        """Compute height that accounts for word-wrapped content label."""
+        w = self.width() if self.width() > 50 else 600
+        margins = self.layout().contentsMargins()
+        content_w = w - margins.left() - margins.right() - 2  # 2px border-left
+        # heightForWidth respects word-wrap and font metrics
+        content_h = self.lbl_content.heightForWidth(max(content_w, 60))
+        if content_h <= 0:
+            content_h = self.lbl_content.sizeHint().height()
+        header_h = 20  # role label row
+        spacing = self.layout().spacing()  # 4
+        total = margins.top() + header_h + spacing + content_h + margins.bottom()
+        return QSize(w, max(total, 30))
 
     def enterEvent(self, event):
         self.actions.setVisible(True)

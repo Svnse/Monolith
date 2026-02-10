@@ -19,6 +19,11 @@ def terminal_factory(ctx: AddonContext):
     instance_id = str(uuid.uuid4())
     engine_key = f"llm_{instance_id}"
 
+    short_id = instance_id[:8]
+
+    def _trace(msg):
+        ctx.guard.sig_trace.emit("system", msg)
+
     llm_engine = LLMEngine(ctx.state)
     engine_bridge = EngineBridge(llm_engine)
     ctx.guard.register_engine(engine_key, engine_bridge)
@@ -45,9 +50,13 @@ def terminal_factory(ctx: AddonContext):
     w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
 
     # outgoing (addon -> bridge)
-    w.sig_generate.connect(
-        lambda prompt, thinking_mode: ctx.bridge.submit(
-            ctx.bridge.wrap(
+    def _on_generate(prompt, thinking_mode):
+        try:
+            model = w.config.get("gguf_path", "unknown")
+            model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
+            think_label = "think=ON" if thinking_mode else "think=OFF"
+            _trace(f"[LLM:{short_id}] generating — {think_label}, model={model_name}, prompt={repr(prompt[:50])}")
+            task = ctx.bridge.wrap(
                 "terminal",
                 "generate",
                 engine_key,
@@ -58,26 +67,49 @@ def terminal_factory(ctx: AddonContext):
                     "ctx_limit": int(w.config.get("ctx_limit", 8192)),
                 },
             )
-        )
-    )
+            ctx.bridge.submit(task)
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in generate: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_generate.connect(_on_generate)
     w.sig_load.connect(
         lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "load", engine_key))
     )
     w.sig_unload.connect(
         lambda: ctx.bridge.submit(ctx.bridge.wrap("terminal", "unload", engine_key))
     )
-    w.sig_stop.connect(lambda: ctx.bridge.stop(engine_key))
-    w.sig_sync_history.connect(
-        lambda history: ctx.bridge.submit(
-            ctx.bridge.wrap(
-                "terminal",
-                "set_history",
-                engine_key,
-                payload={"history": history},
+    def _on_stop():
+        try:
+            _trace(f"[LLM:{short_id}] stopped — generation halted")
+            ctx.bridge.stop(engine_key)
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in stop: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_stop.connect(_on_stop)
+
+    def _on_sync_history(history):
+        try:
+            _trace(f"[LLM:{short_id}] syncing history — {len(history)} messages")
+            ctx.bridge.submit(
+                ctx.bridge.wrap(
+                    "terminal",
+                    "set_history",
+                    engine_key,
+                    payload={"history": history},
+                )
             )
-        )
-    )
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in sync_history: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_sync_history.connect(_on_sync_history)
     ctx.guard.sig_status.connect(w.update_status)
+    w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     # incoming (guard -> addon)
     ctx.guard.sig_token.connect(
         lambda ek, t: w.append_token(t) if ek == engine_key else None
@@ -109,23 +141,116 @@ def addons_page_factory(ctx: AddonContext):
 def hub_factory(ctx: AddonContext):
     manager = OperatorManager()
 
-    def _current_terminal_config():
+    def _snapshot_workspace():
+        """Capture full workspace state: all open modules + terminal config/messages."""
         if not ctx.ui:
             return {}
-        for i in range(ctx.ui.stack.count()):
-            widget = ctx.ui.stack.widget(i)
-            if isinstance(widget, PageChat):
-                return dict(widget.config)
-        return {}
 
-    w = PageHub(config_provider=_current_terminal_config, operator_manager=manager)
+        modules = []
+        module_order = []
+        for mod_id in ctx.ui.module_strip.get_order():
+            # Find widget by mod_id
+            widget = None
+            for i in range(ctx.ui.stack.count()):
+                w = ctx.ui.stack.widget(i)
+                if getattr(w, '_mod_id', None) == mod_id:
+                    widget = w
+                    break
+            if not widget:
+                continue
+
+            addon_id = getattr(widget, '_addon_id', None)
+            if not addon_id:
+                continue
+
+            module_order.append(addon_id)
+            entry = {"addon_id": addon_id}
+
+            # For terminals, capture config + chat messages
+            if isinstance(widget, PageChat):
+                entry["config"] = dict(widget.config)
+                session = getattr(widget, '_current_session', None)
+                if session:
+                    entry["messages"] = list(session.get("messages", []))
+                    entry["session_title"] = session.get("title")
+                    entry["assistant_tokens"] = session.get("assistant_tokens", 0)
+
+            modules.append(entry)
+
+        ctx.guard.sig_trace.emit("system", f"[OPERATOR] snapshot: {len(modules)} modules")
+        return {"modules": modules, "module_order": module_order}
+
+    w = PageHub(config_provider=_snapshot_workspace, operator_manager=manager)
 
     def _load_operator(name: str):
+        ctx.guard.sig_trace.emit("system", f"[OPERATOR] loading '{name}'")
         try:
             operator_data = manager.load_operator(name)
-        except Exception:
+        except Exception as e:
+            ctx.guard.sig_trace.emit("system", f"[OPERATOR] failed to load: {e}")
             return
-        ctx.ui_bridge.sig_apply_operator.emit(operator_data)
+
+        if not ctx.ui or not ctx.host:
+            return
+
+        # --- New format: has "modules" list ---
+        if "modules" in operator_data:
+            modules = operator_data["modules"]
+            ctx.guard.sig_trace.emit("system", f"[OPERATOR] restoring {len(modules)} modules")
+
+            # Close all existing modules
+            for mod_id in list(ctx.ui.module_strip.get_order()):
+                ctx.ui.close_module(mod_id)
+
+            # Launch each module from snapshot
+            first_terminal_mod_id = None
+            for entry in modules:
+                addon_id = entry.get("addon_id")
+                if not addon_id:
+                    continue
+                new_mod_id = ctx.host.launch_module(addon_id)
+                if not new_mod_id:
+                    ctx.guard.sig_trace.emit("system", f"[OPERATOR] failed to launch {addon_id}")
+                    continue
+
+                # For terminals with saved state, apply config + messages
+                if addon_id == "terminal" and "config" in entry:
+                    for i in range(ctx.ui.stack.count()):
+                        widget = ctx.ui.stack.widget(i)
+                        if getattr(widget, '_mod_id', None) == new_mod_id and isinstance(widget, PageChat):
+                            widget.apply_operator(entry)
+                            break
+                    if not first_terminal_mod_id:
+                        first_terminal_mod_id = new_mod_id
+
+            # Switch to first terminal
+            if first_terminal_mod_id:
+                ctx.ui.switch_to_module(first_terminal_mod_id)
+
+        # --- Legacy format: top-level "config" only ---
+        else:
+            ctx.guard.sig_trace.emit("system", f"[OPERATOR] legacy format for '{name}'")
+            target_widget = None
+            for i in range(ctx.ui.stack.count()):
+                widget = ctx.ui.stack.widget(i)
+                if isinstance(widget, PageChat):
+                    target_widget = widget
+                    break
+
+            if not target_widget:
+                ctx.host.launch_module("terminal")
+                for i in range(ctx.ui.stack.count()):
+                    widget = ctx.ui.stack.widget(i)
+                    if isinstance(widget, PageChat):
+                        target_widget = widget
+                        break
+
+            ctx.ui_bridge.sig_apply_operator.emit(operator_data)
+
+            if target_widget:
+                mod_id = getattr(target_widget, "_mod_id", None)
+                if mod_id:
+                    ctx.ui.switch_to_module(mod_id)
 
     w.sig_load_operator.connect(_load_operator)
     w.sig_save_operator.connect(lambda name, data: manager.save_operator(name, data))

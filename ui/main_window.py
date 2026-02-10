@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QFrame, QLabel, QStackedLayout
 )
-from PySide6.QtCore import Qt, QDateTime
+from PySide6.QtCore import Qt, QDateTime, QTimer
 from PySide6.QtGui import QMouseEvent
 
 from core.state import SystemStatus, AppState
@@ -12,7 +12,7 @@ from ui.bridge import UIBridge
 from core.style import BG_MAIN, BG_SIDEBAR, FG_ACCENT, FG_ERROR, FG_WARN
 from ui.addons.host import AddonHost
 from ui.components.atoms import SidebarButton
-from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock, FlameLabel
+from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock
 from ui.components.module_strip import ModuleStrip
 
 class MonolithUI(QMainWindow):
@@ -92,6 +92,21 @@ class MonolithUI(QMainWindow):
         content_layout.addLayout(self.center_vbox)
 
         root_layout.addLayout(content_layout)
+
+        # --- Bottom status bar ---
+        bottom_bar = QHBoxLayout()
+        bottom_bar.setContentsMargins(0, 0, 8, 2)
+        bottom_bar.addStretch()
+        self.lbl_status = QLabel("READY")
+        self.lbl_status.setStyleSheet(f"color: #555; font-size: 8px; font-weight: bold; background: transparent;")
+        bottom_bar.addWidget(self.lbl_status)
+        root_layout.addLayout(bottom_bar)
+
+        # --- Time update timer ---
+        self._time_timer = QTimer(self)
+        self._time_timer.timeout.connect(self._update_time_display)
+        self._time_timer.start(60000)
+
         self.ui_bridge.sig_terminal_header.connect(self.update_terminal_header)
 
     def attach_host(self, host: AddonHost) -> None:
@@ -153,7 +168,12 @@ class MonolithUI(QMainWindow):
                 self.stack.setCurrentWidget(w)
                 self._update_sidebar_state(module_selection=True)
                 self.module_strip.select_module(mod_id)
-                self.update_terminal_header(mod_id, *self._terminal_titles.get(mod_id, ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm"))))
+                # Only show chat title for terminal modules
+                if getattr(w, '_addon_id', None) == "terminal":
+                    self.update_terminal_header(mod_id, *self._terminal_titles.get(mod_id, ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm"))))
+                else:
+                    self.lbl_chat_title.hide()
+                    self.lbl_chat_time.hide()
                 return
 
     def _update_sidebar_state(self, page_idx=None, module_selection=False):
@@ -163,11 +183,11 @@ class MonolithUI(QMainWindow):
 
     def update_status(self, engine_key: str, status: SystemStatus):
         if status == SystemStatus.ERROR:
-            self.lbl_status.setStyleSheet(f"color: {FG_ERROR}; font-size: 10px; font-weight: bold;")
+            self.lbl_status.setStyleSheet(f"color: {FG_ERROR}; font-size: 8px; font-weight: bold; background: transparent;")
         elif status == SystemStatus.LOADING:
-            self.lbl_status.setStyleSheet(f"color: {FG_WARN}; font-size: 10px; font-weight: bold;")
+            self.lbl_status.setStyleSheet(f"color: {FG_WARN}; font-size: 8px; font-weight: bold; background: transparent;")
         else:
-            self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
+            self.lbl_status.setStyleSheet(f"color: #555; font-size: 8px; font-weight: bold; background: transparent;")
         status_text = status.value if hasattr(status, "value") else str(status)
         if not engine_key.startswith("llm"):
             status_text = f"{engine_key.upper()}: {status_text}"
@@ -206,6 +226,16 @@ class MonolithUI(QMainWindow):
         self._update_sidebar_state(page_idx=page_id)
         self.update_terminal_header("", "", "")
 
+    def _update_time_display(self):
+        current = self.stack.currentWidget()
+        current_mod = getattr(current, "_mod_id", None) if current is not None else None
+        if current_mod and getattr(current, "_addon_id", None) == "terminal":
+            now = QDateTime.currentDateTime().toString("ddd • HH:mm")
+            self.lbl_chat_time.setText(now)
+            if current_mod in self._terminal_titles:
+                title = self._terminal_titles[current_mod][0]
+                self._terminal_titles[current_mod] = (title, now)
+
     def _build_top_bar(self):
         bar = QFrame()
         bar.setFixedHeight(35)
@@ -213,14 +243,12 @@ class MonolithUI(QMainWindow):
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(10, 0, 10, 0)
 
-        self.lbl_status = QLabel("READY")
-        self.lbl_status.setStyleSheet(f"color: {FG_ACCENT}; font-size: 10px; font-weight: bold;")
-
-        layout.addWidget(self.lbl_status)
-        layout.addStretch()
-
-        self.lbl_model = FlameLabel("MONOLITH")
-        layout.addWidget(self.lbl_model)
+        lbl_monolith = QLabel("MONOLITH")
+        lbl_monolith.setStyleSheet(
+            "color: #8a7340; font-size: 14px; font-weight: bold; "
+            "letter-spacing: 3px; background: transparent;"
+        )
+        layout.addWidget(lbl_monolith)
         layout.addStretch()
 
         self.lbl_chat_title = QLabel(self._chat_title)

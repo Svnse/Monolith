@@ -48,11 +48,13 @@ class GeneratorWorker(QThread):
         self.max_tokens = max_tokens
 
     def run(self):
+        self.trace.emit(f"[WORKER] started: msgs={len(self.messages)}, temp={self.temp}, max_tokens={self.max_tokens}")
         self.trace.emit("→ inference started")
         assistant_chunks = []
         completed = False
         try:
             if self.isInterruptionRequested():
+                self.trace.emit("[WORKER] interrupted before inference")
                 return
 
             stream = self.llm.create_chat_completion(
@@ -80,8 +82,10 @@ class GeneratorWorker(QThread):
                 completed = True
                 self.trace.emit("→ inference complete")
         except Exception as e:
+            self.trace.emit(f"[WORKER] EXCEPTION: {e}")
             self.trace.emit(f"<span style='color:red'>ERROR: {e}</span>")
         finally:
+            self.trace.emit(f"[WORKER] finished: completed={completed}, chunks={len(assistant_chunks)}")
             self.done.emit(completed, "".join(assistant_chunks))
 
 class LLMEngine(QObject):
@@ -253,6 +257,7 @@ class LLMEngine(QObject):
         self.set_status(SystemStatus.RUNNING)
 
         prompt = payload.get("prompt", "")
+        self.sig_trace.emit(f"[ENGINE] generate: history_len={len(self.conversation_history)}, prompt={repr(prompt[:80])}, model_loaded={self.model_loaded}")
         config = payload.get("config")
         if config is None:
             config = load_config()
@@ -318,6 +323,7 @@ class LLMEngine(QObject):
         self.sig_usage.emit(count)
 
     def _on_gen_finish(self, completed, assistant_text):
+        self.sig_trace.emit(f"[ENGINE] _on_gen_finish: completed={completed}, text_len={len(assistant_text)}")
         if completed and not self._ephemeral_generation:
             self.conversation_history.append(
                 {"role": "assistant", "content": assistant_text}

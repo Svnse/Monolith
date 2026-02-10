@@ -123,22 +123,26 @@ class MonoGuard(QObject):
     def submit(self, task: Task) -> bool:
         engine = self.engines.get(task.target)
         if engine is None:
+            self.sig_trace.emit("system", f"[GUARD] submit: REJECTED unknown engine target={task.target}")
             self.sig_trace.emit("system", f"ERROR: Unknown engine target: {task.target}")
             return False
 
         method_name = ENGINE_DISPATCH.get(task.command)
         if not method_name:
+            self.sig_trace.emit("system", f"[GUARD] submit: REJECTED unknown command={task.command}")
             self.sig_trace.emit("system", f"ERROR: Unknown command: {task.command}")
             task.status = TaskStatus.FAILED
             return False
 
         handler = getattr(engine, method_name, None)
         if not handler:
+            self.sig_trace.emit("system", f"[GUARD] submit: REJECTED no handler for {method_name}")
             self.sig_trace.emit("system", f"ERROR: Engine lacks handler: {method_name}")
             task.status = TaskStatus.FAILED
             return False
 
         if task.command in IMMEDIATE_COMMANDS:
+            self.sig_trace.emit("system", f"[GUARD] submit: IMMEDIATE {task.command} task={task.id}")
             self.sig_trace.emit("system", f"GUARD: IMMEDIATE {task.command} task={task.id}")
             task.status = TaskStatus.RUNNING
             handler(task.payload)
@@ -146,9 +150,12 @@ class MonoGuard(QObject):
             return True
 
         if self.active_tasks.get(task.target) is not None:
+            active = self.active_tasks.get(task.target)
+            self.sig_trace.emit("system", f"[GUARD] submit: REJECTED BUSY target={task.target}, active_task={active.id if active else None}, active_cmd={active.command if active else None}")
             self.sig_trace.emit("system", f"GUARD: rejected task={task.id} target={task.target} (busy)")
             return False
 
+        self.sig_trace.emit("system", f"[GUARD] submit: ACCEPTED task={task.id} cmd={task.command} target={task.target}")
         self.sig_trace.emit("system", f"GUARD: accepted task={task.id} target={task.target} command={task.command}")
         self.active_tasks[task.target] = task
         task.status = TaskStatus.RUNNING
@@ -182,6 +189,7 @@ class MonoGuard(QObject):
             self.sig_trace.emit(engine_key, f"GUARD: finished engine={engine_key} task={task.id}")
 
     def _on_status_changed(self, engine_key: str, new_status: SystemStatus) -> None:
+        self.sig_trace.emit("system", f"[GUARD] _on_status_changed: engine={engine_key}, status={new_status}, active_task={self.active_tasks.get(engine_key) is not None}")
         self.sig_status.emit(engine_key, new_status)
 
         if new_status == SystemStatus.ERROR:

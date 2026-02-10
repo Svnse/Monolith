@@ -42,6 +42,7 @@ class AddonHost:
             self.ctx.guard.sig_trace.emit("system", f"<span style='color:red'>ADDON ERROR: {e}</span>")
             return ""
 
+        widget._addon_id = addon_id
         if not hasattr(widget, "_mod_id"):
             widget._mod_id = instance_id
         else:

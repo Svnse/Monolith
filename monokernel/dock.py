@@ -17,6 +17,7 @@ class MonoDock:
         self.guard.sig_engine_ready.connect(self._on_engine_ready)
 
     def enqueue(self, task: Task) -> None:
+        self.guard.sig_trace.emit("system", f"[DOCK] enqueue: task={task.id}, cmd={task.command}, target={task.target}, priority={task.priority}")
         if task.priority == 1:
             self.on_stop(task.target)
             return
@@ -55,9 +56,11 @@ class MonoDock:
 
     def _try_submit(self, engine_key: str) -> None:
         if self._in_submit.get(engine_key):
+            self.guard.sig_trace.emit("system", f"[DOCK] _try_submit: BLOCKED by _in_submit for {engine_key}")
             return
         queue = self.queues.get(engine_key)
         if not queue:
+            self.guard.sig_trace.emit("system", f"[DOCK] _try_submit: empty queue for {engine_key}")
             return
 
         self._in_submit[engine_key] = True
@@ -65,12 +68,14 @@ class MonoDock:
             while queue:
                 task = queue[0]
                 if self._is_cancelled(task):
+                    self.guard.sig_trace.emit("system", f"[DOCK] _try_submit: CANCELLED task={task.id}, cmd={task.command}")
                     task.status = TaskStatus.CANCELLED
                     if queue:
                         queue.popleft()
                     self.cancelled_task_ids.discard(str(task.id))
                     continue
                 accepted = self.guard.submit(task)
+                self.guard.sig_trace.emit("system", f"[DOCK] _try_submit: guard.submit returned {accepted} for task={task.id}, cmd={task.command}")
                 if accepted and queue:
                     queue.popleft()
                 break

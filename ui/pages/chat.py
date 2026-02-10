@@ -29,6 +29,7 @@ class PageChat(QWidget):
     sig_set_model_path = Signal(str)
     sig_set_ctx_limit = Signal(int)
     sig_operator_loaded = Signal(str)
+    sig_debug = Signal(str)
 
     def __init__(self, state, ui_bridge):
         super().__init__()
@@ -59,6 +60,9 @@ class PageChat(QWidget):
         self._update_progress_index = 0
         self._config_dirty = False
         self._thinking_mode = bool(self.config.get("thinking_mode", False))
+        # When user clicks Edit/Regen/Delete while a generation is running, we STOP first,
+        # then apply the mutation on the next READY.
+        self._pending_mutation = None  # type: ignore[assignment]
 
 
         layout = QVBoxLayout(self)
@@ -161,6 +165,80 @@ class PageChat(QWidget):
         control_layout = QVBoxLayout(control_tab)
         control_layout.setSpacing(12)
         control_layout.addWidget(grp_load)
+
+        # --- Collapsible OPTIONS panel ---
+        self._options_expanded = False
+        self.btn_options_toggle = QPushButton("▸ OPTIONS")
+        self.btn_options_toggle.setCursor(Qt.PointingHandCursor)
+        self.btn_options_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none;
+                color: {FG_DIM}; font-size: 9px; font-weight: bold;
+                letter-spacing: 1px; text-align: left; padding: 4px 0;
+            }}
+            QPushButton:hover {{ color: {ACCENT_GOLD}; }}
+        """)
+        self.btn_options_toggle.clicked.connect(self._toggle_options_panel)
+        control_layout.addWidget(self.btn_options_toggle)
+
+        self.options_panel = QWidget()
+        self.options_panel.setVisible(False)
+        options_layout = QVBoxLayout(self.options_panel)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(8)
+
+        # Attach file button
+        self.btn_attach = SkeetButton("📎  ATTACH FILE")
+        self.btn_attach.clicked.connect(self._attach_file_placeholder)
+        options_layout.addWidget(self.btn_attach)
+
+        # Think mode toggle row
+        think_row = QHBoxLayout()
+        think_row.setSpacing(4)
+        lbl_think = QLabel("THINK")
+        lbl_think.setStyleSheet(f"color: {FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 1px;")
+        think_row.addWidget(lbl_think)
+
+        think_style = f"""
+            QPushButton {{
+                background: #181818; border: 1px solid #333; color: {FG_DIM};
+                padding: 4px 10px; font-size: 9px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:checked {{
+                background: #222; color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD};
+            }}
+            QPushButton:hover {{ color: {FG_TEXT}; border: 1px solid {FG_TEXT}; }}
+        """
+        self.btn_think_off = QPushButton("OFF")
+        self.btn_think_off.setCheckable(True)
+        self.btn_think_off.setStyleSheet(think_style)
+        self.btn_think_std = QPushButton("STD")
+        self.btn_think_std.setCheckable(True)
+        self.btn_think_std.setStyleSheet(think_style)
+        self.btn_think_ext = QPushButton("EXT")
+        self.btn_think_ext.setCheckable(True)
+        self.btn_think_ext.setStyleSheet(think_style)
+
+        self._think_group = QButtonGroup(self)
+        self._think_group.setExclusive(True)
+        self._think_group.addButton(self.btn_think_off)
+        self._think_group.addButton(self.btn_think_std)
+        self._think_group.addButton(self.btn_think_ext)
+        if self._thinking_mode:
+            self.btn_think_std.setChecked(True)
+        else:
+            self.btn_think_off.setChecked(True)
+        self.btn_think_off.clicked.connect(lambda: self._set_thinking_mode(False, "Off"))
+        self.btn_think_std.clicked.connect(lambda: self._set_thinking_mode(True, "Standard"))
+        self.btn_think_ext.clicked.connect(lambda: self._set_thinking_mode(True, "Extended"))
+
+        think_row.addWidget(self.btn_think_off)
+        think_row.addWidget(self.btn_think_std)
+        think_row.addWidget(self.btn_think_ext)
+        think_row.addStretch()
+        options_layout.addLayout(think_row)
+
+        control_layout.addWidget(self.options_panel)
         control_layout.addStretch()
 
         # --- ARCHIVE tab ---
@@ -236,7 +314,7 @@ class PageChat(QWidget):
         self.message_list = QListWidget()
         self.message_list.setStyleSheet(f"""
             QListWidget {{
-                background: #111; color: #ccc; border: 1px solid #222;
+                background: transparent; color: #ccc; border: 1px solid #222;
                 font-family: 'Consolas', monospace; font-size: 12px;
             }}
             QListWidget::item {{
@@ -249,80 +327,6 @@ class PageChat(QWidget):
         chat_layout.addWidget(self.message_list)
         
         # --- Input toolbar (between separator and input box) ---
-        input_toolbar = QHBoxLayout()
-        input_toolbar.setContentsMargins(0, 0, 0, 0)
-        input_toolbar.setSpacing(4)
-
-        # [+] Actions menu button
-        self.btn_actions = QPushButton("＋")
-        self.btn_actions.setCursor(Qt.PointingHandCursor)
-        self.btn_actions.setFixedSize(26, 22)
-        self.btn_actions.setToolTip("Actions")
-        self.btn_actions.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: 1px solid #222;
-                color: {FG_DIM}; font-size: 14px; font-weight: bold;
-                border-radius: 2px; padding: 0;
-            }}
-            QPushButton:hover {{ color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD}; }}
-        """)
-        self.actions_menu = QMenu(self)
-        self.actions_menu.setStyleSheet(f"""
-            QMenu {{
-                background: #141414; border: 1px solid #333; color: {FG_TEXT};
-                font-size: 10px; padding: 4px;
-            }}
-            QMenu::item {{ padding: 6px 20px; }}
-            QMenu::item:selected {{ background: #222; color: {ACCENT_GOLD}; }}
-        """)
-        act_file = self.actions_menu.addAction("📎  Attach File")
-        act_file.triggered.connect(self._attach_file_placeholder)
-        self.btn_actions.clicked.connect(
-            lambda: self.actions_menu.exec(self.btn_actions.mapToGlobal(self.btn_actions.rect().topLeft()))
-        )
-
-        # Thinking mode dropdown
-        self.btn_thinking = QPushButton("THINK")
-        self.btn_thinking.setCursor(Qt.PointingHandCursor)
-        self.btn_thinking.setFixedHeight(22)
-        self.btn_thinking.setToolTip("Thinking mode")
-        self._update_thinking_button_style()
-        self.thinking_menu = QMenu(self)
-        self.thinking_menu.setStyleSheet(f"""
-            QMenu {{
-                background: #141414; border: 1px solid #333; color: {FG_TEXT};
-                font-size: 10px; padding: 4px;
-            }}
-            QMenu::item {{ padding: 6px 20px; }}
-            QMenu::item:selected {{ background: #222; color: {ACCENT_GOLD}; }}
-            QMenu::item:checked {{ color: {ACCENT_GOLD}; }}
-        """)
-        act_off = self.thinking_menu.addAction("Off")
-        act_off.setCheckable(True)
-        act_standard = self.thinking_menu.addAction("Standard")
-        act_standard.setCheckable(True)
-        act_extended = self.thinking_menu.addAction("Extended")
-        act_extended.setCheckable(True)
-        self._thinking_action_group = QActionGroup(self)
-        self._thinking_action_group.setExclusive(True)
-        for a in (act_off, act_standard, act_extended):
-            self._thinking_action_group.addAction(a)
-        if self._thinking_mode:
-            act_standard.setChecked(True)
-        else:
-            act_off.setChecked(True)
-        act_off.triggered.connect(lambda: self._set_thinking_mode(False, "Off"))
-        act_standard.triggered.connect(lambda: self._set_thinking_mode(True, "Standard"))
-        act_extended.triggered.connect(lambda: self._set_thinking_mode(True, "Extended"))
-        self.btn_thinking.clicked.connect(
-            lambda: self.thinking_menu.exec(self.btn_thinking.mapToGlobal(self.btn_thinking.rect().topLeft()))
-        )
-
-        input_toolbar.addWidget(self.btn_actions)
-        input_toolbar.addStretch()
-        input_toolbar.addWidget(self.btn_thinking)
-        chat_layout.addLayout(input_toolbar)
-
         # --- Input row ---
         input_row = QHBoxLayout()
         self.input = QLineEdit()
@@ -400,6 +404,8 @@ class PageChat(QWidget):
         main_split.addWidget(right_stack)
         main_split.setStretchFactor(0, 3)
         main_split.setStretchFactor(1, 2)
+        self._active_assistant_started = False
+        self._active_assistant_token_count = 0
 
         self._sync_path_display()
         self._update_load_button_text()
@@ -414,13 +420,16 @@ class PageChat(QWidget):
         txt = self.input.text().strip()
         if not txt:
             return
+        self.sig_debug.emit(f"[CHAT] send: text={repr(txt[:60])}, msgs={len(self._current_session['messages'])}")
         self._set_send_button_state(is_running=True)
         self.input.clear()
         user_idx = self._add_message("user", txt)
         self._append_message_widget(user_idx)
         self._start_assistant_stream()
         self.message_list.scrollToBottom()
+        self.sig_debug.emit(f"[CHAT] about to emit sig_generate: txt={repr(txt[:60])}")
         self.sig_generate.emit(txt, self._thinking_mode)
+        self.sig_debug.emit(f"[CHAT] sig_generate emitted")
 
     def handle_send_click(self):
         txt = self.input.text().strip()
@@ -514,8 +523,13 @@ Continue from the interruption point. Do not repeat earlier content.
         self.sig_generate.emit(injected, self._thinking_mode)
 
     def _start_assistant_stream(self):
+        self.sig_debug.emit(f"[CHAT] _start_assistant_stream: msgs_before={len(self._current_session['messages'])}")
+        self._active_assistant_started = True
+        self._active_assistant_token_count = 0
+
         self._active_assistant_index = self._add_message("assistant", "")
         self._active_widget = self._append_message_widget(self._active_assistant_index)
+    
 
     def _flush_tokens(self):
         if not self._token_buf:
@@ -532,10 +546,13 @@ Continue from the interruption point. Do not repeat earlier content.
         if self._active_widget is None:
             return
         self._active_widget.append_token(chunk)
+        vw = self.message_list.viewport().width()
         for row in range(self.message_list.count()):
             item = self.message_list.item(row)
             widget = self.message_list.itemWidget(item)
             if widget is self._active_widget:
+                if vw > 50:
+                    widget.setFixedWidth(vw)
                 item.setSizeHint(widget.sizeHint())
                 break
         self.message_list.scrollToBottom()
@@ -737,21 +754,20 @@ Continue from the interruption point. Do not repeat earlier content.
         self._thinking_mode = enabled
         self.config["thinking_mode"] = enabled
         self._set_config_dirty(True)
-        self.btn_thinking.setText(label.upper() if enabled else "THINK")
         self._update_thinking_button_style()
 
+    def _toggle_options_panel(self):
+        self._options_expanded = not self._options_expanded
+        self.options_panel.setVisible(self._options_expanded)
+        self.btn_options_toggle.setText("▾ OPTIONS" if self._options_expanded else "▸ OPTIONS")
+
     def _update_thinking_button_style(self):
-        active = self._thinking_mode
-        color = ACCENT_GOLD if active else FG_DIM
-        border = ACCENT_GOLD if active else "#333"
-        self.btn_thinking.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; border: 1px solid {border};
-                color: {color}; padding: 2px 10px;
-                font-size: 9px; font-weight: bold; border-radius: 2px;
-            }}
-            QPushButton:hover {{ color: {FG_TEXT}; border: 1px solid {FG_TEXT}; }}
-        """)
+        # Update the think toggle buttons in the OPTIONS panel
+        if hasattr(self, 'btn_think_off'):
+            if self._thinking_mode:
+                self.btn_think_std.setChecked(True)
+            else:
+                self.btn_think_off.setChecked(True)
 
     def _attach_file_placeholder(self):
         """Placeholder for file attachment — backend will be implemented later."""
@@ -799,15 +815,59 @@ Continue from the interruption point. Do not repeat earlier content.
     def _update_load_button_text(self):
         self.btn_load.setText("UNLOAD MODEL" if self._is_model_loaded else "LOAD MODEL")
 
+    def _request_mutation(self, fn):
+        """Run a session mutation safely.
+
+        If a generation is currently running, STOP first, then run `fn` on the next READY.
+        This prevents stale indices / widgets during streaming.
+        """
+        if self._is_running:
+            # Cancel any queued UPDATE-restart; mutation wins.
+            self._awaiting_update_restart = False
+            self._pending_update_text = None
+            self._pending_mutation = fn
+            self._set_send_button_state(is_running=True, stopping=True)
+            self.sig_stop.emit()
+            return
+        fn()
+
     def update_status(self, engine_key: str, status: SystemStatus):
+        ek_short = engine_key[-8:] if engine_key else "?"
+        prev = getattr(self, '_last_status', None)
+        transition = f"{prev.name if prev else '?'}→{status.name}" if hasattr(status, 'name') else str(status)
+        self.sig_debug.emit(f"[CHAT:{ek_short}] status {transition}, running={self._is_running}, mutation={'yes' if self._pending_mutation else 'no'}")
         if engine_key != getattr(self, "_engine_key", "llm"):
             return
-        is_loading = status in (SystemStatus.LOADING, SystemStatus.RUNNING)
-        self.btn_load.setEnabled(not is_loading)
-        if is_loading:
+        is_processing = status in (SystemStatus.LOADING, SystemStatus.RUNNING, SystemStatus.UNLOADING)
+        self.btn_load.setEnabled(not is_processing)
+        if is_processing:
             self.btn_load.setText("PROCESSING...")
         else:
             self._update_load_button_text()
+        if status == SystemStatus.READY and self._pending_mutation is not None:
+            # Finish transition to READY (stop state) first, then mutate.
+            # Keep this path above UPDATE-restart.
+            self._set_send_button_state(is_running=False)
+            self._rewrite_assistant_index = None
+            if self._active_widget is not None:
+                self._active_widget.finalize()
+            self._active_widget = None
+            if self._update_trace_state == "streaming":
+                self._finalize_update_progress()
+            # If generation ended before any tokens arrived, remove the empty assistant bubble.
+            self._cleanup_empty_assistant_if_needed()
+            # Reset assistant stream trackers after end-of-generation.
+            self._active_assistant_started = False
+            self._active_assistant_token_count = 0
+            self._suppress_title_regen = False
+            pending = self._pending_mutation
+            self._pending_mutation = None
+            try:
+                pending()
+            finally:
+                self._last_status = status
+            return
+
         if status == SystemStatus.READY and self._awaiting_update_restart:
             self._awaiting_update_restart = False
             self.btn_send.setEnabled(True)
@@ -821,6 +881,10 @@ Continue from the interruption point. Do not repeat earlier content.
         elif status == SystemStatus.READY:
             if self._last_status == SystemStatus.LOADING:
                 self._is_model_loaded = True
+                self._update_load_button_text()
+            elif self._last_status == SystemStatus.UNLOADING:
+                self._is_model_loaded = False
+                self._update_load_button_text()
             self._set_send_button_state(is_running=False)
             self._rewrite_assistant_index = None
             if self._active_widget is not None:
@@ -828,17 +892,26 @@ Continue from the interruption point. Do not repeat earlier content.
             self._active_widget = None
             if self._update_trace_state == "streaming":
                 self._finalize_update_progress()
+            # If generation ended before any tokens arrived, remove the empty assistant bubble.
+            self._cleanup_empty_assistant_if_needed()
+            # Reset assistant stream trackers after end-of-generation.
+            self._active_assistant_started = False
+            self._active_assistant_token_count = 0
             # Title generation is finalized ONLY on READY.
+
             # READY is emitted after _on_gen_finish completes and assistant text is final.
             # STOP also transitions to READY; _maybe_generate_title self-guards.
             # Do NOT call this method from token flush, send paths, or mutation handlers.
-            self._maybe_generate_title()
+            if self._pending_mutation is None:
+                self._maybe_generate_title()
             self._suppress_title_regen = False
         elif status == SystemStatus.LOADING:
             self._set_send_button_state(is_running=False)
             self.btn_send.setEnabled(False)
         elif status in (SystemStatus.UNLOADING, SystemStatus.ERROR):
             self._is_model_loaded = False
+            if not is_processing:
+                self._update_load_button_text()
 
         if status == SystemStatus.READY and not self._is_model_loaded:
             self._apply_default_limits()
@@ -896,7 +969,18 @@ Continue from the interruption point. Do not repeat earlier content.
             self.sig_set_model_path.emit(str(gguf_path))
         self._sync_path_display()
 
-        self._start_new_session()
+        # Restore chat messages if snapshot included them, otherwise fresh session
+        messages = operator_data.get("messages")
+        if isinstance(messages, list) and messages:
+            session = self._create_session(
+                messages=messages,
+                title=operator_data.get("session_title"),
+                assistant_tokens=operator_data.get("assistant_tokens", 0),
+            )
+            self._set_current_session(session, show_reset=True, sync_history=True)
+        else:
+            self._start_new_session()
+
         self._set_config_dirty(True)
         self.sig_operator_loaded.emit(str(operator_data.get("name", "")))
 
@@ -1132,48 +1216,86 @@ Continue from the interruption point. Do not repeat earlier content.
         )
 
     def _delete_from_index(self, idx: int):
-        self._snapshot_session()
-        msgs = self._current_session["messages"]
-        if idx < 0 or idx >= len(msgs):
-            return
-        del msgs[idx:]
-        self._render_session()
-        self.sig_sync_history.emit(
-            self._build_engine_history_from_session()
-        )
+        self.sig_debug.emit(f"[CHAT] _delete_from_index: idx={idx}, msgs={len(self._current_session['messages'])}, is_running={self._is_running}")
+        def _do_delete():
+            self._snapshot_session()
+            msgs = self._current_session["messages"]
+            if idx < 0 or idx >= len(msgs):
+                return
+            del msgs[idx:]
+            # Reset any stale streaming pointers.
+            self._active_assistant_index = None
+            self._rewrite_assistant_index = None
+            self._active_widget = None
+            self._token_buf.clear()
+            if self._flush_timer.isActive():
+                self._flush_timer.stop()
+            self._render_session()
+            self.sig_sync_history.emit(
+                self._build_engine_history_from_session()
+            )
+
+        self._request_mutation(_do_delete)
 
     def _edit_from_index(self, idx: int):
-        msgs = self._current_session["messages"]
-        if idx < 0 or idx >= len(msgs):
-            return
-        text = msgs[idx]["text"]
-        self._suppress_title_regen = True
-        self._delete_from_index(idx)
-        self.input.setText(text)
+        self.sig_debug.emit(f"[CHAT] _edit_from_index: idx={idx}, msgs={len(self._current_session['messages'])}, is_running={self._is_running}")
+        def _do_edit():
+            msgs = self._current_session["messages"]
+            if idx < 0 or idx >= len(msgs):
+                return
+            text = msgs[idx].get("text", "")
+            self._suppress_title_regen = True
+            # Inline delete to avoid nested mutation requests.
+            self._snapshot_session()
+            del msgs[idx:]
+            self._active_assistant_index = None
+            self._rewrite_assistant_index = None
+            self._active_widget = None
+            self._token_buf.clear()
+            if self._flush_timer.isActive():
+                self._flush_timer.stop()
+            self._render_session()
+            self.sig_sync_history.emit(
+                self._build_engine_history_from_session()
+            )
+            self.input.setText(text)
+
+        self._request_mutation(_do_edit)
 
     def _regen_last_assistant(self):
-        msgs = self._current_session["messages"]
-        if not msgs or msgs[-1]["role"] != "assistant":
-            return
-        self._snapshot_session()
-        self._suppress_title_regen = True
-        del msgs[-1]
-        self._render_session()
-        self.sig_sync_history.emit(
-            self._build_engine_history_from_session()
-        )
+        self.sig_debug.emit(f"[CHAT] _regen_last_assistant: msgs={len(self._current_session['messages'])}, is_running={self._is_running}")
+        def _do_regen():
+            msgs = self._current_session["messages"]
+            if not msgs or msgs[-1].get("role") != "assistant":
+                return
+            self._snapshot_session()
+            self._suppress_title_regen = True
+            del msgs[-1]
+            self._active_assistant_index = None
+            self._rewrite_assistant_index = None
+            self._active_widget = None
+            self._token_buf.clear()
+            if self._flush_timer.isActive():
+                self._flush_timer.stop()
+            self._render_session()
+            self.sig_sync_history.emit(
+                self._build_engine_history_from_session()
+            )
 
-        for m in reversed(msgs):
-            if m["role"] == "user":
-                self._set_send_button_state(is_running=True)
-                self._start_assistant_stream()
-                self.message_list.scrollToBottom()
-                self.sig_generate.emit(m["text"], self._thinking_mode)
-                break
+            for m in reversed(msgs):
+                if m.get("role") == "user":
+                    self._set_send_button_state(is_running=True)
+                    self._start_assistant_stream()
+                    self.message_list.scrollToBottom()
+                    self.sig_generate.emit(m.get("text", ""), self._thinking_mode)
+                    break
+
+        self._request_mutation(_do_regen)
 
     def _render_session(self, session=None, show_reset=False):
         if session is None:
             session = self._current_session
+        self.sig_debug.emit(f"[CHAT] _render_session: msgs={len(session['messages'])}, show_reset={show_reset}")
         self.message_list.clear()
         self.trace.clear()
         self._active_widget = None
@@ -1196,6 +1318,9 @@ Continue from the interruption point. Do not repeat earlier content.
         widget.sig_delete.connect(self._delete_from_index)
         widget.sig_edit.connect(self._edit_from_index)
         widget.sig_regen.connect(lambda _idx: self._regen_last_assistant())
+        vw = self.message_list.viewport().width()
+        if vw > 50:
+            widget.setFixedWidth(vw)
         item.setSizeHint(widget.sizeHint())
         self.message_list.addItem(item)
         self.message_list.setItemWidget(item, widget)
@@ -1270,15 +1395,41 @@ Continue from the interruption point. Do not repeat earlier content.
         if target_index is None:
             target_index = self._active_assistant_index
         if target_index is None:
-            target_index = self._add_message("assistant", "")
-            self._active_assistant_index = target_index
+            return
+
         msg = self._current_session["messages"][target_index]
         msg["text"] += token
+        self._active_assistant_token_count += 1
         msg["time"] = self._now_iso()
         self._current_session["updated_at"] = msg["time"]
         self._current_session["assistant_tokens"] = int(self._current_session.get("assistant_tokens", 0)) + 1
 
 
+    def _cleanup_empty_assistant_if_needed(self):
+        """Remove a placeholder assistant message if generation ended before any tokens arrived."""
+        idx = self._active_assistant_index
+        if idx is None:
+            return
+        if not getattr(self, "_active_assistant_started", False):
+            return
+        if int(getattr(self, "_active_assistant_token_count", 0)) > 0:
+            return
+
+        msgs = self._current_session.get("messages", [])
+        if 0 <= idx < len(msgs):
+            msg = msgs[idx]
+            if msg.get("role") == "assistant" and (msg.get("text") or "") == "":
+                del msgs[idx]
+                # After deletion, any stored indices are stale.
+                self._active_assistant_index = None
+                self._rewrite_assistant_index = None
+                self._active_widget = None
+                self._token_buf.clear()
+                if self._flush_timer.isActive():
+                    self._flush_timer.stop()
+                self._render_session()
+                self.sig_sync_history.emit(self._build_engine_history_from_session())
+                return
     def _maybe_generate_title(self):
         if self._suppress_title_regen:
             return

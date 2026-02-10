@@ -4,7 +4,7 @@
 BG_MAIN = "#0C0C0C"       # Deep dark background
 BG_SIDEBAR = "#111111"    # Sidebar background
 BG_PANEL = "#141414"      # Panel background
-BG_GROUP = "#0e0e0e"      # Groupbox background
+BG_GROUP = "#0C0C0C"      # Groupbox background
 BG_INPUT = "#0f0f0f"      # Input field background
 
 BORDER_DARK = "#2a2a2a"   # Subtle borders
