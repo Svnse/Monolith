@@ -312,6 +312,7 @@ class PageChat(QWidget):
         chat_layout.setSpacing(10)
 
         self.message_list = QListWidget()
+        self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self.message_list.setStyleSheet(f"""
             QListWidget {{
                 background: transparent; color: #ccc; border: 1px solid #222;
@@ -512,13 +513,10 @@ Partial assistant output so far:
 User update:
 {update_text}
 
-Continue from the interruption point. Do not repeat earlier content.
+Continue from the interruption point. Do not repeat earlier content. Prioritize the user update.
 """
 
         self.input.clear()
-        user_idx = self._add_message("user", update_text)
-        self._append_message_widget(user_idx)
-        self.message_list.scrollToBottom()
         self._start_update_streaming()
         self.sig_generate.emit(injected, self._thinking_mode)
 
@@ -545,6 +543,10 @@ Continue from the interruption point. Do not repeat earlier content.
                 self._active_widget = self._widget_for_index(target_index)
         if self._active_widget is None:
             return
+        # Check if user is near the bottom before appending (so we don't yank them down)
+        sb = self.message_list.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 40
+
         self._active_widget.append_token(chunk)
         vw = self.message_list.viewport().width()
         for row in range(self.message_list.count()):
@@ -555,7 +557,8 @@ Continue from the interruption point. Do not repeat earlier content.
                     widget.setFixedWidth(vw)
                 item.setSizeHint(widget.sizeHint())
                 break
-        self.message_list.scrollToBottom()
+        if at_bottom:
+            self.message_list.scrollToBottom()
 
     def append_token(self, t):
         self._token_buf.append(t)
@@ -987,6 +990,7 @@ Continue from the interruption point. Do not repeat earlier content.
     def _start_new_session(self):
         self._title_generated = False
         self._suppress_title_regen = False
+        self.trace.clear()
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._trace_plain("--- TRACE RESET ---")
 
@@ -1037,6 +1041,7 @@ Continue from the interruption point. Do not repeat earlier content.
                 Path(archive_path).unlink()
             except OSError:
                 pass
+        self.trace.clear()
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._refresh_archive_list()
 
@@ -1297,11 +1302,8 @@ Continue from the interruption point. Do not repeat earlier content.
             session = self._current_session
         self.sig_debug.emit(f"[CHAT] _render_session: msgs={len(session['messages'])}, show_reset={show_reset}")
         self.message_list.clear()
-        self.trace.clear()
         self._active_widget = None
         if not session["messages"]:
-            if show_reset:
-                self._append_message_widget(-1, "system", "--- SESSION RESET ---", "")
             return
         for idx, _msg in enumerate(session["messages"]):
             self._append_message_widget(idx)
@@ -1438,8 +1440,7 @@ Continue from the interruption point. Do not repeat earlier content.
         if self._current_session.get("title"):
             self._title_generated = True
             return
-        user_msgs = [m for m in self._current_session["messages"] if m.get("role") == "user" and m.get("text", "").strip()]
-        if len(user_msgs) < 2 and not self._topic_dominant():
+        if not any(m.get("role") == "user" and m.get("text", "").strip() for m in self._current_session["messages"]):
             return
         title = self._derive_title(self._current_session["messages"])
         self._current_session["title"] = title

@@ -112,6 +112,8 @@ class MessageWidget(QWidget):
         self.lbl_content = QLabel()
         self.lbl_content.setTextFormat(Qt.PlainText)
         self.lbl_content.setWordWrap(True)
+        self.lbl_content.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.lbl_content.setCursor(Qt.IBeamCursor)
         content_color = FG_TEXT if is_assistant else "#bbb"
         if is_system:
             content_color = FG_DIM

@@ -168,6 +168,7 @@ class MonolithUI(QMainWindow):
                 self.stack.setCurrentWidget(w)
                 self._update_sidebar_state(module_selection=True)
                 self.module_strip.select_module(mod_id)
+                self.lbl_monolith.setVisible(True)
                 # Only show chat title for terminal modules
                 if getattr(w, '_addon_id', None) == "terminal":
                     self.update_terminal_header(mod_id, *self._terminal_titles.get(mod_id, ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm"))))
@@ -224,6 +225,7 @@ class MonolithUI(QMainWindow):
         if target:
             self.stack.setCurrentWidget(target)
         self._update_sidebar_state(page_idx=page_id)
+        self.lbl_monolith.setVisible(page_id != "hub")
         self.update_terminal_header("", "", "")
 
     def _update_time_display(self):
@@ -243,12 +245,12 @@ class MonolithUI(QMainWindow):
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(10, 0, 10, 0)
 
-        lbl_monolith = QLabel("MONOLITH")
-        lbl_monolith.setStyleSheet(
+        self.lbl_monolith = QLabel("MONOLITH")
+        self.lbl_monolith.setStyleSheet(
             "color: #8a7340; font-size: 14px; font-weight: bold; "
             "letter-spacing: 3px; background: transparent;"
         )
-        layout.addWidget(lbl_monolith)
+        layout.addWidget(self.lbl_monolith)
         layout.addStretch()
 
         self.lbl_chat_title = QLabel(self._chat_title)
