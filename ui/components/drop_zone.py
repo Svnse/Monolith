@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import core.style as _s
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ui.addons.host import AddonHost
@@ -27,13 +26,6 @@ _EXT_APPETITE_MAP = {
 }
 
 
-def _to_rgba(color_value: str, alpha: int) -> str:
-    color = QColor(color_value)
-    if not color.isValid():
-        return f"rgba(0, 0, 0, {alpha})"
-    color.setAlpha(alpha)
-    return color.name(QColor.HexArgb)
-
 
 class _ChoiceRow(QFrame):
     clicked = Signal(str)
@@ -42,38 +34,22 @@ class _ChoiceRow(QFrame):
         super().__init__(parent)
         self._addon_id = spec.id
         self.setCursor(Qt.PointingHandCursor)
-        self.setObjectName("DropZoneChoice")
+        self.setProperty("class", "DropZoneChoice")
 
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 6, 10, 6)
         row.setSpacing(8)
 
         icon = QLabel(spec.icon or "◻")
-        icon.setStyleSheet(f"color: {_s.FG_TEXT}; font-size: 12px;")
         icon.setFixedWidth(18)
         row.addWidget(icon)
 
         title = QLabel(spec.title)
-        title.setStyleSheet(f"color: {_s.FG_TEXT}; font-size: 11px; font-weight: 600;")
         row.addWidget(title)
 
         appetite_lbl = QLabel(f"({appetite})")
-        appetite_lbl.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
         row.addWidget(appetite_lbl)
 
-        self.setStyleSheet(
-            f"""
-            QFrame#DropZoneChoice {{
-                border: 1px solid {_s.BORDER_SUBTLE};
-                border-radius: 5px;
-                background: transparent;
-            }}
-            QFrame#DropZoneChoice:hover {{
-                background: {_s.BG_GROUP};
-                border-color: {_s.ACCENT_PRIMARY};
-            }}
-            """
-        )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -92,24 +68,26 @@ class DropZoneOverlay(QWidget):
         self._host = host
         self._matched_specs: list[tuple[AddonSpec, str]] = []
 
-        self.setObjectName("DropZoneOverlay")
+        self.setObjectName("drop_overlay")
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 28, 28, 28)
 
         self._panel = QFrame(self)
-        self._panel.setObjectName("DropZonePanel")
+        self._panel.setObjectName("drop_panel")
         panel_layout = QVBoxLayout(self._panel)
         panel_layout.setContentsMargins(20, 20, 20, 20)
         panel_layout.setSpacing(10)
         panel_layout.setAlignment(Qt.AlignCenter)
 
         self._title = QLabel("DROP TO OPEN WITH")
+        self._title.setObjectName("drop_title")
         self._title.setAlignment(Qt.AlignCenter)
         panel_layout.addWidget(self._title)
 
         self._subtitle = QLabel("")
+        self._subtitle.setObjectName("drop_subtitle")
         self._subtitle.setAlignment(Qt.AlignCenter)
         self._subtitle.setWordWrap(True)
         panel_layout.addWidget(self._subtitle)
@@ -122,26 +100,8 @@ class DropZoneOverlay(QWidget):
 
         root.addWidget(self._panel)
 
-        self._apply_style()
         self.hide()
 
-    def _apply_style(self) -> None:
-        overlay_bg = _to_rgba(_s.BG_MAIN, 180)
-        panel_bg = _to_rgba(_s.BG_MAIN, 110)
-        self.setStyleSheet(
-            f"""
-            QWidget#DropZoneOverlay {{
-                background: {overlay_bg};
-            }}
-            QFrame#DropZonePanel {{
-                background: {panel_bg};
-                border: 2px dashed {_s.ACCENT_PRIMARY};
-                border-radius: 14px;
-            }}
-            """
-        )
-        self._title.setStyleSheet(f"color: {_s.ACCENT_PRIMARY}; font-size: 18px; font-weight: bold;")
-        self._subtitle.setStyleSheet(f"color: {_s.FG_TEXT}; font-size: 11px;")
 
     def activate(self, event: QDragEnterEvent) -> None:
         if not event.mimeData().hasUrls():

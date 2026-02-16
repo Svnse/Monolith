@@ -9,7 +9,6 @@ from PySide6.QtGui import (
     QPainter, QPen, QColor, QLinearGradient, QFont, QPainterPath, QFontMetrics
 )
 
-import core.style as _s  # dynamic theme bridge — always read fresh via _s.*
 
 # ======================
 # FLAME LABEL (FIXED)
@@ -75,6 +74,7 @@ class VitalsWindow(QDialog):
     def __init__(self, state, parent=None):
         super().__init__(parent)
         self.state = state
+        self.setObjectName("vitals_window")
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
@@ -84,7 +84,6 @@ class VitalsWindow(QDialog):
         
         self.frame = QFrame()
         # Glassmorphic + Ultra Compact
-        self.frame.setStyleSheet(f"background: rgba(8, 8, 8, 230); border: 1px solid {_s.ACCENT_PRIMARY}; border-radius: 4px;")
         
         frame_layout = QVBoxLayout(self.frame)
         frame_layout.setSpacing(2) 
@@ -93,11 +92,9 @@ class VitalsWindow(QDialog):
         # Header
         head = QHBoxLayout()
         lbl = QLabel("SYSTEM VITALS")
-        lbl.setStyleSheet(f"color: {_s.ACCENT_PRIMARY}; font-weight: 900; font-size: 9px; border:none; background: transparent;")
         btn_x = QPushButton("×")
         btn_x.setFixedSize(14, 14)
         btn_x.clicked.connect(self.close)
-        btn_x.setStyleSheet(f"color: {_s.FG_DIM}; border: none; font-weight: bold; background: transparent; padding:0; margin:0;")
         head.addWidget(lbl)
         head.addStretch()
         head.addWidget(btn_x)
@@ -109,16 +106,11 @@ class VitalsWindow(QDialog):
             row = QHBoxLayout()
             row.setSpacing(4)
             l = QLabel(key)
-            l.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 8px; font-weight: bold; border:none; background: transparent;")
             l.setFixedWidth(22)
             
             bar = QProgressBar()
             bar.setFixedHeight(2) # Ultra thin
             bar.setTextVisible(False)
-            bar.setStyleSheet(f"""
-                QProgressBar {{ background: {_s.BORDER_SUBTLE}; border: none; border-radius: 1px; }}
-                QProgressBar::chunk {{ background: {_s.FG_ACCENT}; border-radius: 1px; }}
-            """)
             bar.setValue(0)
             self.bars[key] = bar
             
@@ -182,35 +174,19 @@ class ModeSelector(QWidget):
         btn.setCheckable(True)
         btn.setChecked(active)
         btn.setCursor(Qt.PointingHandCursor)
-        self._style_btn(btn, active)
+        btn.setObjectName("mode_btn_active" if active else "mode_btn_inactive")
         btn.clicked.connect(lambda: self._select(title))
         return btn
-
-    def _style_btn(self, btn, active):
-        # GOLD highlight when active
-        border = _s.ACCENT_PRIMARY if active else _s.BORDER_LIGHT
-        bg = _s.BORDER_SUBTLE if active else _s.BG_INPUT
-        color = _s.ACCENT_PRIMARY if active else _s.FG_DIM
-        weight = "bold" if active else "normal"
-        
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {bg}; 
-                border: 1px solid {border}; 
-                color: {color};
-                font-family: 'Segoe UI'; font-size: 10px; font-weight: {weight};
-                border-radius: 2px;
-            }}
-            QPushButton:hover {{ border-color: {_s.ACCENT_PRIMARY}; color: {_s.FG_TEXT}; }}
-        """)
 
     def _select(self, mode):
         is_op = (mode == "OPERATOR")
         self.btn_op.setChecked(is_op)
         self.btn_ov.setChecked(not is_op)
         
-        self._style_btn(self.btn_op, is_op)
-        self._style_btn(self.btn_ov, not is_op)
+        self.btn_op.setObjectName("mode_btn_active" if is_op else "mode_btn_inactive")
+        self.btn_ov.setObjectName("mode_btn_active" if not is_op else "mode_btn_inactive")
+        self.btn_op.style().unpolish(self.btn_op); self.btn_op.style().polish(self.btn_op)
+        self.btn_ov.style().unpolish(self.btn_ov); self.btn_ov.style().polish(self.btn_ov)
         
         self.modeChanged.emit(mode)
 
@@ -262,9 +238,7 @@ class BehaviorTagInput(QFrame):
         self._known_tags = {tag.lower() for tag in (known_tags or [])}
         self._tags = []
 
-        self.setStyleSheet(
-            f"background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; border-radius: 2px;"
-        )
+        self.setObjectName("tag_input_frame")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
@@ -276,7 +250,6 @@ class BehaviorTagInput(QFrame):
 
         self._input = TagLineEdit()
         self._input.setPlaceholderText("Type tags...")
-        self._input.setStyleSheet(f"background: transparent; color: {_s.FG_TEXT}; border: none;")
         self._input.textEdited.connect(self._on_text_edited)
         self._input.returnPressed.connect(self._commit_current_text)
         self._input.backspaceOnEmpty.connect(self._remove_last_tag)
@@ -310,15 +283,7 @@ class BehaviorTagInput(QFrame):
             return
         chip = QPushButton(normalized)
         chip.setCursor(Qt.PointingHandCursor)
-        chip.setStyleSheet(
-            f"""
-            QPushButton {{
-                background: {_s.BORDER_SUBTLE}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_TEXT};
-                padding: 2px 6px; font-size: 10px; font-weight: bold; border-radius: 2px;
-            }}
-            QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY}; }}
-            """
-        )
+        chip.setProperty("class", "tag_chip")
         chip.clicked.connect(lambda _, t=normalized: self._remove_tag(t))
         self._chip_layout.addWidget(chip)
         self._tags.append(normalized)
@@ -374,56 +339,21 @@ class SplitControlBlock(QWidget):
         layout = QGridLayout(self)
         layout.setContentsMargins(0,0,0,0)
         layout.setSpacing(1)
-        base_style = f"""
-            QPushButton {{
-                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
-                font-family: 'Segoe UI'; font-size: 8px;
-            }}
-            QPushButton:hover {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
-            QPushButton:pressed {{ background: {_s.ACCENT_PRIMARY_DARK}; color: black; }}
-        """
         self.btn_min = QPushButton("─")
+        self.btn_min.setProperty("class", "SplitControl")
         self.btn_min.setFixedSize(22, 16) 
-        self.btn_min.setStyleSheet(base_style)
         self.btn_min.clicked.connect(self.minClicked)
-        
+
         self.btn_max = QPushButton("□")
+        self.btn_max.setProperty("class", "SplitControl")
         self.btn_max.setFixedSize(22, 16)
-        self.btn_max.setStyleSheet(base_style)
         self.btn_max.clicked.connect(self.maxClicked)
-        
+
         self.btn_close = QPushButton("×")
+        self.btn_close.setObjectName("close_btn")
+        self.btn_close.setProperty("class", "SplitControl")
         self.btn_close.setFixedHeight(16)
-        self.btn_close.setStyleSheet(f"""
-            QPushButton {{
-                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
-                font-family: 'Segoe UI'; font-size: 12px;
-            }}
-            QPushButton:hover {{ background: {_s.FG_ERROR}; color: white; }}
-            QPushButton:pressed {{ background: {_s.FG_ERROR}; color: white; }}
-        """)
         self.btn_close.clicked.connect(self.closeClicked)
         layout.addWidget(self.btn_min, 0, 0)
         layout.addWidget(self.btn_max, 0, 1)
         layout.addWidget(self.btn_close, 1, 0, 1, 2)
-
-    def refresh_style(self):
-        import core.style as _s
-        base_style = f"""
-            QPushButton {{
-                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
-                font-family: 'Segoe UI'; font-size: 8px;
-            }}
-            QPushButton:hover {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
-            QPushButton:pressed {{ background: {_s.ACCENT_PRIMARY_DARK}; color: black; }}
-        """
-        self.btn_min.setStyleSheet(base_style)
-        self.btn_max.setStyleSheet(base_style)
-        self.btn_close.setStyleSheet(f"""
-            QPushButton {{
-                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
-                font-family: 'Segoe UI'; font-size: 12px;
-            }}
-            QPushButton:hover {{ background: {_s.FG_ERROR}; color: white; }}
-            QPushButton:pressed {{ background: {_s.FG_ERROR}; color: white; }}
-        """)

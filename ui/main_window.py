@@ -9,7 +9,6 @@ from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QKeyEven
 
 from core.state import SystemStatus, AppState
 from ui.bridge import UIBridge
-import core.style as _style  # dynamic theme bridge — always read from _style.* for fresh values
 from ui.addons.host import AddonHost
 from ui.components.atoms import SidebarButton
 from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock
@@ -33,10 +32,6 @@ class MonolithUI(QMainWindow):
 
         main_widget = QWidget()
         main_widget.setObjectName("MainFrame")
-        main_widget.setStyleSheet(f"""
-            QWidget {{ background: {_style.BG_MAIN}; }}
-            QWidget#MainFrame {{ border: 1px solid {_style.BORDER_LIGHT}; }}
-        """)
         self.setCentralWidget(main_widget)
 
         root_layout = QVBoxLayout(main_widget)
@@ -56,8 +51,8 @@ class MonolithUI(QMainWindow):
 
         # --- SIDEBAR ---
         self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(70)
-        self.sidebar.setStyleSheet(f"background: {_style.BG_SIDEBAR}; border-right: 1px solid {_style.BORDER_SUBTLE};")
         
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(5, 15, 5, 15)
@@ -101,7 +96,7 @@ class MonolithUI(QMainWindow):
         bottom_bar.setContentsMargins(0, 0, 8, 2)
         bottom_bar.addStretch()
         self.lbl_status = QLabel("READY")
-        self.lbl_status.setStyleSheet(f"color: {_style.FG_PLACEHOLDER}; font-size: 8px; font-weight: bold; background: transparent;")
+        self.lbl_status.setObjectName("lbl_status")
         bottom_bar.addWidget(self.lbl_status)
         root_layout.addLayout(bottom_bar)
 
@@ -219,11 +214,13 @@ class MonolithUI(QMainWindow):
 
     def update_status(self, engine_key: str, status: SystemStatus):
         if status == SystemStatus.ERROR:
-            self.lbl_status.setStyleSheet(f"color: {_style.FG_ERROR}; font-size: 8px; font-weight: bold; background: transparent;")
+            self.lbl_status.setProperty("state", "error")
         elif status == SystemStatus.LOADING:
-            self.lbl_status.setStyleSheet(f"color: {_style.FG_WARN}; font-size: 8px; font-weight: bold; background: transparent;")
+            self.lbl_status.setProperty("state", "loading")
         else:
-            self.lbl_status.setStyleSheet(f"color: {_style.FG_PLACEHOLDER}; font-size: 8px; font-weight: bold; background: transparent;")
+            self.lbl_status.setProperty("state", "ready")
+        self.lbl_status.style().unpolish(self.lbl_status)
+        self.lbl_status.style().polish(self.lbl_status)
         status_text = status.value if hasattr(status, "value") else str(status)
         if not engine_key.startswith("llm"):
             status_text = f"{engine_key.upper()}: {status_text}"
@@ -275,23 +272,20 @@ class MonolithUI(QMainWindow):
 
     def _build_top_bar(self):
         bar = QFrame()
+        bar.setObjectName("top_bar")
         bar.setFixedHeight(35)
-        bar.setStyleSheet(f"background: {_style.BG_SIDEBAR}; border-bottom: 1px solid {_style.BORDER_SUBTLE};")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(10, 0, 10, 0)
 
         self.lbl_monolith = QLabel("MONOLITH")
-        self.lbl_monolith.setStyleSheet(
-            f"color: {_style.ACCENT_PRIMARY_DARK}; font-size: 14px; font-weight: bold; "
-            "letter-spacing: 3px; background: transparent;"
-        )
+        self.lbl_monolith.setObjectName("lbl_monolith")
         layout.addWidget(self.lbl_monolith)
         layout.addStretch()
 
         self.lbl_chat_title = QLabel(self._chat_title)
-        self.lbl_chat_title.setStyleSheet(f"color: {_style.FG_TEXT}; font-size: 10px; font-weight: bold;")
+        self.lbl_chat_title.setObjectName("lbl_chat_title")
         self.lbl_chat_time = QLabel(QDateTime.currentDateTime().toString("ddd • HH:mm"))
-        self.lbl_chat_time.setStyleSheet(f"color: {_style.FG_DIM}; font-size: 10px;")
+        self.lbl_chat_time.setObjectName("lbl_chat_time")
         title_box = QVBoxLayout()
         title_box.setContentsMargins(0, 0, 8, 0)
         title_box.setSpacing(0)
@@ -309,38 +303,6 @@ class MonolithUI(QMainWindow):
 
     def toggle_maximize(self):
         self.showNormal() if self.isMaximized() else self.showMaximized()
-
-    def apply_theme_refresh(self):
-        """Re-apply all stylesheets after theme change. Rebuilds the entire UI appearance."""
-        # Main frame
-        main_widget = self.centralWidget()
-        if main_widget:
-            main_widget.setStyleSheet(f"""
-                QWidget {{ background: {_style.BG_MAIN}; }}
-                QWidget#MainFrame {{ border: 1px solid {_style.BORDER_LIGHT}; }}
-            """)
-        # Sidebar
-        self.sidebar.setStyleSheet(f"background: {_style.BG_SIDEBAR}; border-right: 1px solid {_style.BORDER_SUBTLE};")
-        # Top bar
-        self.top_bar.setStyleSheet(f"background: {_style.BG_SIDEBAR}; border-bottom: 1px solid {_style.BORDER_SUBTLE};")
-        self.lbl_monolith.setStyleSheet(
-            f"color: {_style.ACCENT_PRIMARY_DARK}; font-size: 14px; font-weight: bold; "
-            f"letter-spacing: 3px; background: transparent;"
-        )
-        self.lbl_chat_title.setStyleSheet(f"color: {_style.FG_TEXT}; font-size: 10px; font-weight: bold;")
-        self.lbl_chat_time.setStyleSheet(f"color: {_style.FG_DIM}; font-size: 10px;")
-        # Status bar
-        self.lbl_status.setStyleSheet(
-            f"color: {_style.FG_PLACEHOLDER}; font-size: 8px; font-weight: bold; background: transparent;"
-        )
-        # Gradient line
-        self.gradient_line.update()
-        # Sidebar buttons — re-apply with current checked state
-        self.btn_hub.update_style(self.btn_hub.isChecked())
-        self.btn_addons.update_style(self.btn_addons.isChecked())
-        # Window control block
-        if hasattr(self.win_controls, 'refresh_style'):
-            self.win_controls.refresh_style()
 
     def toggle_vitals(self):
         if not self.vitals_win:

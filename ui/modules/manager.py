@@ -2,7 +2,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea
 from PySide6.QtCore import Signal, Qt
 
 from ui.components.atoms import MonoGroupBox, MonoButton
-import core.style as _s  # dynamic theme bridge
 
 class PageAddons(QWidget):
     sig_launch_addon = Signal(str)
@@ -30,7 +29,7 @@ class PageAddons(QWidget):
         mod_layout.setSpacing(15)
         
         lbl_info = QLabel("Select a runtime module to attach to the workspace.")
-        lbl_info.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 11px;")
+        lbl_info.setObjectName("status_label")
 
         btn_terminal = MonoButton("CHAT")
         btn_terminal.clicked.connect(lambda: self.sig_launch_addon.emit("terminal"))
@@ -76,13 +75,4 @@ class PageAddons(QWidget):
         scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area)
 
-        # Keep refs for theme refresh
-        self._lbl_info = lbl_info
 
-    def apply_theme_refresh(self):
-        import core.style as s
-        self._lbl_info.setStyleSheet(f"color: {s.FG_DIM}; font-size: 11px;")
-        # Refresh all atom widgets (MonoButton, MonoGroupBox, etc.)
-        for child in self.findChildren(QWidget):
-            if hasattr(child, "refresh_style"):
-                child.refresh_style()
