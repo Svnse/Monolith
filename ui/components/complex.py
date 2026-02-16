@@ -9,7 +9,7 @@ from PySide6.QtGui import (
     QPainter, QPen, QColor, QLinearGradient, QFont, QPainterPath, QFontMetrics
 )
 
-from core.style import ACCENT_GOLD, FG_DIM, FG_TEXT, FG_ACCENT, FG_ERROR, BG_INPUT, BORDER_DARK
+import core.style as _s  # dynamic theme bridge — always read fresh via _s.*
 
 # ======================
 # FLAME LABEL (FIXED)
@@ -44,11 +44,12 @@ class FlameLabel(QWidget):
         grad.setSpread(QLinearGradient.RepeatSpread)
         
         # Fire Colors: Dark Grey -> Gold -> White -> Dark Grey
-        grad.setColorAt(0.0, QColor("#333"))
-        grad.setColorAt(0.4, QColor(ACCENT_GOLD))
+        import core.style as _s
+        grad.setColorAt(0.0, QColor(_s.GRADIENT_COLOR))
+        grad.setColorAt(0.4, QColor(_s.GRADIENT_COLOR))
         grad.setColorAt(0.5, QColor("white"))
-        grad.setColorAt(0.6, QColor(ACCENT_GOLD))
-        grad.setColorAt(1.0, QColor("#333"))
+        grad.setColorAt(0.6, QColor(_s.GRADIENT_COLOR))
+        grad.setColorAt(1.0, QColor(_s.FG_DIM))
 
         # 2. Create Text Path
         # We convert text to a shape so we can fill it with the gradient
@@ -83,7 +84,7 @@ class VitalsWindow(QDialog):
         
         self.frame = QFrame()
         # Glassmorphic + Ultra Compact
-        self.frame.setStyleSheet(f"background: rgba(8, 8, 8, 230); border: 1px solid {ACCENT_GOLD}; border-radius: 4px;")
+        self.frame.setStyleSheet(f"background: rgba(8, 8, 8, 230); border: 1px solid {_s.ACCENT_PRIMARY}; border-radius: 4px;")
         
         frame_layout = QVBoxLayout(self.frame)
         frame_layout.setSpacing(2) 
@@ -92,11 +93,11 @@ class VitalsWindow(QDialog):
         # Header
         head = QHBoxLayout()
         lbl = QLabel("SYSTEM VITALS")
-        lbl.setStyleSheet(f"color: {ACCENT_GOLD}; font-weight: 900; font-size: 9px; border:none; background: transparent;")
+        lbl.setStyleSheet(f"color: {_s.ACCENT_PRIMARY}; font-weight: 900; font-size: 9px; border:none; background: transparent;")
         btn_x = QPushButton("×")
         btn_x.setFixedSize(14, 14)
         btn_x.clicked.connect(self.close)
-        btn_x.setStyleSheet("color: #666; border: none; font-weight: bold; background: transparent; padding:0; margin:0;")
+        btn_x.setStyleSheet(f"color: {_s.FG_DIM}; border: none; font-weight: bold; background: transparent; padding:0; margin:0;")
         head.addWidget(lbl)
         head.addStretch()
         head.addWidget(btn_x)
@@ -108,15 +109,15 @@ class VitalsWindow(QDialog):
             row = QHBoxLayout()
             row.setSpacing(4)
             l = QLabel(key)
-            l.setStyleSheet("color: #888; font-size: 8px; font-weight: bold; border:none; background: transparent;")
+            l.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 8px; font-weight: bold; border:none; background: transparent;")
             l.setFixedWidth(22)
             
             bar = QProgressBar()
             bar.setFixedHeight(2) # Ultra thin
             bar.setTextVisible(False)
             bar.setStyleSheet(f"""
-                QProgressBar {{ background: #222; border: none; border-radius: 1px; }}
-                QProgressBar::chunk {{ background: {FG_ACCENT}; border-radius: 1px; }}
+                QProgressBar {{ background: {_s.BORDER_SUBTLE}; border: none; border-radius: 1px; }}
+                QProgressBar::chunk {{ background: {_s.FG_ACCENT}; border-radius: 1px; }}
             """)
             bar.setValue(0)
             self.bars[key] = bar
@@ -157,7 +158,7 @@ class VitalsWindow(QDialog):
 # MODE SELECTOR (GOLD)
 # ======================
 class ModeSelector(QWidget):
-    modeChanged = Signal(str) # "OPERATOR" or "OVERSEER"
+    modeChanged = Signal(str) # "OPERATOR" or "MONITOR"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,7 +169,7 @@ class ModeSelector(QWidget):
         layout.setContentsMargins(20, 5, 20, 5)
         
         self.btn_op = self._make_box("OPERATOR", True)
-        self.btn_ov = self._make_box("OVERSEER", False)
+        self.btn_ov = self._make_box("MONITOR", False)
         
         layout.addStretch()
         layout.addWidget(self.btn_op)
@@ -187,9 +188,9 @@ class ModeSelector(QWidget):
 
     def _style_btn(self, btn, active):
         # GOLD highlight when active
-        border = ACCENT_GOLD if active else "#333"
-        bg = "#1a1a1a" if active else BG_INPUT
-        color = ACCENT_GOLD if active else FG_DIM
+        border = _s.ACCENT_PRIMARY if active else _s.BORDER_LIGHT
+        bg = _s.BORDER_SUBTLE if active else _s.BG_INPUT
+        color = _s.ACCENT_PRIMARY if active else _s.FG_DIM
         weight = "bold" if active else "normal"
         
         btn.setStyleSheet(f"""
@@ -200,7 +201,7 @@ class ModeSelector(QWidget):
                 font-family: 'Segoe UI'; font-size: 10px; font-weight: {weight};
                 border-radius: 2px;
             }}
-            QPushButton:hover {{ border-color: {ACCENT_GOLD}; color: {FG_TEXT}; }}
+            QPushButton:hover {{ border-color: {_s.ACCENT_PRIMARY}; color: {_s.FG_TEXT}; }}
         """)
 
     def _select(self, mode):
@@ -227,10 +228,11 @@ class GradientLine(QFrame):
         self.repaint()
     
     def paintEvent(self, event):
+        import core.style as _s
         painter = QPainter(self)
         grad = QLinearGradient(0, 0, self.width(), 0)
-        c_gold = QColor(ACCENT_GOLD)
-        c_dark = QColor("#111111")
+        c_gold = QColor(_s.GRADIENT_COLOR)
+        c_dark = QColor(_s.BG_SIDEBAR)
         grad.setSpread(QLinearGradient.RepeatSpread)
         w = self.width()
         start_x = -self.offset * w
@@ -261,7 +263,7 @@ class BehaviorTagInput(QFrame):
         self._tags = []
 
         self.setStyleSheet(
-            f"background: {BG_INPUT}; border: 1px solid #333; border-radius: 2px;"
+            f"background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; border-radius: 2px;"
         )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -274,7 +276,7 @@ class BehaviorTagInput(QFrame):
 
         self._input = TagLineEdit()
         self._input.setPlaceholderText("Type tags...")
-        self._input.setStyleSheet(f"background: transparent; color: {FG_TEXT}; border: none;")
+        self._input.setStyleSheet(f"background: transparent; color: {_s.FG_TEXT}; border: none;")
         self._input.textEdited.connect(self._on_text_edited)
         self._input.returnPressed.connect(self._commit_current_text)
         self._input.backspaceOnEmpty.connect(self._remove_last_tag)
@@ -311,10 +313,10 @@ class BehaviorTagInput(QFrame):
         chip.setStyleSheet(
             f"""
             QPushButton {{
-                background: #1a1a1a; border: 1px solid #333; color: {FG_TEXT};
+                background: {_s.BORDER_SUBTLE}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_TEXT};
                 padding: 2px 6px; font-size: 10px; font-weight: bold; border-radius: 2px;
             }}
-            QPushButton:hover {{ color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD}; }}
+            QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY}; }}
             """
         )
         chip.clicked.connect(lambda _, t=normalized: self._remove_tag(t))
@@ -374,11 +376,11 @@ class SplitControlBlock(QWidget):
         layout.setSpacing(1)
         base_style = f"""
             QPushButton {{
-                background: #1a1a1a; border: none; color: {FG_DIM};
+                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
                 font-family: 'Segoe UI'; font-size: 8px;
             }}
-            QPushButton:hover {{ background: {ACCENT_GOLD}; color: black; }}
-            QPushButton:pressed {{ background: #b08d2b; color: black; }}
+            QPushButton:hover {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
+            QPushButton:pressed {{ background: {_s.ACCENT_PRIMARY_DARK}; color: black; }}
         """
         self.btn_min = QPushButton("─")
         self.btn_min.setFixedSize(22, 16) 
@@ -394,13 +396,34 @@ class SplitControlBlock(QWidget):
         self.btn_close.setFixedHeight(16)
         self.btn_close.setStyleSheet(f"""
             QPushButton {{
-                background: #1a1a1a; border: none; color: {FG_DIM};
+                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
                 font-family: 'Segoe UI'; font-size: 12px;
             }}
-            QPushButton:hover {{ background: {FG_ERROR}; color: white; }}
-            QPushButton:pressed {{ background: #a00; color: white; }}
+            QPushButton:hover {{ background: {_s.FG_ERROR}; color: white; }}
+            QPushButton:pressed {{ background: {_s.FG_ERROR}; color: white; }}
         """)
         self.btn_close.clicked.connect(self.closeClicked)
         layout.addWidget(self.btn_min, 0, 0)
         layout.addWidget(self.btn_max, 0, 1)
         layout.addWidget(self.btn_close, 1, 0, 1, 2)
+
+    def refresh_style(self):
+        import core.style as _s
+        base_style = f"""
+            QPushButton {{
+                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
+                font-family: 'Segoe UI'; font-size: 8px;
+            }}
+            QPushButton:hover {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
+            QPushButton:pressed {{ background: {_s.ACCENT_PRIMARY_DARK}; color: black; }}
+        """
+        self.btn_min.setStyleSheet(base_style)
+        self.btn_max.setStyleSheet(base_style)
+        self.btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background: {_s.BORDER_SUBTLE}; border: none; color: {_s.FG_DIM};
+                font-family: 'Segoe UI'; font-size: 12px;
+            }}
+            QPushButton:hover {{ background: {_s.FG_ERROR}; color: white; }}
+            QPushButton:pressed {{ background: {_s.FG_ERROR}; color: white; }}
+        """)

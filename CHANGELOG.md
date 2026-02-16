@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.2.2a — 2025-02-16
+
+### Theme Engine Overhaul
+
+- **Dynamic theme system** — 4 built-in themes: Midnight (blue), Obsidian (dark blue), Monolithic (gold), Slate (ChatGPT green). Default: Midnight.
+- **Slate theme** — New ChatGPT-inspired dark mode with `#10a37f` green accent, `#343541` background.
+- **Theme persistence** — Selected theme saved to `%APPDATA%/Monolith/config/theme.json` and restored on launch.
+- **Live theme switching** — All UI components update instantly when theme changes via Appearance dropdown in Hub.
+
+### Style Migration
+
+- **Eliminated stale color imports** — Replaced all `from core.style import X` with dynamic `import core.style as s` pattern across 18 files. Prevents Python binding bugs where colors freeze at import time.
+- **Widget refresh system** — All atom widgets (`MonoButton`, `MonoGroupBox`, `MonoTriangleButton`, `MonoSlider`, `CollapsibleSection`) now have `refresh_style()` methods for live theme updates.
+- **Bootstrap theme handler** — `_on_theme_changed` now walks all mounted pages and open modules, calling `apply_theme_refresh()` on each.
+- **Sidebar + window controls** — Sidebar buttons and `SplitControlBlock` (min/max/close) refresh on theme change.
+
+### New Files
+
+- `core/themes.py` — Theme registry with 4 theme dataclasses and `apply_theme()` function.
+- `core/theme_config.py` — JSON-based theme persistence (`load_theme_config` / `save_theme_config`).
+
+### Bug Fixes
+
+- Fixed group box title clipping ("MODUL..." / "SYSTE...") — `adjustSize()` now runs after stylesheet is applied.
+- Fixed `BG_INPUT` NameError crash in chat send button — bare reference not caught by f-string migration.
+- Fixed `_s._s.FG_ERROR` double-prefix in chat trace HTML.
+- Fixed OverseerDB shutdown crash — all DB methods now gracefully return when connection is closed instead of raising `RuntimeError`.
+- Fixed Modules page retaining wrong theme colors after theme switch.
+
+---
+
 ## v0.2a — 2025-02-09
 
 ### New Systems

@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QPoint, QEvent, QMimeData
 from PySide6.QtGui import QPainter, QColor, QPen, QPolygonF, QDrag
 
-from core.style import ACCENT_GOLD
 from .atoms import SidebarButton
 
 class OverflowArrow(QWidget):
@@ -26,10 +25,11 @@ class OverflowArrow(QWidget):
     def mousePressEvent(self, e): self.clicked.emit()
         
     def paintEvent(self, e):
+        import core.style as s
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         y_off = math.sin(self.phase) * 2
-        c = QColor(ACCENT_GOLD)
+        c = QColor(s.ACCENT_PRIMARY)
         c.setAlpha(150)
         p.setPen(QPen(c, 1.5))
         p.setBrush(Qt.NoBrush)
@@ -90,9 +90,10 @@ class ModuleIcon(SidebarButton):
     def paintEvent(self, e):
         super().paintEvent(e)
         if self.is_pulsing and not self.isChecked():
+            import core.style as s
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
-            glow = QColor(ACCENT_GOLD)
+            glow = QColor(s.ACCENT_PRIMARY)
             alpha = int(((math.sin(self.pulse_phase) + 1) / 2) * 50)
             glow.setAlpha(alpha)
             p.fillRect(self.rect(), glow)

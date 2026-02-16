@@ -1,0 +1,52 @@
+1) Theme is not paint — it’s instrumentation
+
+Stop thinking “theme = colors/fonts.” Treat styling as a live readout of system state: confidence, latency, GPU load, privacy mode, error proximity, creative intensity. The UI doesn’t wear a theme; it broadcasts a current. This haunts because the moment you do it, every hacky visual inconsistency becomes audible—like being able to hear wiring hum in a studio.
+
+2) Modules don’t plug in — they court
+
+Instead of “host loads plugins,” modules announce what they can do and what they want, and they form temporary alliances per task. A vision module might “follow” the file manager when images are present; the audio module might “shadow” chat when cadence suggests music intent. This haunts because your app stops being a set of pages and becomes a social graph of capabilities—where dead modules feel like silent bandmates.
+
+3) Overseer isn’t a tool — it’s the app’s conscience
+
+Overseer shouldn’t be a separate window you open; it should be the always-on witness that names what just happened, what caused it, and what it touched. Every action leaves a trace, and every trace can be replayed, challenged, or interrupted. This haunts because it forces the codebase to confess its hidden coupling in plain language, and once you see it, you can’t unsee it.
+
+4) Remove buttons as a concept; keep only intent surfaces
+
+If the user can never click a button, UI becomes a set of surfaces that accept: typed intent, spoken intent, and drag intent. The “controls” become inference-friendly affordances (drop zones, contextual fields, command lines) instead of explicit widgets. This haunts because it pushes you to design for legibility of state rather than discoverability of features—your app must explain itself without a control panel.
+
+5) Designed by a musician: the app is a timeline, not a desktop
+
+Everything becomes a clip: prompts, files, renders, logs, debug sessions, model runs—stacked as tracks that can be muted, looped, branched, remixed. “Undo” becomes non-destructive editing; “history” becomes arrangement view; “workflow” becomes composition. This haunts because it turns the whole system into something you perform, and suddenly your current window/page paradigm feels like trying to write music with spreadsheets.
+
+Smallest change with the biggest ripple (2 sentences)
+
+Introduce a single, app-wide event ledger that records every high-level user action and every cross-module message without changing behavior (just log + timestamp + origin + target). Once that exists, Overseer stops being a UI feature and becomes the substrate: replay, narration, state-driven styling, and no-click interaction all become inevitable instead of aspirational.
+
+If you were to re-create Monolith into a v2, what changes would you make?
+Thought for 2m 16s
+
+If I rebuilt Monolith as a true v2, I’d change the center of gravity. Not “refactor,” not “clean up” — change what the app is.
+
+Make “workspace state” the primary object, not pages.
+Chat, files, renders, prompts, traces, model runs — all become the same kind of thing: an artifact with metadata + relationships. Pages stop owning reality; they become different views over the same artifact graph. This instantly forces every module to behave like it lives inside a larger system (because it literally does).
+
+Overseer becomes the substrate, not a window.
+Everything meaningful emits a single kind of event into an append-only ledger: intent → task → engine state → outputs → errors. The UI can then be “conscious” by default: narrating what happened, why it happened, and what it touched, without bespoke debug wiring. The haunting part: you can replay the app’s mind, which exposes every hidden coupling and lie.
+
+Replace “plugin host” with a capability mesh.
+Modules don’t “mount into tabs”; they advertise verbs (“generate_image”, “transcribe_audio”, “index_folder”) and subscribe to contexts (images present, audio present, chat active, file dragged in). The system routes opportunities, not screens. This makes modules discover each other naturally, and the app starts behaving like a studio where tools gravitate toward the current work.
+
+Kill themes as paint; make styling a live readout.
+Your “theme” becomes a function of system state: model loaded, GPU hot, error proximity, privacy mode, generation mode, confidence/latency, etc. Widgets stop styling themselves at birth; they render against a small set of live tokens that update globally. That’s the end of stylesheet whack-a-mole — because the UI is no longer decoration, it’s instrumentation.
+
+Abolish click-first UI; keep only intent surfaces (type / speak / drag).
+All actions become verbs routed through one intent channel (command line / voice input / drag targets), with the UI acting like an affordance layer, not a button museum. This forces consistency: every feature must be expressible as an intent and visible as state. It also forces you to build “what am I allowed to do right now?” into the core, which is where your authority gradient actually becomes felt.
+
+Delete the fragile “string command passthrough law” by making engines self-describing.
+Right now your contract admits a danger: add a command in one place and you can deadlock the pipeline. In v2, engines should handshake their supported verbs/inputs at registration so Guard/Bridge don’t require manual triplicate updates. This reduces accidental complexity without adding “layers” — it removes a whole class of failure.
+
+Turn the whole app into a timeline (musician brain).
+Every action becomes a clip on tracks: prompts, generations, edits, tool runs, debug traces, file ingests. “Undo” becomes non-destructive; “history” becomes arrangement; “workflow” becomes composition and remix. The scary part is how fast it makes the current page-based mental model feel wrong.
+
+If you want the single guiding sentence for v2:
+Monolith stops being an app with features and becomes an instrument with memory.

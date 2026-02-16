@@ -1,0 +1,21 @@
+You are reviewing the architecture of "Monolith" — a PySide6 desktop application that serves as an AI workspace. It has a modular addon system, theme engine, chat interface, file manager, vision/audio generation modules, and a runtime debugger called Overseer.
+
+The current v1 works. It is not broken. But it was built by accretion — one feature at a time, each solving the problem in front of it. The codebase has the fingerprints of pragmatism everywhere: f-string stylesheets, signal spaghetti between bridges, widgets that style themselves at birth and never update, module pages that don't know they exist inside a larger system.
+
+Here is what I do NOT want from you:
+- Do not give me a "clean architecture" lecture
+- Do not suggest microservices, Redux, or anything that sounds like a blog post
+- Do not propose adding layers for the sake of layers
+- Do not tell me to rewrite it in Rust or Electron
+
+Here is what I want:
+- Think about what this application WANTS to become, not what best practices say it should be
+- What if the theme system wasn't a theme system at all? What if styling was something else entirely?
+- What if modules didn't "plug in" to a host — what if they discovered each other?
+- What if the Overseer wasn't a separate window but was the application's consciousness?
+- What would this app look like if it was designed by a musician instead of a programmer?
+- What would change if the user could never click a button — only speak, type, or drag?
+
+Give me 5 architectural provocations. Not solutions. Not patterns. Ideas that make me uncomfortable because they might actually be better. Each one should be 3-5 sentences max. No code. No diagrams. Just the idea and why it haunts you.
+
+Then give me 1 concrete thing — the single smallest change to the current codebase that would have the largest ripple effect toward whatever future you're imagining. Explain it in 2 sentences.

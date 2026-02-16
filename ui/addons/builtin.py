@@ -180,7 +180,7 @@ def hub_factory(ctx: AddonContext):
         ctx.guard.sig_trace.emit("system", f"[OPERATOR] snapshot: {len(modules)} modules")
         return {"modules": modules, "module_order": module_order}
 
-    w = PageHub(config_provider=_snapshot_workspace, operator_manager=manager)
+    w = PageHub(config_provider=_snapshot_workspace, operator_manager=manager, ui_bridge=ctx.ui_bridge)
 
     def _load_operator(name: str):
         ctx.guard.sig_trace.emit("system", f"[OPERATOR] loading '{name}'")
@@ -280,7 +280,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="terminal",
             kind="module",
-            title="TERMINAL",
+            title="CHAT",
             icon="⌖",
             factory=terminal_factory,
         )
@@ -289,7 +289,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="databank",
             kind="module",
-            title="DATABANK",
+            title="FILES",
             icon="▤",
             factory=databank_factory,
         )
@@ -298,7 +298,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="hub",
             kind="page",
-            title="HUB",
+            title="HOME",
             icon=None,
             factory=hub_factory,
         )
@@ -307,7 +307,7 @@ def build_builtin_registry() -> AddonRegistry:
         AddonSpec(
             id="addons",
             kind="page",
-            title="ADDONS",
+            title="MODULES",
             icon=None,
             factory=addons_page_factory,
         )

@@ -1,0 +1,20 @@
+Architectural Provocations
+1. The Interface as a Decay Function
+Stop thinking of "themes" as cosmetic skins and start treating the UI as a biological symptom of the system's health. Map system stress directly to visual fidelity: as memory fills, the UI loses contrast; as errors accumulate, the font kerning drifts; as the CPU spikes, the window borders vibrate. The application shouldn't just show you the data; it should physically react to the burden of processing it, making "optimization" a visual restoration project rather than a code refactor.
+
+2. The Mixing Board Metaphor
+If you view your signal spaghetti through the lens of a musician, you aren't "connecting objects"—you are routing audio. Replace your rigid signal-slot wiring with a "bus and send" architecture where modules emit continuous streams of state (audio) that others can tap into, amplify, or mute without the emitter knowing. Debugging stops being a logic puzzle and becomes a mixing session: if a module is too noisy (spamming events), you don't rewrite it, you just apply a low-pass filter to its output.
+
+3. The Hallucinated OS
+You are currently building a tool that has a chat interface inside it; flip the hierarchy so the entire application is inside the chat interface's imagination. The MonolithUI window shouldn't exist until the LLM "decides" it needs to show you a file manager or a vision generator to answer your query. The GUI becomes a transient, hallucinated artifact that is summoned into existence only when the conversation demands a visual aid, and dissolves back into text when the task is done.
+
+4. Ephemeral Widget Theory
+The "widgets that style themselves at birth and never update" isn't a bug; it's a philosophy of impermanence that you should accelerate. Instead of writing complex logic to update a label's text or style when state changes, simply destroy the widget and spawn a fresh one with the new truth. This eliminates the need for synchronization logic entirely—if a UI element exists, it is correct; if it is incorrect, it is already dead.
+
+5. Vectorized Dependency Injection
+Abandon the "plugin registry" and give every module a semantic embedding description of what it does. Modules shouldn't import each other or plug into a host; they should query the runtime environment (RAG-style) to find collaborators, asking, "Who here can handle an image?" The architecture stops being a static blueprint and becomes a cocktail party where features introduce themselves dynamically based on the context of the current workflow.
+
+The Concrete Change
+Inject the Overseer instance directly into Python's builtins module during bootstrap.py.
+
+By making the Overseer globally available as a builtin (like print or len), every single widget, thread, and helper function can immediately access the system's "consciousness" without passing objects through twenty layers of constructors, instantly flattening your architecture into a unified nervous system.

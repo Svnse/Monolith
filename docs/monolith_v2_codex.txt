@@ -1,0 +1,274 @@
+MONOLITH V2 — ARCHITECTURAL CODEX
+===================================
+Synthesized from four independent architectural reviews (Claude, GPT, Grok, Gemini).
+Revised with structural feedback. This is a constraint system, not a wish list.
+
+
+0. THE INVARIANT
+-----------------
+All observable behavior in v2 must be reconstructible from the event ledger.
+
+This is the gravity. Every pillar bows to it:
+- Styling derives from state recorded in the ledger.
+- Modules emit typed events into the ledger.
+- Presences mutate only through recorded transitions.
+- Intent surfaces translate user action into ledger entries.
+- Debugging is state replay — nothing more.
+
+If a feature cannot express itself as ledger entries, it does not belong in v2.
+
+
+I. IDENTITY SHIFT
+------------------
+v1 is an application with features.
+v2 is an instrument with memory.
+
+Monolith stops being a desktop app you open and becomes a workspace you inhabit.
+The user doesn't navigate pages — they manipulate artifacts, speak intent, and
+the system responds by surfacing the right tools at the right time.
+
+
+II. THE FIVE PILLARS
+--------------------
+
+1. OVERSEER IS THE SUBSTRATE, NOT A WINDOW
+
+   The Overseer is not a debug tool you open separately. It IS the application.
+   Every token streamed, every image rendered, every module spawned, every error
+   thrown appears chronologically in a single append-only event ledger. The
+   "chat page" is just a filtered view of that ledger. The "vision page" is
+   another filter. The "file manager" is another filter. There is only one
+   reality: the trace stream. Everything else is a lens.
+
+   The ledger is the timeline. "Tracks" are not a metaphor — they are filtered
+   projections of the same stream. Chat is one track. Vision is another. They
+   share a single clock, a single sequence, a single source of truth.
+
+   This means: replay is free. Undo is non-destructive. Debugging is just
+   reading the app's own memory. Hidden coupling between modules becomes
+   visible the moment it happens — because everything confesses to the ledger.
+
+   The smallest version of this: a single app-wide event bus that logs every
+   high-level action (intent + timestamp + origin + target) without changing
+   any behavior. Once that exists, everything else becomes inevitable.
+
+
+2. STYLING IS INSTRUMENTATION, NOT DECORATION
+
+   A "theme" is not a color palette. It is a live readout of system state.
+
+   The UI should physically react to what's happening: model loaded, GPU hot,
+   generation in progress, error proximity, idle, privacy mode. Widgets don't
+   style themselves at birth — they render against a small set of live tokens
+   that update globally. One stylesheet. One source of truth. No per-widget
+   f-string interpolation. No refresh_style() methods. No import dance.
+
+   The ambitious version: themes modulate not just color but timing, animation
+   curves, and generation parameters. "Midnight" slows transitions and deepens
+   contrast. "Slate" is clinical and fast. Switching themes feels like changing
+   instruments mid-performance, not swapping wallpaper.
+
+   The practical minimum: replace all per-widget styling with a single
+   QApplication-level cascading stylesheet built from a ThemeEngine object.
+   Theme change = rebuild one string, call setStyleSheet once. Done forever.
+
+
+3. MODULES DISCOVER, NOT PLUG IN
+
+   The current addon host is a registry that modules mount into. v2 flips this.
+
+   The mechanism: every module implements a capability descriptor — a small
+   dataclass declaring its verbs (what it can do), its appetites (what contexts
+   it activates on), and its emissions (what events it produces). At startup,
+   each module registers its descriptor with the kernel bus. The bus maintains
+   a live capability index. When context changes (file dragged in, image
+   generated, audio present), the bus notifies modules whose appetites match.
+   Modules respond or stay silent. There is no central routing logic — only
+   a matching function between appetites and available context.
+
+   This is not dynamic magic routing. It is a concrete advertisement model:
+   modules publish what they do, subscribe to what they care about, and the
+   bus is a dumb matchmaker with a good memory.
+
+   Extending Monolith feels like adding a musician to a session. They show up,
+   listen to what's playing, and start contributing when the moment is right.
+   Dead modules feel like silent bandmates, not missing menu items.
+
+
+4. INTENT SURFACES REPLACE BUTTONS
+
+   The user interacts through three channels: type, speak, drag.
+
+   Every module, file, operator, and artifact becomes a draggable object.
+   Dropping creates intent. The kernel infers verbs from object combinations.
+   A global "drop zone" follows context — drag a GGUF file plus a text prompt
+   onto the horizon bar and a new LLM thread spawns. Drag an image onto an
+   active chat and it becomes vision context. No button was clicked.
+
+   This forces the UI to explain itself through state legibility, not control
+   discoverability. The app must answer "what can I do right now?" at every
+   moment without a button panel. Controls become inference-friendly
+   affordances: drop zones, contextual fields, command lines.
+
+   The practical minimum: a universal command palette (type any intent) +
+   drag-and-drop between all surfaces. Buttons remain as shortcuts but are
+   never the only path to an action.
+
+
+5. PRESENCES (formerly Operators)
+
+   Presences are not saved snapshots. They are evolving organisms — with bounds.
+
+   Every session subtly mutates the nearest matching presence based on user
+   behavior — prompt styles, module combinations, generation parameters,
+   thinking modes. Loading a presence feels like resuming a conversation with
+   a slightly different version of the system that has adapted to how you
+   actually work.
+
+   The bounds:
+   - Mutations are recorded as transitions in the event ledger. The user can
+     inspect, revert, or fork any mutation. Implicit memory does not mean
+     invisible memory.
+   - A presence never mutates beyond a configurable drift threshold without
+     prompting the user: "Your workflow has shifted — save as new presence
+     or update existing?"
+   - Raw chat history is never stored in the presence unless the user opts in.
+     Presences remember patterns, not content.
+   - Every presence has a lineage: a chain of recorded transitions back to
+     its original state. You can always get home.
+
+   The system has memory and gentle agency. It is bounded, auditable, and
+   reversible. This is what makes it trustworthy instead of creepy.
+
+
+III. ENGINEERING TRUTHS (from v1 lessons)
+-----------------------------------------
+
+These are not aspirational. These are scars.
+
+- Module-level imports of mutable state create bugs that look like theme
+  bugs but are actually Python binding semantics bugs. Never again.
+
+- Widgets that style themselves once at birth will always drift from the
+  active theme. Either style globally (one cascading sheet) or give every
+  widget a refresh hook and call it on every state change. There is no
+  middle ground.
+
+- Signal spaghetti between 4+ bridge objects makes debugging a graph
+  traversal problem. A single event ledger with typed events (dataclasses)
+  makes it a grep problem. Grep always wins.
+
+- The shutdown race condition (OverseerDB closed while signals still fire)
+  is a symptom of unclear lifecycle ownership. Every resource needs exactly
+  one owner and a guaranteed teardown order.
+
+- Engines should self-describe their supported verbs at registration.
+  The current "add a command in one place and hope the pipeline doesn't
+  deadlock" contract is a class of failure that should not exist.
+
+- f-string QSS in every __init__ is tech debt that compounds. It was the
+  right call for velocity in v1. It is the wrong call for v2.
+
+
+IV. THE GUIDING METAPHOR
+-------------------------
+
+Four models were asked to reimagine Monolith. All four independently
+converged on the same metaphor: a musical instrument / studio.
+
+- Grok: "Switching themes feels like changing instruments mid-performance."
+- GPT: "Monolith stops being an app with features and becomes an instrument
+  with memory."
+- Gemini: "Replace rigid signal-slot wiring with a bus-and-send architecture
+  where modules emit continuous streams... debugging becomes a mixing session."
+- Claude: "Extending Monolith feels like adding a musician to a session."
+
+This is not a coincidence. The application's structure — modular, real-time,
+creative, local-first — maps naturally to how instruments work in a studio.
+The v2 design language embraces this: tracks instead of tabs, sessions instead
+of pages, mixing instead of configuring, performing instead of clicking.
+
+The ledger is the master tape. Everything else is a channel strip.
+
+
+V. WHAT v2 IS NOT
+------------------
+
+- Not a rewrite from scratch. The addon system, guard/dock pattern, and
+  overseer foundation are correct. The plumbing changes, the bones stay.
+
+- Not a web app. Local-first, private-by-default is the differentiator.
+  Every cloud AI tool is a web app. Monolith is not.
+
+- Not a framework. It is an opinionated product. It does not try to be
+  extensible by everyone for everything. It is an instrument for one
+  player at a time.
+
+- Not "clean architecture" for its own sake. Every abstraction must earn
+  its existence by solving a real problem that v1 actually had.
+
+
+VI. COMMERCIAL READINESS (honest assessment)
+---------------------------------------------
+
+v1 is a 3/10 for commercial use. Outstanding personal tool, not yet
+sellable. The gap is not features — it's:
+
+- Onboarding (no installer, no model downloader, no graceful GPU fallback)
+- Polish (raw UI, no accessibility, no error recovery UX)
+- Distribution (no auto-updater, no bundled runtime, no licensing)
+- Identity (no clear name for the product category it creates)
+
+v2 closes this gap not by adding features but by making the existing
+features feel inevitable instead of bolted on.
+
+
+VII. THE SINGLE SMALLEST CHANGE
+--------------------------------
+
+All four models agreed on essentially the same answer:
+
+Replace per-widget styling with a single, app-wide source of truth that
+all components read from at render time — not at creation time.
+
+This one change:
+- Eliminates the entire class of "stale theme" bugs
+- Makes animated/reactive/generative styling possible
+- Forces every component to be live-aware of its context
+- Removes hundreds of lines of refresh plumbing
+
+Do this first. Everything else follows.
+
+
+VIII. MIGRATION PATH (v1 → v2)
+-------------------------------
+
+v2 is not a flag day. It is a sequence of irreversible clarifications:
+
+Phase 1 — THE LEDGER
+  Add the append-only event ledger alongside existing signals. Don't remove
+  signals yet. Just start recording. Once everything logs, you can see what
+  to simplify.
+
+Phase 2 — THE STYLESHEET
+  Replace all per-widget QSS with a single QApplication-level stylesheet.
+  Delete every refresh_style() method. Delete every `import core.style as s`
+  inside __init__. One file generates one stylesheet string. Done.
+
+Phase 3 — THE DESCRIPTORS
+  Add capability descriptors to each module. The existing registry stays.
+  But now modules also advertise verbs and appetites. The bus starts matching.
+  Old mount_page/launch_module still works — discovery is additive, not
+  replacing.
+
+Phase 4 — THE SURFACES
+  Add command palette and drag-and-drop intent routing. Buttons remain.
+  Every action now has two paths: click or intent. Over time, buttons that
+  nobody clicks get removed naturally.
+
+Phase 5 — THE PRESENCES
+  Extend operators with mutation tracking and lineage. This is the last
+  phase because it requires the ledger to be mature and trusted.
+
+Each phase is independently shippable. Each phase makes the next one easier.
+No phase requires the previous one to be "complete" — only started.

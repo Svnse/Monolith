@@ -17,9 +17,7 @@ class OverseerDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_schema()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        if self._conn is None:
-            raise RuntimeError("OverseerDB connection is closed")
+    def _get_conn(self) -> sqlite3.Connection | None:
         return self._conn
 
     def _create_schema(self) -> None:
@@ -56,6 +54,8 @@ class OverseerDB:
         payload_text = json.dumps(payload)
         with self._lock:
             conn = self._get_conn()
+            if conn is None:
+                return -1
             cur = conn.execute(
                 "INSERT INTO events(ts, engine_key, event, payload) VALUES(?, ?, ?, ?)",
                 (self._now(), engine_key, event, payload_text),
@@ -66,6 +66,8 @@ class OverseerDB:
     def log_task(self, task_id: str, engine_key: str, status: str) -> int:
         with self._lock:
             conn = self._get_conn()
+            if conn is None:
+                return -1
             cur = conn.execute(
                 "INSERT INTO tasks(task_id, engine_key, status, ts) VALUES(?, ?, ?, ?)",
                 (task_id, engine_key, status, self._now()),
@@ -75,7 +77,10 @@ class OverseerDB:
 
     def get_recent_events(self, limit: int = 500) -> list[dict[str, Any]]:
         with self._lock:
-            cur = self._get_conn().execute(
+            conn = self._get_conn()
+            if conn is None:
+                return []
+            cur = conn.execute(
                 "SELECT id, ts, engine_key, event, payload FROM events ORDER BY id DESC LIMIT ?",
                 (limit,),
             )
@@ -85,7 +90,10 @@ class OverseerDB:
 
     def get_recent_tasks(self, limit: int = 500) -> list[dict[str, Any]]:
         with self._lock:
-            cur = self._get_conn().execute(
+            conn = self._get_conn()
+            if conn is None:
+                return []
+            cur = conn.execute(
                 "SELECT id, task_id, engine_key, status, ts FROM tasks ORDER BY id DESC LIMIT ?",
                 (limit,),
             )
@@ -120,7 +128,10 @@ class OverseerDB:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         with self._lock:
-            cur = self._get_conn().execute(
+            conn = self._get_conn()
+            if conn is None:
+                return []
+            cur = conn.execute(
                 f"SELECT id, ts, engine_key, event, payload FROM events {where} ORDER BY id DESC LIMIT ?",
                 params,
             )

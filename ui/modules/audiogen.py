@@ -10,8 +10,8 @@ from PySide6.QtCore import Qt, QThread, Signal, QUrl, QTimer
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtGui import QPainter, QPen, QColor
 
-from core.style import BG_INPUT, BORDER_DARK, FG_DIM, FG_TEXT, FG_ACCENT, FG_ERROR
-from ui.components.atoms import SkeetGroupBox, SkeetButton, SkeetTriangleButton, CollapsibleSection
+import core.style as _s  # dynamic theme bridge
+from ui.components.atoms import MonoGroupBox, MonoButton, MonoTriangleButton, CollapsibleSection
 
 AUDIOCRAFT_AVAILABLE = False
 try:
@@ -26,7 +26,8 @@ class WaveformWidget(QFrame):
     def __init__(self):
         super().__init__()
         self.setFixedHeight(120)
-        self.setStyleSheet(f"background: {BG_INPUT}; border: 1px solid {BORDER_DARK};")
+        import core.style as _s
+        self.setStyleSheet(f"background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_DARK};")
         self.waveform_data = None
         
     def set_waveform(self, audio_array):
@@ -44,20 +45,21 @@ class WaveformWidget(QFrame):
     
     def paintEvent(self, event):
         super().paintEvent(event)
+        import core.style as _s
         if self.waveform_data is None:
             painter = QPainter(self)
-            painter.setPen(QPen(QColor(FG_DIM)))
+            painter.setPen(QPen(QColor(_s.FG_DIM)))
             painter.drawText(self.rect(), Qt.AlignCenter, "NO WAVEFORM")
             return
-            
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
+
         w = self.width()
         h = self.height()
         mid_y = h / 2
-        
-        pen = QPen(QColor(FG_ACCENT), 1)
+
+        pen = QPen(QColor(_s.FG_ACCENT), 1)
         painter.setPen(pen)
         
         data = self.waveform_data
@@ -115,7 +117,8 @@ class AudioGenWorker(QThread):
 class AudioGenModule(QWidget):
     def __init__(self):
         super().__init__()
-        
+        import core.style as s
+
         self.config_path = Path("config/audiogen_config.json")
         self.artifacts_dir = Path("artifacts/audio")
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -143,7 +146,7 @@ class AudioGenModule(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        grp = SkeetGroupBox("AUDIO")
+        grp = MonoGroupBox("AUDIO")
         inner = QVBoxLayout()
         inner.setSpacing(12)
 
@@ -152,11 +155,11 @@ class AudioGenModule(QWidget):
         config_layout = QVBoxLayout()
         config_layout.setSpacing(8)
 
-        grp_model = SkeetGroupBox("MODEL LOADER")
+        grp_model = MonoGroupBox("MODEL LOADER")
         model_layout = QVBoxLayout()
         model_path_row = QHBoxLayout()
         lbl_model_path = QLabel("MODEL PATH")
-        lbl_model_path.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_model_path.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
         lbl_model_path.setFixedWidth(80)
         self.inp_model_path = QLineEdit(self.model_path)
         self.inp_model_path.setReadOnly(True)
@@ -164,11 +167,11 @@ class AudioGenModule(QWidget):
         self.inp_model_path.setToolTip(self.model_path)
         self.inp_model_path.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_INPUT}; color: {FG_TEXT};
-                border: 1px solid {BORDER_DARK}; padding: 4px;
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_DARK}; padding: 4px;
             }}
         """)
-        btn_browse = SkeetButton("BROWSE...")
+        btn_browse = MonoButton("BROWSE...")
         btn_browse.setFixedWidth(90)
         btn_browse.clicked.connect(self._browse_model)
         model_path_row.addWidget(lbl_model_path)
@@ -178,7 +181,7 @@ class AudioGenModule(QWidget):
 
         model_row = QHBoxLayout()
         lbl_model = QLabel("MODEL ID")
-        lbl_model.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_model.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
         lbl_model.setFixedWidth(80)
         self.inp_model_id = QLineEdit()
         self.inp_model_id.setPlaceholderText("facebook/musicgen-small")
@@ -186,8 +189,8 @@ class AudioGenModule(QWidget):
         self.inp_model_id.setReadOnly(True)
         self.inp_model_id.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_INPUT}; color: {FG_TEXT};
-                border: 1px solid {BORDER_DARK}; padding: 4px;
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_DARK}; padding: 4px;
             }}
         """)
         model_row.addWidget(lbl_model)
@@ -196,12 +199,12 @@ class AudioGenModule(QWidget):
         grp_model.add_layout(model_layout)
         config_layout.addWidget(grp_model)
 
-        grp_audio = SkeetGroupBox("AUDIO CONFIG")
+        grp_audio = MonoGroupBox("AUDIO CONFIG")
         audio_layout = QVBoxLayout()
 
         duration_row = QHBoxLayout()
         lbl_duration = QLabel("Duration (s)")
-        lbl_duration.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_duration.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
         lbl_duration.setFixedWidth(80)
         self.inp_duration = QDoubleSpinBox()
         self.inp_duration.setRange(1.0, 30.0)
@@ -210,14 +213,14 @@ class AudioGenModule(QWidget):
         self.inp_duration.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.inp_duration.setStyleSheet(f"""
             QDoubleSpinBox {{
-                background: {BG_INPUT}; color: {FG_TEXT};
-                border: 1px solid {BORDER_DARK}; padding: 4px;
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_DARK}; padding: 4px;
             }}
         """)
         duration_row.addWidget(lbl_duration)
-        btn_duration_down = SkeetTriangleButton("◀")
+        btn_duration_down = MonoTriangleButton("◀")
         btn_duration_down.clicked.connect(self.inp_duration.stepDown)
-        btn_duration_up = SkeetTriangleButton("▶")
+        btn_duration_up = MonoTriangleButton("▶")
         btn_duration_up.clicked.connect(self.inp_duration.stepUp)
         duration_row.addWidget(btn_duration_down)
         duration_row.addWidget(self.inp_duration)
@@ -227,15 +230,15 @@ class AudioGenModule(QWidget):
 
         sr_row = QHBoxLayout()
         lbl_sr = QLabel("Sample Rate")
-        lbl_sr.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_sr.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
         lbl_sr.setFixedWidth(80)
         self.cmb_sr = QComboBox()
         self.cmb_sr.addItems(["32000", "44100", "48000"])
         self.cmb_sr.setCurrentText(str(self.config.get("sample_rate", 32000)))
         self.cmb_sr.setStyleSheet(f"""
             QComboBox {{
-                background: {BG_INPUT}; color: {FG_TEXT};
-                border: 1px solid {BORDER_DARK}; padding: 4px;
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_DARK}; padding: 4px;
             }}
         """)
         sr_row.addWidget(lbl_sr)
@@ -251,25 +254,25 @@ class AudioGenModule(QWidget):
 
         # Prompt
         lbl_prompt = QLabel("Prompt")
-        lbl_prompt.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_prompt.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
 
         self.inp_prompt = QLineEdit()
         self.inp_prompt.setPlaceholderText("Describe a sound to generate...")
         self.inp_prompt.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_INPUT}; color: {FG_TEXT};
-                border: 1px solid {BORDER_DARK}; padding: 6px;
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_DARK}; padding: 6px;
             }}
         """)
 
         # Buttons
         btn_row = QHBoxLayout()
-        self.btn_generate = SkeetButton("GENERATE", accent=True)
+        self.btn_generate = MonoButton("GENERATE", accent=True)
         self.btn_generate.clicked.connect(self._start_generate)
-        self.btn_play = SkeetButton("PLAY")
+        self.btn_play = MonoButton("PLAY")
         self.btn_play.clicked.connect(self._play_audio)
         self.btn_play.setEnabled(False)
-        self.btn_save = SkeetButton("SAVE AUDIO")
+        self.btn_save = MonoButton("SAVE AUDIO")
         self.btn_save.clicked.connect(self._save_audio)
         self.btn_save.setEnabled(False)
         btn_row.addWidget(self.btn_generate)
@@ -283,9 +286,9 @@ class AudioGenModule(QWidget):
         # Status
         status_row = QHBoxLayout()
         lbl_status_title = QLabel("Status")
-        lbl_status_title.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        lbl_status_title.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
         self.lbl_status = QLabel("IDLE")
-        self.lbl_status.setStyleSheet(f"color: {FG_TEXT}; font-size: 10px; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"color: {s.FG_TEXT}; font-size: 10px; font-weight: bold;")
         status_row.addWidget(lbl_status_title)
         status_row.addStretch()
         status_row.addWidget(self.lbl_status)
@@ -323,6 +326,7 @@ class AudioGenModule(QWidget):
         self._config_timer.start()
 
     def _save_config(self):
+        import core.style as s
         config = {
             "model_path": self.model_path,
             "model_id": self.inp_model_id.text().strip() or self.inp_model_id.placeholderText(),
@@ -332,30 +336,31 @@ class AudioGenModule(QWidget):
         with open(self.config_path, 'w') as f:
             json.dump(config, f, indent=2)
         self.config = config
-        self._set_status("CONFIG SAVED", FG_ACCENT)
+        self._set_status("CONFIG SAVED", s.FG_ACCENT)
         self._status_reset_timer.start()
 
     def _browse_model(self):
+        import core.style as s
         path, _ = QFileDialog.getOpenFileName(self, "Select Audio Model", "", "All Files (*)")
         if not path:
             return
         path = os.path.abspath(path)
         try:
             if not AUDIOCRAFT_AVAILABLE:
-                self._set_status("ERROR: audiocraft not installed. pip install audiocraft", FG_ERROR)
+                self._set_status("ERROR: audiocraft not installed. pip install audiocraft", s.FG_ERROR)
                 self.inp_model_path.setText(self.model_path)
                 self.inp_model_path.setToolTip(self.model_path)
                 return
             try:
                 from audiocraft.models import MusicGen
             except ImportError:
-                self._set_status("ERROR: audiocraft not installed. pip install audiocraft", FG_ERROR)
+                self._set_status("ERROR: audiocraft not installed. pip install audiocraft", s.FG_ERROR)
                 self.inp_model_path.setText(self.model_path)
                 self.inp_model_path.setToolTip(self.model_path)
                 return
             MusicGen.get_pretrained(path)
         except Exception as exc:
-            self._set_status(f"ERROR: {str(exc)}", FG_ERROR)
+            self._set_status(f"ERROR: {str(exc)}", s.FG_ERROR)
             self.inp_model_path.setText(self.model_path)
             self.inp_model_path.setToolTip(self.model_path)
             return
@@ -364,31 +369,33 @@ class AudioGenModule(QWidget):
         self.inp_model_path.setToolTip(path)
         self._queue_save_config()
 
-    def _set_status(self, status, color):
+    def _set_status(self, status, color=None):
+        import core.style as s
         self.lbl_status.setText(status)
-        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"color: {color or s.FG_TEXT}; font-size: 10px; font-weight: bold;")
 
     def _reset_status(self):
-        self._set_status("IDLE", FG_TEXT)
+        self._set_status("IDLE")
 
     def _start_generate(self):
+        import core.style as s
         if not AUDIOCRAFT_AVAILABLE:
-            self._set_status("ERROR: audiocraft not installed. pip install audiocraft", FG_ERROR)
+            self._set_status("ERROR: audiocraft not installed. pip install audiocraft", s.FG_ERROR)
             return
-            
+
         prompt = self.inp_prompt.text().strip()
         if not prompt:
-            self._set_status("ERROR: No prompt", FG_ERROR)
+            self._set_status("ERROR: No prompt", s.FG_ERROR)
             return
 
         self.btn_generate.setEnabled(False)
         self.btn_play.setEnabled(False)
         self.btn_save.setEnabled(False)
-        self._set_status("INITIALIZING", FG_ACCENT)
+        self._set_status("INITIALIZING", s.FG_ACCENT)
 
         model_path = self.model_path
         if not model_path:
-            self._set_status("ERROR: No model selected", FG_ERROR)
+            self._set_status("ERROR: No model selected", s.FG_ERROR)
             return
 
         self.worker = AudioGenWorker(
@@ -403,7 +410,8 @@ class AudioGenModule(QWidget):
         self.worker.start()
 
     def _on_progress(self, msg):
-        self._set_status(msg, FG_ACCENT)
+        import core.style as s
+        self._set_status(msg, s.FG_ACCENT)
 
     def _on_finished(self, audio_array, sample_rate):
         self.current_audio = audio_array
@@ -420,23 +428,25 @@ class AudioGenModule(QWidget):
             audio_tensor = torch.from_numpy(audio_array).unsqueeze(0)
             torchaudio.save(str(self.current_filepath), audio_tensor, sample_rate)
         except Exception as e:
-            self._set_status(f"SAVE ERROR: {str(e)}", FG_ERROR)
+            import core.style as s
+            self._set_status(f"SAVE ERROR: {str(e)}", s.FG_ERROR)
             return
-        
+
         # Display waveform (use mono channel)
         if len(audio_array.shape) > 1:
             display_data = audio_array[0]
         else:
             display_data = audio_array
         self.waveform_widget.set_waveform(display_data)
-        
-        self._set_status("DONE", FG_TEXT)
+
+        self._set_status("DONE")
         self.btn_generate.setEnabled(True)
         self.btn_play.setEnabled(True)
         self.btn_save.setEnabled(True)
 
     def _on_error(self, err_msg):
-        self._set_status(f"ERROR: {err_msg}", FG_ERROR)
+        import core.style as s
+        self._set_status(f"ERROR: {err_msg}", s.FG_ERROR)
         self.btn_generate.setEnabled(True)
 
     def _play_audio(self):
@@ -445,7 +455,8 @@ class AudioGenModule(QWidget):
             
         self.player.setSource(QUrl.fromLocalFile(str(self.current_filepath)))
         self.player.play()
-        self._set_status("PLAYING", FG_ACCENT)
+        import core.style as s
+        self._set_status("PLAYING", s.FG_ACCENT)
 
     def _save_audio(self):
         if self.current_audio is None:
@@ -461,6 +472,8 @@ class AudioGenModule(QWidget):
         try:
             import shutil
             shutil.copy(self.current_filepath, filepath)
-            self._set_status(f"SAVED: {filename}", FG_ACCENT)
+            import core.style as s
+            self._set_status(f"SAVED: {filename}", s.FG_ACCENT)
         except Exception as e:
-            self._set_status(f"SAVE ERROR: {str(e)}", FG_ERROR)
+            import core.style as s
+            self._set_status(f"SAVE ERROR: {str(e)}", s.FG_ERROR)

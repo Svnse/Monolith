@@ -18,6 +18,15 @@ from ui.overseer import OverseerWindow
 
 def main():
     app = QApplication(sys.argv)
+
+    # Load saved theme before any UI is created
+    from core.theme_config import load_theme_config
+    from core.themes import apply_theme
+    from core.style import refresh_styles
+    theme_cfg = load_theme_config()
+    apply_theme(theme_cfg.get("theme", "midnight"))
+    refresh_styles()
+
     state = AppState()
     vision_engine_impl = VisionEngine(state)
     vision_engine = EngineBridge(vision_engine_impl)
@@ -36,6 +45,23 @@ def main():
 
     ui_bridge.sig_open_overseer.connect(overseer.show)
     ui_bridge.sig_overseer_viz_toggle.connect(guard.enable_viztracer)
+
+    # Theme change: refresh style constants and rebuild UI stylesheets
+    def _on_theme_changed(theme_name):
+        apply_theme(theme_name)
+        refresh_styles()
+        ui.apply_theme_refresh()
+        # Refresh all mounted pages (hub, addons, etc.)
+        for page in ui.pages.values():
+            if hasattr(page, "apply_theme_refresh"):
+                page.apply_theme_refresh()
+        # Refresh any open module widgets in the stack
+        for i in range(ui.stack.count()):
+            w = ui.stack.widget(i)
+            if hasattr(w, "apply_theme_refresh"):
+                w.apply_theme_refresh()
+
+    ui_bridge.sig_theme_changed.connect(_on_theme_changed)
 
     # global chrome-only wiring stays here
     guard.sig_status.connect(ui.update_status)

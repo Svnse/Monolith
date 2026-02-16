@@ -52,7 +52,7 @@ python main.py
 ## Core Overview
 
 **Status**
-v0.2.1a — Early alpha. Built for personal use and active experimentation. Shared publicly for builders & creators.
+v0.2.2a — Early alpha. Built for personal use and active experimentation. Shared publicly for builders & creators.
 
 **Features**
 * **Local LLM Chat:** GGUF models via llama.cpp

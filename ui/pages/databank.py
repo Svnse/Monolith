@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QDir, Qt
 from PySide6.QtGui import QAction
 
-from ui.components.atoms import SkeetGroupBox, SkeetButton
-from core.style import BG_INPUT, BORDER_DARK, FG_DIM, ACCENT_GOLD, BG_MAIN, FG_TEXT
+from ui.components.atoms import MonoGroupBox, MonoButton
+import core.style as _s  # dynamic theme bridge
 
 class TerminalFileTree(QTreeView):
     def __init__(self, start_path):
@@ -28,20 +28,20 @@ class TerminalFileTree(QTreeView):
 
         self.setStyleSheet(f"""
             QTreeView {{
-                background: {BG_INPUT};
-                color: #ccc;
-                border: 1px solid {BORDER_DARK};
+                background: {_s.BG_INPUT};
+                color: {_s.FG_SECONDARY};
+                border: 1px solid {_s.BORDER_DARK};
                 font-family: 'Consolas', monospace;
                 font-size: 12px;
                 outline: 0;
             }}
             QTreeView::item {{ padding: 4px; }}
-            QTreeView::item:hover {{ background: #222; }}
-            QTreeView::item:selected {{ background: {ACCENT_GOLD}; color: black; }}
+            QTreeView::item:hover {{ background: {_s.BG_BUTTON_HOVER}; }}
+            QTreeView::item:selected {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
             
             QHeaderView::section {{
-                background: #111;
-                color: {FG_DIM};
+                background: {_s.BG_SIDEBAR};
+                color: {_s.FG_DIM};
                 border: none;
                 padding: 4px;
                 font-weight: bold;
@@ -82,7 +82,7 @@ class PageFiles(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        grp = SkeetGroupBox("DATABANK")
+        grp = MonoGroupBox("FILES")
         gl = QVBoxLayout()
         gl.setSpacing(10)
         
@@ -94,8 +94,8 @@ class PageFiles(QWidget):
         self.inp_path.setPlaceholderText("Path...")
         self.inp_path.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_INPUT}; color: {ACCENT_GOLD}; 
-                border: 1px solid #333; padding: 6px; font-family: 'Consolas';
+                background: {_s.BG_INPUT}; color: {_s.ACCENT_PRIMARY}; 
+                border: 1px solid {_s.BORDER_LIGHT}; padding: 6px; font-family: 'Consolas';
             }}
         """)
         self.inp_path.returnPressed.connect(self.navigate_to_path)
@@ -105,8 +105,8 @@ class PageFiles(QWidget):
         self.inp_search.setFixedWidth(200)
         self.inp_search.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_INPUT}; color: white; 
-                border: 1px solid #333; padding: 6px;
+                background: {_s.BG_INPUT}; color: white; 
+                border: 1px solid {_s.BORDER_LIGHT}; padding: 6px;
             }}
         """)
         self.inp_search.textChanged.connect(self.on_search)
@@ -127,17 +127,17 @@ class PageFiles(QWidget):
         # --- BOTTOM ACTION BAR ---
         actions = QHBoxLayout()
         
-        btn_add = SkeetButton("+ MKDIR")
+        btn_add = MonoButton("+ MKDIR")
         btn_add.clicked.connect(self.new_folder)
         
-        btn_del = SkeetButton("× DELETE")
+        btn_del = MonoButton("× DELETE")
         btn_del.clicked.connect(self.delete_item)
         
-        btn_ref = SkeetButton("⟳ REFRESH")
+        btn_ref = MonoButton("⟳ REFRESH")
         btn_ref.clicked.connect(self.refresh)
         
         self.lbl_status = QLabel("Ready")
-        self.lbl_status.setStyleSheet(f"color: {FG_DIM}; font-size: 10px;")
+        self.lbl_status.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
         
         actions.addWidget(btn_add)
         actions.addWidget(btn_del)
@@ -205,9 +205,9 @@ class PageFiles(QWidget):
             msg.setText(f"Are you sure you want to delete:\\n{os.path.basename(target)}?")
             msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
             msg.setStyleSheet(f"""
-                QMessageBox {{ background: {BG_MAIN}; }}
-                QLabel {{ color: {FG_TEXT}; }}
-                QPushButton {{ background: #222; color: #ccc; border: 1px solid #444; padding: 5px; }}
+                QMessageBox {{ background: {_s.BG_MAIN}; }}
+                QLabel {{ color: {_s.FG_TEXT}; }}
+                QPushButton {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.FG_SECONDARY}; border: 1px solid {_s.FG_INFO}; padding: 5px; }}
             """)
             if msg.exec() == QMessageBox.Yes:
                 try:
@@ -222,8 +222,8 @@ class PageFiles(QWidget):
     def open_menu(self, position):
         menu = QMenu()
         menu.setStyleSheet(f"""
-            QMenu {{ background: #111; color: {FG_TEXT}; border: 1px solid {ACCENT_GOLD}; }}
-            QMenu::item:selected {{ background: {ACCENT_GOLD}; color: black; }}
+            QMenu {{ background: {_s.BG_SIDEBAR}; color: {_s.FG_TEXT}; border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            QMenu::item:selected {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
         """)
         
         act_del = QAction("Delete", self)
@@ -241,10 +241,10 @@ class PageFiles(QWidget):
         dlg.setWindowTitle(title)
         dlg.setLabelText(label)
         dlg.setStyleSheet(f"""
-            QDialog {{ background: {BG_MAIN}; border: 1px solid {ACCENT_GOLD}; }}
-            QLabel {{ color: {FG_TEXT}; }}
-            QLineEdit {{ background: {BG_INPUT}; color: white; border: 1px solid #333; }}
-            QPushButton {{ background: #222; color: #ccc; border: 1px solid #444; padding: 5px; }}
+            QDialog {{ background: {_s.BG_MAIN}; border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            QLabel {{ color: {_s.FG_TEXT}; }}
+            QLineEdit {{ background: {_s.BG_INPUT}; color: white; border: 1px solid {_s.BORDER_LIGHT}; }}
+            QPushButton {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.FG_SECONDARY}; border: 1px solid {_s.FG_INFO}; padding: 5px; }}
         """)
         ok = dlg.exec()
         return dlg.textValue(), (ok == 1)
