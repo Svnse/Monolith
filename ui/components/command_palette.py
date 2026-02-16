@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import core.style as _s
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -19,13 +18,6 @@ from ui.addons.registry import AddonRegistry
 from ui.addons.spec import AddonSpec
 
 
-def _to_rgba(color_value: str, alpha: int) -> str:
-    color = QColor(color_value)
-    if not color.isValid():
-        return f"rgba(0, 0, 0, {alpha})"
-    color.setAlpha(alpha)
-    return color.name(QColor.HexArgb)
-
 
 class _PaletteResultRow(QFrame):
     clicked = Signal(str)
@@ -34,7 +26,7 @@ class _PaletteResultRow(QFrame):
         super().__init__(parent)
         self._addon_id = addon_id
         self._selected = False
-        self.setObjectName("PaletteResultRow")
+        self.setProperty("class", "PaletteResultRow")
         self.setCursor(Qt.PointingHandCursor)
 
         row = QHBoxLayout(self)
@@ -42,41 +34,23 @@ class _PaletteResultRow(QFrame):
         row.setSpacing(8)
 
         icon_lbl = QLabel(icon or "◻")
-        icon_lbl.setStyleSheet(f"color: {_s.FG_TEXT}; font-size: 12px; font-weight: bold;")
         icon_lbl.setFixedWidth(18)
         row.addWidget(icon_lbl)
 
         title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"color: {_s.FG_TEXT}; font-size: 11px; font-weight: 600;")
         title_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         row.addWidget(title_lbl)
 
         match_lbl = QLabel(match_label)
-        match_lbl.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
         row.addWidget(match_lbl)
 
-        self._apply_style()
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
-        self._apply_style()
+        self.setProperty("selected", "true" if selected else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
 
-    def _apply_style(self) -> None:
-        bg = _s.BG_GROUP if self._selected else "transparent"
-        left_border = _s.ACCENT_PRIMARY if self._selected else "transparent"
-        self.setStyleSheet(
-            f"""
-            QFrame#PaletteResultRow {{
-                background: {bg};
-                border: 1px solid {_s.BORDER_SUBTLE};
-                border-left: 3px solid {left_border};
-                border-radius: 5px;
-            }}
-            QFrame#PaletteResultRow:hover {{
-                background: {_s.BG_GROUP};
-            }}
-            """
-        )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -97,7 +71,7 @@ class CommandPalette(QWidget):
         self._result_ids: list[str] = []
         self._selected_index = -1
 
-        self.setObjectName("CommandPaletteOverlay")
+        self.setObjectName("palette_overlay")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFocusPolicy(Qt.StrongFocus)
 
@@ -106,7 +80,7 @@ class CommandPalette(QWidget):
         root.setAlignment(Qt.AlignCenter)
 
         self._container = QFrame(self)
-        self._container.setObjectName("CommandPaletteContainer")
+        self._container.setObjectName("palette_container")
         self._container.setMaximumWidth(500)
         self._container.setMaximumHeight(400)
         container_layout = QVBoxLayout(self._container)
@@ -114,6 +88,7 @@ class CommandPalette(QWidget):
         container_layout.setSpacing(10)
 
         self._input = QLineEdit(self._container)
+        self._input.setObjectName("palette_input")
         self._input.setPlaceholderText("Type a command...")
         self._input.textChanged.connect(self._on_text_changed)
         self._input.installEventFilter(self)
@@ -133,37 +108,8 @@ class CommandPalette(QWidget):
         container_layout.addWidget(self._results_scroll)
         root.addWidget(self._container)
 
-        self._apply_style()
         super().hide()
 
-    def _apply_style(self) -> None:
-        overlay_bg = _to_rgba(_s.BG_MAIN, 205)
-        self.setStyleSheet(
-            f"""
-            QWidget#CommandPaletteOverlay {{
-                background: {overlay_bg};
-            }}
-            QFrame#CommandPaletteContainer {{
-                background: {_s.BG_PANEL};
-                border: 1px solid {_s.BORDER_SUBTLE};
-                border-radius: 10px;
-            }}
-            QLineEdit {{
-                background: {_s.BG_INPUT};
-                color: {_s.FG_TEXT};
-                border: 1px solid {_s.BORDER_SUBTLE};
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 11px;
-            }}
-            QLineEdit::placeholder {{
-                color: {_s.FG_PLACEHOLDER};
-            }}
-            QScrollArea {{
-                background: transparent;
-            }}
-            """
-        )
 
     def toggle(self) -> None:
         self.hide() if self.isVisible() else self.show()
@@ -231,7 +177,7 @@ class CommandPalette(QWidget):
         else:
             self._selected_index = -1
             empty = QLabel("No matching modules")
-            empty.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px; padding: 8px;")
+            empty.setObjectName("palette_empty")
             self._results_layout.insertWidget(0, empty)
 
     def _clear_results(self) -> None:

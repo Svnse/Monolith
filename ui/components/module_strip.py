@@ -112,7 +112,6 @@ class ModuleStrip(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.scroll.setStyleSheet("background: transparent; border: none;")
         self.content = QWidget()
         self.vbox = QVBoxLayout(self.content)
         self.vbox.setContentsMargins(5, 5, 5, 5)

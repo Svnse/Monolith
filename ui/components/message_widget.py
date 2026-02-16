@@ -1,6 +1,5 @@
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
-
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 
 class _IconAction(QPushButton):
@@ -8,83 +7,53 @@ class _IconAction(QPushButton):
 
     def __init__(self, icon_char: str, tooltip: str):
         super().__init__(icon_char)
-        import core.style as s
         self.setToolTip(tooltip)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(22, 22)
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {s.FG_DIM};
-                border: none;
-                font-size: 12px;
-                padding: 0;
-            }}
-            QPushButton:hover {{
-                color: {s.ACCENT_PRIMARY};
-            }}
-        """)
+        self.setProperty("class", "msg_icon_action")
 
 
-class MessageWidget(QWidget):
+class MessageWidget(QFrame):
     sig_delete = Signal(int)
     sig_edit = Signal(int)
     sig_regen = Signal(int)
 
     def __init__(self, index: int, role: str, text: str, timestamp: str):
         super().__init__()
-        import core.style as s
         self._index = index
         self._role = role
         self._content = text or ""
 
         self.setAttribute(Qt.WA_Hover, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setProperty("class", "MessageWidget")
+        self.setProperty("role", role)
 
         is_assistant = role == "assistant"
         is_system = role == "system"
-        border_color = s.ACCENT_PRIMARY if is_assistant else s.BORDER_SUBTLE
-        if is_system:
-            border_color = s.BG_BUTTON_HOVER
-        bottom_border = f"1px solid {s.BORDER_SUBTLE}" if is_assistant else "none"
-
-        self.setStyleSheet(f"""
-            MessageWidget {{
-                background: transparent;
-                border-left: 2px solid {border_color};
-                border-top: none; border-right: none;
-                border-bottom: {bottom_border};
-            }}
-        """)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 3, 10, 3 if not is_assistant else 8)
         root.setSpacing(4)
 
-        # --- Header row ---
         head = QHBoxLayout()
         head.setSpacing(6)
 
-        role_color = s.ACCENT_PRIMARY if is_assistant else s.FG_TEXT
-        if is_system:
-            role_color = s.FG_DIM
         self.lbl_role = QLabel((role or "").upper())
-        self.lbl_role.setStyleSheet(
-            f"color: {role_color}; font-size: 9px; font-weight: bold; letter-spacing: 1px;"
-        )
+        self.lbl_role.setObjectName("msg_role")
+        self.lbl_role.setProperty("role", role)
         head.addWidget(self.lbl_role)
 
         pretty_ts = (timestamp or "")
         if "T" in pretty_ts and len(pretty_ts) >= 16:
             pretty_ts = pretty_ts[11:16]
         self.lbl_time = QLabel(pretty_ts)
-        self.lbl_time.setStyleSheet(f"color: {s.FG_INFO}; font-size: 9px;")
+        self.lbl_time.setObjectName("msg_time")
         head.addWidget(self.lbl_time)
         head.addStretch()
 
-        # --- Hover action icons ---
         self.actions = QWidget()
-        self.actions.setStyleSheet("background: transparent;")
+        self.actions.setObjectName("msg_actions")
         actions_layout = QHBoxLayout(self.actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(2)
@@ -106,38 +75,29 @@ class MessageWidget(QWidget):
 
         self.actions.setVisible(False)
         head.addWidget(self.actions)
-
         root.addLayout(head)
 
-        # --- Content ---
         self.lbl_content = QLabel()
+        self.lbl_content.setObjectName("msg_content")
+        self.lbl_content.setProperty("role", role)
         self.lbl_content.setTextFormat(Qt.PlainText)
         self.lbl_content.setWordWrap(True)
         self.lbl_content.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
         self.lbl_content.setCursor(Qt.IBeamCursor)
-        content_color = s.FG_TEXT if is_assistant else s.FG_SECONDARY
-        if is_system:
-            content_color = s.FG_DIM
-        self.lbl_content.setStyleSheet(
-            f"color: {content_color}; font-size: 11px; line-height: 1.4; padding: 2px 0;"
-        )
         self.lbl_content.setText(self._content)
         root.addWidget(self.lbl_content)
 
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
-    # ------------------------------------------------------------------
     def sizeHint(self):
-        """Compute height that accounts for word-wrapped content label."""
         w = self.width() if self.width() > 50 else 600
         margins = self.layout().contentsMargins()
-        content_w = w - margins.left() - margins.right() - 2  # 2px border-left
-        # heightForWidth respects word-wrap and font metrics
+        content_w = w - margins.left() - margins.right() - 2
         content_h = self.lbl_content.heightForWidth(max(content_w, 60))
         if content_h <= 0:
             content_h = self.lbl_content.sizeHint().height()
-        header_h = 20  # role label row
-        spacing = self.layout().spacing()  # 4
+        header_h = 20
+        spacing = self.layout().spacing()
         total = margins.top() + header_h + spacing + content_h + margins.bottom()
         return QSize(w, max(total, 30))
 

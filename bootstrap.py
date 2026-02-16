@@ -54,13 +54,6 @@ def main():
         refresh_styles()
         theme_engine.apply(app)
 
-        # Backward compatibility while widgets still carry local style hooks.
-        for w in app.allWidgets():
-            if hasattr(w, "apply_theme_refresh"):
-                w.apply_theme_refresh()
-            elif hasattr(w, "refresh_style"):
-                w.refresh_style()
-
     ui_bridge.sig_theme_changed.connect(_apply_theme)
 
     # global chrome-only wiring stays here
