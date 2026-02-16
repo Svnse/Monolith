@@ -357,10 +357,11 @@ class PageHub(QWidget):
 
     def _on_theme_changed(self, theme_name: str):
         key = theme_name.lower()
-        apply_theme(key)
         save_theme_config({"theme": key})
         if self._ui_bridge:
             self._ui_bridge.sig_theme_changed.emit(key)
+        else:
+            apply_theme(key)
 
     def apply_theme_refresh(self):
         """Re-apply all stylesheets after theme change."""
