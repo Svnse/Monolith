@@ -3,11 +3,13 @@ import re
 from pathlib import Path
 
 from core.paths import CONFIG_DIR
+from core.presence import PresenceEngine
 
 
 class OperatorManager:
     def __init__(self):
         self._operators_dir = CONFIG_DIR / "operators"
+        self._presence = PresenceEngine()
 
     def _ensure_dir(self) -> Path:
         self._operators_dir.mkdir(parents=True, exist_ok=True)
@@ -44,7 +46,18 @@ class OperatorManager:
             raise ValueError("Operator payload must be a JSON object")
         return data
 
-    def save_operator(self, name: str, data: dict) -> Path:
+    def save_operator(
+        self,
+        name: str,
+        data: dict,
+        previous_data: dict | None = None,
+        trigger: str = "saved",
+    ) -> tuple[Path, bool]:
+        """Save operator. Returns (path, drift_exceeded).
+
+        If previous_data is provided, computes diff and updates lineage.
+        If not provided, treats as genesis or manual save (no diff).
+        """
         payload = dict(data or {})
         payload["name"] = name
         payload.setdefault("layout", {})
@@ -55,10 +68,42 @@ class OperatorManager:
         for mod in payload.get("modules", []):
             if isinstance(mod.get("config"), dict):
                 mod["config"].pop("system_prompt", None)
+
+        drift_exceeded = False
+        if previous_data is not None:
+            payload, drift_exceeded = self._presence.update_presence(payload, previous_data, trigger)
+        else:
+            payload = self._presence.ensure_presence(payload)
+
         path = self._path_for_name(name)
         with path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
-        return path
+        return path, drift_exceeded
+
+
+    def get_lineage(self, name: str) -> list[dict]:
+        try:
+            data = self.load_operator(name)
+        except Exception:
+            return []
+        return self._presence.get_lineage(data)
+
+    def get_presence_info(self, name: str) -> dict | None:
+        try:
+            data = self.load_operator(name)
+        except Exception:
+            return None
+        presence = data.get("presence")
+        if not isinstance(presence, dict):
+            return None
+        return {
+            "presence_id": presence.get("presence_id", ""),
+            "current_version": presence.get("current_version", 0),
+            "drift_score": presence.get("drift_score", 0.0),
+            "drift_threshold": presence.get("drift_threshold", 0.5),
+            "lineage_length": len(presence.get("lineage", [])),
+            "created_at": presence.get("created_at", ""),
+        }
 
     def delete_operator(self, name: str) -> bool:
         path = self._path_for_name(name)

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QComboBox,
+    QScrollArea,
 )
 
 from core.operators import OperatorManager
@@ -23,14 +24,17 @@ class _NameDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         import core.style as s
+
         self.setWindowTitle("New Operator")
         self.setModal(True)
-        self.setStyleSheet(f"""
+        self.setStyleSheet(
+            f"""
             QDialog {{ background: {s.BG_INPUT}; color: {s.FG_TEXT}; }}
             QLineEdit {{ background: {s.BG_INPUT}; color: {s.FG_TEXT}; border: 1px solid {s.BORDER_LIGHT}; padding: 6px; }}
             QPushButton {{ color: {s.FG_TEXT}; background: transparent; border: 1px solid {s.BORDER_LIGHT}; padding: 6px 12px; }}
             QPushButton:hover {{ border: 1px solid {s.ACCENT_PRIMARY}; color: {s.ACCENT_PRIMARY}; }}
-        """)
+        """
+        )
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Operator name:"))
         self.input = QLineEdit()
@@ -48,13 +52,94 @@ class _NameDialog(QDialog):
     def value(self) -> str:
         return self.input.text().strip()
 
+
+class _LineageDialog(QDialog):
+    def __init__(self, operator_name: str, lineage: list[dict], parent=None):
+        super().__init__(parent)
+        import core.style as s
+
+        self.setWindowTitle(f"Lineage: {operator_name}")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setMaximumHeight(400)
+        self.setStyleSheet(
+            f"""
+            QDialog {{ background: {s.BG_INPUT}; color: {s.FG_TEXT}; }}
+            QFrame#lineage_item {{ border: 1px solid {s.BORDER_LIGHT}; background: transparent; border-radius: 2px; }}
+            QLabel {{ background: transparent; color: {s.FG_TEXT}; }}
+        """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        container = QWidget()
+        items_layout = QVBoxLayout(container)
+        items_layout.setContentsMargins(0, 0, 0, 0)
+        items_layout.setSpacing(8)
+
+        if not lineage:
+            empty = QLabel("No lineage available.")
+            empty.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px;")
+            items_layout.addWidget(empty)
+        else:
+            for snapshot in lineage:
+                if not isinstance(snapshot, dict):
+                    continue
+                item = QFrame()
+                item.setObjectName("lineage_item")
+                item_layout = QVBoxLayout(item)
+                item_layout.setContentsMargins(10, 8, 10, 8)
+                item_layout.setSpacing(4)
+
+                version = snapshot.get("version", "?")
+                trigger = snapshot.get("trigger", "unknown")
+                timestamp = snapshot.get("timestamp", "")
+                headline = QLabel(f"v{version} — {trigger} — {timestamp}")
+                headline.setStyleSheet(f"color: {s.FG_TEXT}; font-size: 10px;")
+                item_layout.addWidget(headline)
+
+                diff = snapshot.get("diff", {})
+                keys = list(diff.keys()) if isinstance(diff, dict) else []
+                detail = f"Changed: {', '.join(keys)}" if keys else "Changed: none"
+                detail_lbl = QLabel(detail)
+                detail_lbl.setWordWrap(True)
+                detail_lbl.setStyleSheet(f"color: {s.FG_DIM}; font-size: 9px;")
+                item_layout.addWidget(detail_lbl)
+
+                items_layout.addWidget(item)
+
+        items_layout.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        btn_close = MonoButton("CLOSE")
+        btn_close.clicked.connect(self.accept)
+        close_row.addWidget(btn_close)
+        layout.addLayout(close_row)
+
+
 class _OperatorCard(QPushButton):
     """Glassmorphic operator card with structured info."""
+
     sig_double_clicked = Signal(str)
 
-    def __init__(self, name: str, gguf_path: str, tag_count: int, module_count: int = 0):
+    def __init__(
+        self,
+        name: str,
+        gguf_path: str,
+        tag_count: int,
+        module_count: int = 0,
+        presence_info: dict | None = None,
+    ):
         super().__init__()
         import core.style as s
+
         self.op_name = name
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(80)
@@ -66,7 +151,9 @@ class _OperatorCard(QPushButton):
         layout.setSpacing(4)
 
         lbl_name = QLabel(name.upper())
-        lbl_name.setStyleSheet(f"color: {s.FG_TEXT}; font-size: 11px; font-weight: bold; background: transparent; letter-spacing: 1px;")
+        lbl_name.setStyleSheet(
+            f"color: {s.FG_TEXT}; font-size: 11px; font-weight: bold; background: transparent; letter-spacing: 1px;"
+        )
         layout.addWidget(lbl_name)
 
         lbl_model = QLabel(gguf_path)
@@ -83,15 +170,26 @@ class _OperatorCard(QPushButton):
         lbl_info.setStyleSheet(f"color: {s.FG_INFO}; font-size: 9px; background: transparent;")
         layout.addWidget(lbl_info)
 
+        if presence_info:
+            version = int(presence_info.get("current_version", 0) or 0)
+            drift = float(presence_info.get("drift_score", 0.0) or 0.0)
+            threshold = float(presence_info.get("drift_threshold", 0.5) or 0.5)
+            color = s.FG_WARN if drift >= threshold else s.FG_DIM
+            lbl_presence = QLabel(f"v{version} · drift {drift:.0%}")
+            lbl_presence.setStyleSheet(f"color: {color}; font-size: 8px; background: transparent;")
+            layout.addWidget(lbl_presence)
+
         layout.addStretch()
         self._apply_style(False)
 
     def _apply_style(self, selected: bool):
         import core.style as s
+
         self._selected = selected
         border = s.ACCENT_PRIMARY if selected else s.BORDER_DARK
         bg = s.BORDER_SUBTLE if selected else s.BG_INPUT
-        self.setStyleSheet(f"""
+        self.setStyleSheet(
+            f"""
             _OperatorCard {{
                 background: {bg};
                 border: 1px solid {border};
@@ -101,7 +199,8 @@ class _OperatorCard(QPushButton):
                 border: 1px solid {s.ACCENT_PRIMARY};
                 background: {s.BG_BUTTON_HOVER};
             }}
-        """)
+        """
+        )
 
     def set_selected(self, selected: bool):
         self._apply_style(selected)
@@ -113,10 +212,12 @@ class _OperatorCard(QPushButton):
 class PageHub(QWidget):
     sig_load_operator = Signal(str)
     sig_save_operator = Signal(str, dict)
+    sig_presence_drift = Signal(str, float, float)
 
     def __init__(self, config_provider=None, operator_manager: OperatorManager | None = None, ui_bridge=None):
         super().__init__()
         import core.style as s
+
         self._operator_manager = operator_manager or OperatorManager()
         self._config_provider = config_provider
         self._ui_bridge = ui_bridge
@@ -129,7 +230,6 @@ class PageHub(QWidget):
         layout.setContentsMargins(30, 30, 30, 30)
         layout.setSpacing(0)
 
-        # --- Welcome header ---
         header = QWidget()
         header.setStyleSheet("background: transparent;")
         header_layout = QVBoxLayout(header)
@@ -138,8 +238,7 @@ class PageHub(QWidget):
 
         lbl_welcome = QLabel("MONOLITH")
         lbl_welcome.setStyleSheet(
-            f"color: {s.ACCENT_PRIMARY}; font-size: 20px; font-weight: bold; "
-            f"letter-spacing: 4px; background: transparent;"
+            f"color: {s.ACCENT_PRIMARY}; font-size: 20px; font-weight: bold; letter-spacing: 4px; background: transparent;"
         )
         header_layout.addWidget(lbl_welcome)
 
@@ -149,26 +248,22 @@ class PageHub(QWidget):
 
         layout.addWidget(header)
 
-        # --- Separator ---
         sep = QFrame()
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {s.BORDER_DARK};")
         layout.addWidget(sep)
         layout.addSpacing(16)
 
-        # --- Operator label ---
         ops_header = QHBoxLayout()
         lbl_ops = QLabel("OPERATORS")
         lbl_ops.setStyleSheet(
-            f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; "
-            f"letter-spacing: 2px; background: transparent;"
+            f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 2px; background: transparent;"
         )
         ops_header.addWidget(lbl_ops)
         ops_header.addStretch()
         layout.addLayout(ops_header)
         layout.addSpacing(10)
 
-        # --- Card grid ---
         self.grid_wrap = QWidget()
         self.grid_wrap.setStyleSheet("background: transparent;")
         self.grid = QGridLayout(self.grid_wrap)
@@ -176,7 +271,6 @@ class PageHub(QWidget):
         self.grid.setSpacing(10)
         layout.addWidget(self.grid_wrap, 1)
 
-        # --- Empty state ---
         self.empty_label = QLabel("No operators saved yet.\nCreate one to snapshot your current workspace.")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet(f"color: {s.FG_INFO}; font-size: 11px; padding: 40px; background: transparent;")
@@ -184,7 +278,6 @@ class PageHub(QWidget):
 
         layout.addStretch()
 
-        # --- Bottom action bar ---
         sep2 = QFrame()
         sep2.setFixedHeight(1)
         sep2.setStyleSheet(f"background: {s.BORDER_DARK};")
@@ -204,13 +297,17 @@ class PageHub(QWidget):
         self.btn_delete.setFixedHeight(28)
         self.btn_delete.clicked.connect(self._delete_selected)
         self.btn_delete.setEnabled(False)
+        self.btn_lineage = MonoButton("⟳ LINEAGE")
+        self.btn_lineage.setFixedHeight(28)
+        self.btn_lineage.clicked.connect(self._show_lineage)
+        self.btn_lineage.setEnabled(False)
         btn_row.addWidget(self.btn_new)
         btn_row.addWidget(self.btn_load)
         btn_row.addWidget(self.btn_delete)
+        btn_row.addWidget(self.btn_lineage)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # --- Appearance section ---
         layout.addSpacing(16)
         sep3 = QFrame()
         sep3.setFixedHeight(1)
@@ -220,8 +317,7 @@ class PageHub(QWidget):
 
         lbl_appearance = QLabel("APPEARANCE")
         lbl_appearance.setStyleSheet(
-            f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; "
-            f"letter-spacing: 2px; background: transparent;"
+            f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 2px; background: transparent;"
         )
         layout.addWidget(lbl_appearance)
         layout.addSpacing(6)
@@ -233,7 +329,8 @@ class PageHub(QWidget):
         self.theme_combo = QComboBox()
         self.theme_combo.setFixedWidth(140)
         self.theme_combo.setFixedHeight(28)
-        self.theme_combo.setStyleSheet(f"""
+        self.theme_combo.setStyleSheet(
+            f"""
             QComboBox {{
                 background: {s.BG_INPUT}; color: {s.FG_TEXT};
                 border: 1px solid {s.BORDER_LIGHT}; padding: 4px 8px;
@@ -252,10 +349,10 @@ class PageHub(QWidget):
                 selection-background-color: {s.BG_BUTTON_HOVER};
                 selection-color: {s.ACCENT_PRIMARY};
             }}
-        """)
+        """
+        )
         for name in list_themes():
             self.theme_combo.addItem(name)
-        # Set current theme in dropdown
         active = current_theme().name
         idx = self.theme_combo.findText(active)
         if idx >= 0:
@@ -270,14 +367,12 @@ class PageHub(QWidget):
         self.refresh_cards()
 
     def refresh_cards(self):
-        # Clear existing cards (but not empty_label — we control it separately)
         for card in self._cards.values():
             self.grid.removeWidget(card)
             card.deleteLater()
         self._cards.clear()
 
         operators = self._operator_manager.list_operators()
-
         self.empty_label.setVisible(len(operators) == 0)
 
         for idx, item in enumerate(operators):
@@ -286,29 +381,29 @@ class PageHub(QWidget):
                 data = self._operator_manager.load_operator(name)
             except Exception:
                 continue
-            # New format: modules list; legacy: top-level config
             modules = data.get("modules", [])
             module_count = len(modules)
             if modules:
-                # Find first terminal's config for display
                 term = next((m for m in modules if m.get("addon_id") == "terminal"), None)
                 cfg = term.get("config", {}) if term else {}
             else:
                 cfg = data.get("config", {})
             gguf_path = self._truncate_path(cfg.get("gguf_path"))
             tag_count = len(cfg.get("behavior_tags") or [])
+            presence_info = self._operator_manager.get_presence_info(name)
 
-            card = _OperatorCard(name, gguf_path, tag_count, module_count)
+            card = _OperatorCard(name, gguf_path, tag_count, module_count, presence_info=presence_info)
             card.clicked.connect(lambda _checked=False, op_name=name: self._on_card_clicked(op_name))
             card.sig_double_clicked.connect(self._load_operator)
             row, col = divmod(idx, 3)
-            self.grid.addWidget(card, row + 1, col)  # +1 to skip row 0 (empty_label)
+            self.grid.addWidget(card, row + 1, col)
             self._cards[name] = card
 
         if self._selected_name not in self._cards:
             self._selected_name = None
             self.btn_load.setEnabled(False)
             self.btn_delete.setEnabled(False)
+            self.btn_lineage.setEnabled(False)
 
     def _on_card_clicked(self, name: str):
         self._selected_name = name
@@ -316,6 +411,7 @@ class PageHub(QWidget):
             card.set_selected(op_name == name)
         self.btn_load.setEnabled(True)
         self.btn_delete.setEnabled(True)
+        self.btn_lineage.setEnabled(True)
 
     def _load_selected(self):
         if self._selected_name:
@@ -335,14 +431,79 @@ class PageHub(QWidget):
         clean_name = dialog.value()
         if not clean_name:
             return
+
         snapshot = dict(self._config_provider() or {})
         data = {"name": clean_name, "layout": {}, "geometry": {}}
-        data.update(snapshot)  # merges "modules" and "module_order" into top level
-        # Keep a "config" key for backward compat if snapshot has no modules
+        data.update(snapshot)
         if "modules" not in data:
             data["config"] = snapshot
-        self.sig_save_operator.emit(clean_name, data)
+
+        previous_data = None
+        try:
+            previous_data = self._operator_manager.load_operator(clean_name)
+        except Exception:
+            previous_data = None
+
+        _, drift_exceeded = self._operator_manager.save_operator(
+            clean_name,
+            data,
+            previous_data=previous_data,
+            trigger="saved",
+        )
+
+        if drift_exceeded:
+            self._show_drift_warning(clean_name, data)
+
         self.refresh_cards()
+
+    def _show_drift_warning(self, name: str, data: dict):
+        import core.style as s
+
+        info = self._operator_manager.get_presence_info(name) or {}
+        drift_score = float(info.get("drift_score", 0.0) or 0.0)
+        threshold = float(info.get("drift_threshold", 0.5) or 0.5)
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Presence Drift")
+        msg.setText(
+            f"Your workspace has drifted significantly from the saved presence '{name}'. "
+            "Save as new presence or update existing?"
+        )
+        msg.setStyleSheet(
+            f"""
+            QMessageBox {{ background: {s.BG_INPUT}; color: {s.FG_TEXT}; }}
+            QLabel {{ color: {s.FG_TEXT}; }}
+            QPushButton {{ color: {s.FG_TEXT}; background: transparent; border: 1px solid {s.BORDER_LIGHT}; padding: 6px 12px; }}
+            QPushButton:hover {{ border: 1px solid {s.ACCENT_PRIMARY}; color: {s.ACCENT_PRIMARY}; }}
+        """
+        )
+        btn_update = msg.addButton("Update", QMessageBox.AcceptRole)
+        btn_save_new = msg.addButton("Save As New", QMessageBox.ActionRole)
+        msg.addButton("Cancel", QMessageBox.RejectRole)
+        msg.setDefaultButton(btn_update)
+        msg.exec()
+
+        self.sig_presence_drift.emit(name, drift_score, threshold)
+
+        if msg.clickedButton() is btn_save_new:
+            fork_dialog = _NameDialog(self)
+            fork_dialog.setWindowTitle("Save As New Presence")
+            fork_dialog.input.setText(f"{name} Copy")
+            if fork_dialog.exec() != QDialog.Accepted:
+                return
+            fork_name = fork_dialog.value()
+            if not fork_name:
+                return
+            fork_payload = dict(data)
+            self._operator_manager.save_operator(fork_name, fork_payload, previous_data=None, trigger="user_forked")
+
+    def _show_lineage(self):
+        if not self._selected_name:
+            return
+        lineage = self._operator_manager.get_lineage(self._selected_name)
+        dialog = _LineageDialog(self._selected_name, lineage, self)
+        dialog.exec()
 
     def _delete_selected(self):
         if not self._selected_name:
@@ -353,6 +514,7 @@ class PageHub(QWidget):
         self._selected_name = None
         self.btn_load.setEnabled(False)
         self.btn_delete.setEnabled(False)
+        self.btn_lineage.setEnabled(False)
         self.refresh_cards()
 
     def _on_theme_changed(self, theme_name: str):
@@ -364,29 +526,31 @@ class PageHub(QWidget):
             apply_theme(key)
 
     def apply_theme_refresh(self):
-        """Re-apply all stylesheets after theme change."""
         from core.style import (
-            BG_MAIN, BG_INPUT, BG_BUTTON_HOVER, FG_TEXT, FG_DIM, FG_INFO,
-            FG_PLACEHOLDER, ACCENT_GOLD, BORDER_DARK, BORDER_LIGHT, BORDER_SUBTLE,
+            BG_MAIN,
+            BG_INPUT,
+            BG_BUTTON_HOVER,
+            FG_TEXT,
+            FG_DIM,
+            ACCENT_GOLD,
+            BORDER_LIGHT,
         )
+
         self.setStyleSheet(f"background: {BG_MAIN};")
 
-        # Welcome header MONOLITH label
         for child in self.findChildren(QLabel):
             if child.text() == "MONOLITH":
                 child.setStyleSheet(
-                    f"color: {ACCENT_GOLD}; font-size: 20px; font-weight: bold; "
-                    f"letter-spacing: 4px; background: transparent;"
+                    f"color: {ACCENT_GOLD}; font-size: 20px; font-weight: bold; letter-spacing: 4px; background: transparent;"
                 )
             elif child.text().startswith("Select an operator"):
                 child.setStyleSheet(f"color: {FG_DIM}; font-size: 10px; background: transparent;")
 
-        # Operator cards
         for card in self._cards.values():
             card._apply_style(card._selected)
 
-        # Theme combo
-        self.theme_combo.setStyleSheet(f"""
+        self.theme_combo.setStyleSheet(
+            f"""
             QComboBox {{
                 background: {BG_INPUT}; color: {FG_TEXT};
                 border: 1px solid {BORDER_LIGHT}; padding: 4px 8px;
@@ -401,7 +565,8 @@ class PageHub(QWidget):
                 selection-background-color: {BG_BUTTON_HOVER};
                 selection-color: {ACCENT_GOLD};
             }}
-        """)
+        """
+        )
 
     def _truncate_path(self, value) -> str:
         if not value:

@@ -255,6 +255,12 @@ def hub_factory(ctx: AddonContext):
 
     w.sig_load_operator.connect(_load_operator)
     w.sig_save_operator.connect(lambda name, data: manager.save_operator(name, data))
+    w.sig_presence_drift.connect(
+        lambda name, drift_score, threshold: ctx.guard.sig_trace.emit(
+            "system",
+            f"[PRESENCE] WARN drift exceeded for '{name}': score={drift_score:.2f}, threshold={threshold:.2f}",
+        )
+    )
     return w
 
 def databank_factory(ctx: AddonContext):
