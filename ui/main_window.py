@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QFrame, QLabel, QStackedLayout
 )
 from PySide6.QtCore import Qt, QDateTime, QTimer
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QKeyEvent, QMouseEvent
 
 from core.state import SystemStatus, AppState
 from ui.bridge import UIBridge
@@ -13,6 +13,8 @@ import core.style as _style  # dynamic theme bridge — always read from _style.
 from ui.addons.host import AddonHost
 from ui.components.atoms import SidebarButton
 from ui.components.complex import GradientLine, VitalsWindow, SplitControlBlock
+from ui.components.command_palette import CommandPalette
+from ui.components.drop_zone import DropZoneOverlay
 from ui.components.module_strip import ModuleStrip
 
 class MonolithUI(QMainWindow):
@@ -64,6 +66,7 @@ class MonolithUI(QMainWindow):
         self.module_strip = ModuleStrip()
         self.module_strip.sig_module_selected.connect(self.switch_to_module)
         self.module_strip.sig_module_closed.connect(self.close_module)
+        self.setAcceptDrops(True)
 
         self.btn_hub = SidebarButton("◉", "HOME")
         self.btn_hub.clicked.connect(lambda: self.set_page("hub"))
@@ -120,6 +123,9 @@ class MonolithUI(QMainWindow):
         self.stack.addWidget(addons)
         self.pages["addons"] = addons
 
+        self.palette = CommandPalette(self.centralWidget(), host.registry, host)
+        self.drop_zone = DropZoneOverlay(self.centralWidget(), host.registry, host)
+
         self.set_page("hub")
 
     # ---------------- WINDOW BEHAVIOR ----------------
@@ -136,6 +142,35 @@ class MonolithUI(QMainWindow):
             
     def mouseReleaseEvent(self, event: QMouseEvent):
         self._drag_pos = None
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_K and hasattr(self, "palette"):
+            self.palette.toggle()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls() and hasattr(self, "drop_zone"):
+            event.acceptProposedAction()
+            self.drop_zone.activate(event)
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent):
+        if hasattr(self, "drop_zone"):
+            self.drop_zone.deactivate()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent):
+        if hasattr(self, "drop_zone"):
+            self.drop_zone.handle_drop(event)
+        event.acceptProposedAction()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "palette") and self.palette.isVisible():
+            self.palette.setGeometry(self.centralWidget().rect())
+        if hasattr(self, "drop_zone") and self.drop_zone.isVisible():
+            self.drop_zone.setGeometry(self.centralWidget().rect())
 
     # ---------------- MODULE SYSTEM ----------------
 
