@@ -1,7 +1,6 @@
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
-from core.style import ACCENT_GOLD, FG_DIM, FG_TEXT, BORDER_DARK
 
 
 class _IconAction(QPushButton):
@@ -9,19 +8,20 @@ class _IconAction(QPushButton):
 
     def __init__(self, icon_char: str, tooltip: str):
         super().__init__(icon_char)
+        import core.style as s
         self.setToolTip(tooltip)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(22, 22)
         self.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
-                color: {FG_DIM};
+                color: {s.FG_DIM};
                 border: none;
                 font-size: 12px;
                 padding: 0;
             }}
             QPushButton:hover {{
-                color: {ACCENT_GOLD};
+                color: {s.ACCENT_PRIMARY};
             }}
         """)
 
@@ -33,6 +33,7 @@ class MessageWidget(QWidget):
 
     def __init__(self, index: int, role: str, text: str, timestamp: str):
         super().__init__()
+        import core.style as s
         self._index = index
         self._role = role
         self._content = text or ""
@@ -42,10 +43,10 @@ class MessageWidget(QWidget):
 
         is_assistant = role == "assistant"
         is_system = role == "system"
-        border_color = ACCENT_GOLD if is_assistant else "#1a1a1a"
+        border_color = s.ACCENT_PRIMARY if is_assistant else s.BORDER_SUBTLE
         if is_system:
-            border_color = "#222"
-        bottom_border = "1px solid #1a1a1a" if is_assistant else "none"
+            border_color = s.BG_BUTTON_HOVER
+        bottom_border = f"1px solid {s.BORDER_SUBTLE}" if is_assistant else "none"
 
         self.setStyleSheet(f"""
             MessageWidget {{
@@ -64,9 +65,9 @@ class MessageWidget(QWidget):
         head = QHBoxLayout()
         head.setSpacing(6)
 
-        role_color = ACCENT_GOLD if is_assistant else FG_TEXT
+        role_color = s.ACCENT_PRIMARY if is_assistant else s.FG_TEXT
         if is_system:
-            role_color = FG_DIM
+            role_color = s.FG_DIM
         self.lbl_role = QLabel((role or "").upper())
         self.lbl_role.setStyleSheet(
             f"color: {role_color}; font-size: 9px; font-weight: bold; letter-spacing: 1px;"
@@ -77,7 +78,7 @@ class MessageWidget(QWidget):
         if "T" in pretty_ts and len(pretty_ts) >= 16:
             pretty_ts = pretty_ts[11:16]
         self.lbl_time = QLabel(pretty_ts)
-        self.lbl_time.setStyleSheet(f"color: #444; font-size: 9px;")
+        self.lbl_time.setStyleSheet(f"color: {s.FG_INFO}; font-size: 9px;")
         head.addWidget(self.lbl_time)
         head.addStretch()
 
@@ -114,9 +115,9 @@ class MessageWidget(QWidget):
         self.lbl_content.setWordWrap(True)
         self.lbl_content.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
         self.lbl_content.setCursor(Qt.IBeamCursor)
-        content_color = FG_TEXT if is_assistant else "#bbb"
+        content_color = s.FG_TEXT if is_assistant else s.FG_SECONDARY
         if is_system:
-            content_color = FG_DIM
+            content_color = s.FG_DIM
         self.lbl_content.setStyleSheet(
             f"color: {content_color}; font-size: 11px; line-height: 1.4; padding: 2px 0;"
         )

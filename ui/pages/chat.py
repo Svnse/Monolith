@@ -13,8 +13,8 @@ from PySide6.QtCore import Signal, Qt, QTimer, QDateTime
 from PySide6.QtGui import QActionGroup
 
 from core.state import SystemStatus
-from core.style import BG_INPUT, FG_DIM, FG_TEXT, ACCENT_GOLD, FG_ERROR, SCROLLBAR_STYLE
-from ui.components.atoms import SkeetGroupBox, SkeetButton, SkeetSlider
+import core.style as _s  # dynamic theme bridge
+from ui.components.atoms import MonoGroupBox, MonoButton, MonoSlider
 from ui.components.complex import BehaviorTagInput
 from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, MASTER_PROMPT, load_config, save_config
@@ -74,46 +74,46 @@ class PageChat(QWidget):
         layout.addWidget(main_split)
 
         # === MODEL LOADER (lives in CONTROL tab) ===
-        grp_load = SkeetGroupBox("MODEL LOADER")
+        grp_load = MonoGroupBox("MODEL LOADER")
         self.path_display = QLineEdit()
         self.path_display.setReadOnly(True)
         self.path_display.setPlaceholderText("No GGUF Selected")
         self.path_display.setStyleSheet(
-            f"background: {BG_INPUT}; color: #555; border: 1px solid #333; padding: 5px;"
+            f"background: {_s.BG_INPUT}; color: {_s.FG_PLACEHOLDER}; border: 1px solid {_s.BORDER_LIGHT}; padding: 5px;"
         )
-        btn_browse = SkeetButton("...")
+        btn_browse = MonoButton("...")
         btn_browse.setFixedWidth(30)
         btn_browse.clicked.connect(self.pick_file)
         row_file = QHBoxLayout()
         row_file.addWidget(self.path_display)
         row_file.addWidget(btn_browse)
-        self.btn_load = SkeetButton("LOAD MODEL")
+        self.btn_load = MonoButton("LOAD MODEL")
         self.btn_load.clicked.connect(self.toggle_load)
         grp_load.add_layout(row_file)
         grp_load.add_widget(self.btn_load)
 
         # === AI CONFIGURATION (lives in SETTINGS tab) ===
-        self.s_temp = SkeetSlider("Temperature", 0.1, 2.0, self.config.get("temp", 0.7))
+        self.s_temp = MonoSlider("Temperature", 0.1, 2.0, self.config.get("temp", 0.7))
         self.s_temp.valueChanged.connect(lambda v: self._update_config_value("temp", v))
-        self.s_top = SkeetSlider("Top-P", 0.1, 1.0, self.config.get("top_p", 0.9))
+        self.s_top = MonoSlider("Top-P", 0.1, 1.0, self.config.get("top_p", 0.9))
         self.s_top.valueChanged.connect(lambda v: self._update_config_value("top_p", v))
-        self.s_tok = SkeetSlider(
+        self.s_tok = MonoSlider(
             "Max Tokens", 512, 8192, self.config.get("max_tokens", 2048), is_int=True
         )
         self.s_tok.valueChanged.connect(
             lambda v: self._update_config_value("max_tokens", int(v))
         )
-        self.s_ctx = SkeetSlider(
+        self.s_ctx = MonoSlider(
             "Context Limit", 1024, 16384, self.config.get("ctx_limit", 8192), is_int=True
         )
         self.s_ctx.valueChanged.connect(self._on_ctx_limit_changed)
 
         save_row = QHBoxLayout()
         self.lbl_config_state = QLabel("SAVED")
-        self.lbl_config_state.setStyleSheet(f"color: {FG_DIM}; font-size: 10px; font-weight: bold;")
-        self.btn_save_config = SkeetButton("SAVE SETTINGS")
+        self.lbl_config_state.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px; font-weight: bold;")
+        self.btn_save_config = MonoButton("SAVE SETTINGS")
         self.btn_save_config.clicked.connect(self._save_config)
-        btn_reset_config = SkeetButton("RESET")
+        btn_reset_config = MonoButton("RESET")
         btn_reset_config.clicked.connect(self._reset_config)
         save_row.addWidget(self.lbl_config_state)
         save_row.addStretch()
@@ -121,29 +121,29 @@ class PageChat(QWidget):
         save_row.addWidget(self.btn_save_config)
 
         # === OPERATIONS GROUP with 3 tabs ===
-        operations_group = SkeetGroupBox("OPERATIONS")
+        operations_group = MonoGroupBox("OPERATIONS")
         operations_layout = QVBoxLayout()
         operations_layout.setSpacing(10)
 
         tab_row = QHBoxLayout()
         tab_style = f"""
             QPushButton {{
-                background: #181818; border: 1px solid #333; color: {FG_DIM};
+                background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM};
                 padding: 6px 12px; font-size: 10px; font-weight: bold; border-radius: 2px;
             }}
             QPushButton:checked {{
-                background: #222; color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD};
+                background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY};
             }}
-            QPushButton:hover {{ color: {FG_TEXT}; border: 1px solid {FG_TEXT}; }}
+            QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
         """
-        self.btn_tab_control = SkeetButton("CONTROL")
+        self.btn_tab_control = MonoButton("CONTROL")
         self.btn_tab_control.setCheckable(True)
         self.btn_tab_control.setChecked(True)
         self.btn_tab_control.setStyleSheet(tab_style)
-        self.btn_tab_archive = SkeetButton("ARCHIVE")
+        self.btn_tab_archive = MonoButton("ARCHIVE")
         self.btn_tab_archive.setCheckable(True)
         self.btn_tab_archive.setStyleSheet(tab_style)
-        self.btn_tab_settings = SkeetButton("SETTINGS")
+        self.btn_tab_settings = MonoButton("SETTINGS")
         self.btn_tab_settings.setCheckable(True)
         self.btn_tab_settings.setStyleSheet(tab_style)
         tab_group = QButtonGroup(self)
@@ -173,10 +173,10 @@ class PageChat(QWidget):
         self.btn_options_toggle.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; border: none;
-                color: {FG_DIM}; font-size: 9px; font-weight: bold;
+                color: {_s.FG_DIM}; font-size: 9px; font-weight: bold;
                 letter-spacing: 1px; text-align: left; padding: 4px 0;
             }}
-            QPushButton:hover {{ color: {ACCENT_GOLD}; }}
+            QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; }}
         """)
         self.btn_options_toggle.clicked.connect(self._toggle_options_panel)
         control_layout.addWidget(self.btn_options_toggle)
@@ -188,7 +188,7 @@ class PageChat(QWidget):
         options_layout.setSpacing(8)
 
         # Attach file button
-        self.btn_attach = SkeetButton("📎  ATTACH FILE")
+        self.btn_attach = MonoButton("📎  ATTACH FILE")
         self.btn_attach.clicked.connect(self._attach_file_placeholder)
         options_layout.addWidget(self.btn_attach)
 
@@ -196,18 +196,18 @@ class PageChat(QWidget):
         think_row = QHBoxLayout()
         think_row.setSpacing(4)
         lbl_think = QLabel("THINK")
-        lbl_think.setStyleSheet(f"color: {FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 1px;")
+        lbl_think.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 1px;")
         think_row.addWidget(lbl_think)
 
         think_style = f"""
             QPushButton {{
-                background: #181818; border: 1px solid #333; color: {FG_DIM};
+                background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM};
                 padding: 4px 10px; font-size: 9px; font-weight: bold; border-radius: 2px;
             }}
             QPushButton:checked {{
-                background: #222; color: {ACCENT_GOLD}; border: 1px solid {ACCENT_GOLD};
+                background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY};
             }}
-            QPushButton:hover {{ color: {FG_TEXT}; border: 1px solid {FG_TEXT}; }}
+            QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
         """
         self.btn_think_off = QPushButton("OFF")
         self.btn_think_off.setCheckable(True)
@@ -247,13 +247,13 @@ class PageChat(QWidget):
         archive_layout.setSpacing(10)
 
         archive_controls = QHBoxLayout()
-        self.btn_save_chat = SkeetButton("SAVE")
+        self.btn_save_chat = MonoButton("SAVE")
         self.btn_save_chat.clicked.connect(self._save_chat_archive)
-        self.btn_load_chat = SkeetButton("LOAD")
+        self.btn_load_chat = MonoButton("LOAD")
         self.btn_load_chat.clicked.connect(self._load_chat_archive)
-        self.btn_delete_chat = SkeetButton("DELETE")
+        self.btn_delete_chat = MonoButton("DELETE")
         self.btn_delete_chat.clicked.connect(self._delete_selected_archive)
-        self.btn_clear_chat = SkeetButton("CLEAR")
+        self.btn_clear_chat = MonoButton("CLEAR")
         self.btn_clear_chat.clicked.connect(lambda: self._clear_current_session(delete_archive=False))
         archive_controls.addWidget(self.btn_save_chat)
         archive_controls.addWidget(self.btn_load_chat)
@@ -265,23 +265,23 @@ class PageChat(QWidget):
         self.archive_list = QListWidget()
         self.archive_list.setStyleSheet(f"""
             QListWidget {{
-                background: {BG_INPUT}; color: {FG_TEXT}; border: 1px solid #222;
+                background: {_s.BG_INPUT}; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
                 font-family: 'Consolas', monospace; font-size: 10px;
             }}
             QListWidget::item {{ padding: 6px; }}
-            QListWidget::item:selected {{ background: #222; color: {ACCENT_GOLD}; }}
-            {SCROLLBAR_STYLE}
+            QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
         """)
         archive_layout.addWidget(self.archive_list)
 
         self.lbl_behavior = QLabel("BEHAVIOR TAGS")
         self.lbl_behavior.setStyleSheet(
-            f"color: #444; font-size: 8px; font-weight: bold; letter-spacing: 1px;"
+            f"color: {_s.FG_INFO}; font-size: 8px; font-weight: bold; letter-spacing: 1px;"
         )
         self.behavior_tags = BehaviorTagInput([])
         self.behavior_tags.tagsChanged.connect(self._on_behavior_tags_changed)
         self.behavior_tags.setStyleSheet(
-            f"background: #111; border: 1px solid #1a1a1a; border-radius: 2px;"
+            f"background: {_s.BG_SIDEBAR}; border: 1px solid {_s.BORDER_SUBTLE}; border-radius: 2px;"
         )
         self.behavior_tags.setMaximumHeight(36)
 
@@ -307,7 +307,7 @@ class PageChat(QWidget):
 
         operations_group.add_layout(operations_layout)
 
-        chat_group = SkeetGroupBox("TERMINAL")
+        chat_group = MonoGroupBox("CHAT")
         chat_layout = QVBoxLayout()
         chat_layout.setSpacing(10)
 
@@ -315,7 +315,7 @@ class PageChat(QWidget):
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self.message_list.setStyleSheet(f"""
             QListWidget {{
-                background: transparent; color: #ccc; border: 1px solid #222;
+                background: transparent; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
                 font-family: 'Consolas', monospace; font-size: 12px;
             }}
             QListWidget::item {{
@@ -323,7 +323,7 @@ class PageChat(QWidget):
                 background: transparent;
                 padding: 0px;
             }}
-            {SCROLLBAR_STYLE}
+            {_s.SCROLLBAR_STYLE}
         """)
         chat_layout.addWidget(self.message_list)
         
@@ -336,27 +336,27 @@ class PageChat(QWidget):
         self.input.textChanged.connect(self._on_input_changed)
         self.input.setStyleSheet(f"""
             QLineEdit {{
-                background: {BG_INPUT}; color: white; border: 1px solid #333;
+                background: {_s.BG_INPUT}; color: white; border: 1px solid {_s.BORDER_LIGHT};
                 padding: 8px; font-family: 'Verdana'; font-size: 11px;
             }}
-            QLineEdit:focus {{ border: 1px solid {ACCENT_GOLD}; }}
+            QLineEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
         """)
         
         self.btn_send = QPushButton("SEND")
         self.btn_send.setCursor(Qt.PointingHandCursor)
         self.btn_send.setFixedWidth(80)
-        self._btn_style_template = """
-            QPushButton {{
-                background: {bg};
-                border: 1px solid {color};
-                color: {color};
+        self._btn_style_template = f"""
+            QPushButton {{{{
+                background: {{bg}};
+                border: 1px solid {{color}};
+                color: {{color}};
                 padding: 8px;
                 font-size: 11px;
                 font-weight: bold;
                 border-radius: 2px;
-            }}
-            QPushButton:hover {{ background: {color}; color: black; }}
-            QPushButton:pressed {{ background: #b08d2b; }}
+            }}}}
+            QPushButton:hover {{{{ background: {{color}}; color: black; }}}}
+            QPushButton:pressed {{{{ background: {_s.ACCENT_PRIMARY_DARK}; }}}}
         """
         self._set_send_button_state(is_running=False)
         self.btn_send.clicked.connect(self.handle_send_click)
@@ -370,24 +370,24 @@ class PageChat(QWidget):
         right_stack = QSplitter(Qt.Vertical)
         right_stack.setChildrenCollapsible(False)
 
-        trace_group = SkeetGroupBox("REASONING TRACE")
+        trace_group = MonoGroupBox("REASONING TRACE")
         self.trace = QTextEdit()
         self.trace.setReadOnly(True)
         self.trace.setStyleSheet(f"""
             QTextEdit {{
-                background-color: {BG_INPUT};
-                color: {FG_TEXT};
-                border: 1px solid #222;
+                background-color: {_s.BG_INPUT};
+                color: {_s.FG_TEXT};
+                border: 1px solid {_s.BORDER_SUBTLE};
                 font-family: 'Consolas', monospace;
                 font-size: 10px;
             }}
             QTextEdit::viewport {{
-                background-color: {BG_INPUT};
+                background-color: {_s.BG_INPUT};
             }}
-            {SCROLLBAR_STYLE}
+            {_s.SCROLLBAR_STYLE}
         """)
         self.lbl_config_update = QLabel("")
-        self.lbl_config_update.setStyleSheet(f"color: {ACCENT_GOLD}; font-size: 10px; font-weight: bold;")
+        self.lbl_config_update.setStyleSheet(f"color: {_s.ACCENT_PRIMARY}; font-size: 10px; font-weight: bold;")
         self.lbl_config_update.hide()
         self._config_update_fade = QTimer(self)
         self._config_update_fade.setSingleShot(True)
@@ -456,13 +456,13 @@ class PageChat(QWidget):
             has_input = bool(self.input.text().strip())
             if has_input:
                 self.btn_send.setText("UPDATE")
-                color = ACCENT_GOLD
+                color = _s.ACCENT_PRIMARY
             else:
                 self.btn_send.setText("■")
-                color = FG_ERROR
+                color = _s.FG_ERROR
             self.btn_send.setStyleSheet(
                 self._btn_style_template.format(
-                    bg=BG_INPUT,
+                    bg=_s.BG_INPUT,
                     color=color,
                 )
             )
@@ -471,8 +471,8 @@ class PageChat(QWidget):
             self.btn_send.setText("SEND")
             self.btn_send.setStyleSheet(
                 self._btn_style_template.format(
-                    bg=BG_INPUT,
-                    color=ACCENT_GOLD,
+                    bg=_s.BG_INPUT,
+                    color=_s.ACCENT_PRIMARY,
                 )
             )
             self.btn_send.setEnabled(True)
@@ -637,19 +637,19 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._config_dirty = dirty
         self.lbl_config_state.setText("UNSAVED" if dirty else "SAVED")
         self.lbl_config_state.setStyleSheet(
-            f"color: {ACCENT_GOLD if dirty else FG_DIM}; font-size: 10px; font-weight: bold;"
+            f"color: {_s.ACCENT_PRIMARY if dirty else _s.FG_DIM}; font-size: 10px; font-weight: bold;"
         )
         # Save button: gold when dirty (action needed), gray when clean
         if dirty:
             self.btn_save_config.setStyleSheet(f"""
-                QPushButton {{ background: #181818; border: 1px solid {ACCENT_GOLD}; color: {ACCENT_GOLD}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
-                QPushButton:hover {{ background: {ACCENT_GOLD}; color: black; }}
-                QPushButton:pressed {{ background: #b08d2b; color: black; }}
+                QPushButton {{ background: {_s.BG_BUTTON}; border: 1px solid {_s.ACCENT_PRIMARY}; color: {_s.ACCENT_PRIMARY}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
+                QPushButton:hover {{ background: {_s.ACCENT_PRIMARY}; color: black; }}
+                QPushButton:pressed {{ background: {_s.ACCENT_PRIMARY_DARK}; color: black; }}
             """)
         else:
             self.btn_save_config.setStyleSheet(f"""
-                QPushButton {{ background: #181818; border: 1px solid #333; color: {FG_DIM}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
-                QPushButton:hover {{ background: #222; color: {FG_DIM}; }}
+                QPushButton {{ background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
+                QPushButton:hover {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.FG_DIM}; }}
             """)
 
     def _save_config(self):
@@ -698,8 +698,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         )
 
     def _trace_html(self, msg, tag="INFO", error=False):
-        arrow_color = FG_ERROR if error else ACCENT_GOLD
-        tag_color = FG_ERROR if error else "#555"
+        arrow_color = _s.FG_ERROR if error else _s.ACCENT_PRIMARY
+        tag_color = _s.FG_ERROR if error else _s.FG_PLACEHOLDER
         self.trace.append(
             f"<table width='100%' cellpadding='0' cellspacing='0'><tr>"
             f"<td><span style='color:{arrow_color}'>→</span> {msg}</td>"
@@ -708,7 +708,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         )
 
     def _trace_plain(self, msg):
-        self.trace.append(f"<span style='color:#555'>{msg}</span>")
+        self.trace.append(f"<span style='color:{_s.FG_PLACEHOLDER}'>{msg}</span>")
 
     def _on_model_capabilities(self, payload):
         model_ctx_length = payload.get("model_ctx_length")
@@ -1000,28 +1000,28 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         dialog.setText("Choose how to clear the current session.")
         dialog.setStyleSheet(f"""
             QMessageBox {{
-                background: {BG_INPUT};
-                color: {FG_TEXT};
+                background: {_s.BG_INPUT};
+                color: {_s.FG_TEXT};
             }}
             QLabel {{
-                color: {FG_TEXT};
+                color: {_s.FG_TEXT};
             }}
             QPushButton {{
-                color: {FG_TEXT};
+                color: {_s.FG_TEXT};
                 background: transparent;
-                border: 1px solid #333;
+                border: 1px solid {_s.BORDER_LIGHT};
                 padding: 6px 12px;
                 font-size: 10px;
                 font-weight: bold;
                 border-radius: 2px;
             }}
             QPushButton:hover {{
-                border: 1px solid {ACCENT_GOLD};
-                color: {ACCENT_GOLD};
+                border: 1px solid {_s.ACCENT_PRIMARY};
+                color: {_s.ACCENT_PRIMARY};
             }}
             QPushButton:checked {{
-                border: 1px solid {ACCENT_GOLD};
-                color: {ACCENT_GOLD};
+                border: 1px solid {_s.ACCENT_PRIMARY};
+                color: {_s.ACCENT_PRIMARY};
             }}
         """)
         btn_clear = dialog.addButton("Clear Logs", QMessageBox.AcceptRole)

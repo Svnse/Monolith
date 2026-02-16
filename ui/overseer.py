@@ -21,22 +21,22 @@ from PySide6.QtWidgets import (
 )
 
 from core.overseer_db import OverseerDB
-from core.style import (
-    ACCENT_GOLD, FG_DIM, FG_TEXT, FG_ERROR, FG_WARN, FG_ACCENT,
-    OVERSEER_BG, OVERSEER_FG, OVERSEER_DIM, OVERSEER_BORDER, BG_INPUT,
-)
+import core.style as _s  # dynamic theme bridge
 from monokernel.guard import MonoGuard
 from ui.bridge import UIBridge
 
-# Severity colors
-_SEV_COLORS = {
-    "ERROR": FG_ERROR,
-    "WARNING": FG_WARN,
-    "INFO": OVERSEER_FG,
-    "DEBUG": FG_DIM,
-    "STATUS": ACCENT_GOLD,
-    "FINISHED": FG_ACCENT,
-}
+
+def _sev_colors():
+    """Return severity→color map with fresh theme values."""
+    return {
+        "ERROR": _s.FG_ERROR,
+        "WARNING": _s.FG_WARN,
+        "INFO": _s.OVERSEER_FG,
+        "DEBUG": _s.FG_DIM,
+        "STATUS": _s.ACCENT_PRIMARY,
+        "FINISHED": _s.FG_ACCENT,
+    }
+
 
 _FILTER_STYLE_ON = """
     QPushButton {{
@@ -46,19 +46,22 @@ _FILTER_STYLE_ON = """
         padding: 4px 8px; font-size: 9px; font-weight: bold;
         border-radius: 2px;
     }}
-    QPushButton:hover {{ background: #1a1a1a; }}
+    QPushButton:hover {{ background: {hover_bg}; }}
 """
 
-_FILTER_STYLE_OFF = f"""
-    QPushButton {{
-        background: transparent;
-        border: 1px solid #222;
-        color: #333;
-        padding: 4px 8px; font-size: 9px; font-weight: bold;
-        border-radius: 2px;
-    }}
-    QPushButton:hover {{ color: {FG_DIM}; border: 1px solid #333; }}
-"""
+
+def _filter_style_off():
+    """Return OFF filter style with fresh theme values."""
+    return f"""
+        QPushButton {{
+            background: transparent;
+            border: 1px solid {_s.BORDER_SUBTLE};
+            color: {_s.BORDER_LIGHT};
+            padding: 4px 8px; font-size: 9px; font-weight: bold;
+            border-radius: 2px;
+        }}
+        QPushButton:hover {{ color: {_s.FG_DIM}; border: 1px solid {_s.BORDER_LIGHT}; }}
+    """
 
 _RECIPE_PRESETS = {
     "ALL": {"ERROR", "WARNING", "INFO", "DEBUG", "STATUS", "FINISHED"},
@@ -90,10 +93,10 @@ class _SeverityFilter(QPushButton):
     def _apply_style(self):
         if self._active:
             self.setStyleSheet(
-                _FILTER_STYLE_ON.format(bg=OVERSEER_BG, color=self._color)
+                _FILTER_STYLE_ON.format(bg=_s.OVERSEER_BG, color=self._color, hover_bg=_s.BORDER_SUBTLE)
             )
         else:
-            self.setStyleSheet(_FILTER_STYLE_OFF)
+            self.setStyleSheet(_filter_style_off())
 
     def is_active(self) -> bool:
         return self._active
@@ -113,7 +116,7 @@ class ActiveTasksPanel(QWidget):
 
         lbl = QLabel("ACTIVE TASKS")
         lbl.setStyleSheet(
-            f"color: {OVERSEER_DIM}; font-size: 9px; font-weight: bold; "
+            f"color: {_s.OVERSEER_DIM}; font-size: 9px; font-weight: bold; "
             f"letter-spacing: 2px; background: transparent;"
         )
         layout.addWidget(lbl)
@@ -127,22 +130,22 @@ class ActiveTasksPanel(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setStyleSheet(f"""
             QTableWidget {{
-                background: {OVERSEER_BG};
-                color: {OVERSEER_FG};
-                border: 1px solid {OVERSEER_BORDER};
-                gridline-color: {OVERSEER_BORDER};
+                background: {_s.OVERSEER_BG};
+                color: {_s.OVERSEER_FG};
+                border: 1px solid {_s.OVERSEER_BORDER};
+                gridline-color: {_s.OVERSEER_BORDER};
                 font-family: 'Consolas', monospace;
                 font-size: 10px;
             }}
             QTableWidget::item {{
                 padding: 4px;
-                border-bottom: 1px solid {OVERSEER_BORDER};
+                border-bottom: 1px solid {_s.OVERSEER_BORDER};
             }}
             QHeaderView::section {{
-                background: {OVERSEER_BG};
-                color: {OVERSEER_DIM};
+                background: {_s.OVERSEER_BG};
+                color: {_s.OVERSEER_DIM};
                 border: none;
-                border-bottom: 1px solid {OVERSEER_BORDER};
+                border-bottom: 1px solid {_s.OVERSEER_BORDER};
                 font-size: 9px;
                 font-weight: bold;
                 padding: 4px;
@@ -156,7 +159,7 @@ class ActiveTasksPanel(QWidget):
             self.table.setItem(idx, 0, QTableWidgetItem(task_id))
             self.table.setItem(idx, 1, QTableWidgetItem(engine_key))
             item = QTableWidgetItem(status)
-            color = _SEV_COLORS.get(status.upper(), OVERSEER_FG)
+            color = _sev_colors().get(status.upper(), _s.OVERSEER_FG)
             item.setForeground(QColor(color))
             self.table.setItem(idx, 2, item)
 
@@ -171,9 +174,9 @@ class OverseerWindow(QMainWindow):
         self._last_task_state: dict[str, tuple[str, str]] = {}
         self._severity_filters: dict[str, _SeverityFilter] = {}
 
-        self.setWindowTitle("OVERSEER")
+        self.setWindowTitle("MONITOR")
         self.resize(1000, 560)
-        self.setStyleSheet(f"background: {OVERSEER_BG};")
+        self.setStyleSheet(f"background: {_s.OVERSEER_BG};")
 
         main = QWidget()
         self.setCentralWidget(main)
@@ -183,9 +186,9 @@ class OverseerWindow(QMainWindow):
 
         # --- Top bar: title + recipe buttons ---
         top_bar = QHBoxLayout()
-        lbl_title = QLabel("⬡ OVERSEER")
+        lbl_title = QLabel("⬡ MONITOR")
         lbl_title.setStyleSheet(
-            f"color: {OVERSEER_FG}; font-size: 12px; font-weight: bold; "
+            f"color: {_s.OVERSEER_FG}; font-size: 12px; font-weight: bold; "
             f"letter-spacing: 2px; background: transparent;"
         )
         top_bar.addWidget(lbl_title)
@@ -199,14 +202,14 @@ class OverseerWindow(QMainWindow):
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
-                    border: 1px solid {OVERSEER_BORDER};
-                    color: {OVERSEER_DIM};
+                    border: 1px solid {_s.OVERSEER_BORDER};
+                    color: {_s.OVERSEER_DIM};
                     padding: 2px 8px; font-size: 8px; font-weight: bold;
                     border-radius: 2px;
                 }}
                 QPushButton:hover {{
-                    border: 1px solid {OVERSEER_FG};
-                    color: {OVERSEER_FG};
+                    border: 1px solid {_s.OVERSEER_FG};
+                    color: {_s.OVERSEER_FG};
                 }}
             """)
             btn.clicked.connect(lambda _=False, r=recipe_name: self._apply_recipe(r))
@@ -217,7 +220,7 @@ class OverseerWindow(QMainWindow):
         # --- Severity filter row ---
         filter_row = QHBoxLayout()
         filter_row.setSpacing(4)
-        for sev, color in _SEV_COLORS.items():
+        for sev, color in _sev_colors().items():
             f = _SeverityFilter(sev, color)
             self._severity_filters[sev] = f
             filter_row.addWidget(f)
@@ -227,13 +230,13 @@ class OverseerWindow(QMainWindow):
         # --- Separator ---
         sep = QFrame()
         sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background: {OVERSEER_BORDER};")
+        sep.setStyleSheet(f"background: {_s.OVERSEER_BORDER};")
         main_layout.addWidget(sep)
 
         # --- Content: tasks panel + log display ---
         content_split = QSplitter(Qt.Horizontal)
         content_split.setStyleSheet(f"""
-            QSplitter::handle {{ background: {OVERSEER_BORDER}; width: 1px; }}
+            QSplitter::handle {{ background: {_s.OVERSEER_BORDER}; width: 1px; }}
         """)
         content_split.setChildrenCollapsible(False)
 
@@ -248,7 +251,7 @@ class OverseerWindow(QMainWindow):
 
         lbl_log = QLabel("EVENT LOG")
         lbl_log.setStyleSheet(
-            f"color: {OVERSEER_DIM}; font-size: 9px; font-weight: bold; "
+            f"color: {_s.OVERSEER_DIM}; font-size: 9px; font-weight: bold; "
             f"letter-spacing: 2px; background: transparent;"
         )
         log_layout.addWidget(lbl_log)
@@ -258,13 +261,13 @@ class OverseerWindow(QMainWindow):
         self.log_display.setFont(QFont("Consolas", 10))
         self.log_display.setStyleSheet(f"""
             QPlainTextEdit {{
-                background: {OVERSEER_BG};
-                color: {OVERSEER_FG};
-                border: 1px solid {OVERSEER_BORDER};
-                selection-background-color: #1a3a1a;
+                background: {_s.OVERSEER_BG};
+                color: {_s.OVERSEER_FG};
+                border: 1px solid {_s.OVERSEER_BORDER};
+                selection-background-color: {_s.OVERSEER_DIM};
             }}
             QPlainTextEdit::viewport {{
-                background: {OVERSEER_BG};
+                background: {_s.OVERSEER_BG};
             }}
         """)
         log_layout.addWidget(self.log_display)
@@ -281,18 +284,18 @@ class OverseerWindow(QMainWindow):
 
         ctrl_style = f"""
             QCheckBox {{
-                color: {OVERSEER_DIM}; font-size: 9px; font-weight: bold;
+                color: {_s.OVERSEER_DIM}; font-size: 9px; font-weight: bold;
                 spacing: 4px;
             }}
             QCheckBox::indicator {{
                 width: 10px; height: 10px;
-                border: 1px solid {OVERSEER_DIM};
-                background: {OVERSEER_BG};
+                border: 1px solid {_s.OVERSEER_DIM};
+                background: {_s.OVERSEER_BG};
                 border-radius: 2px;
             }}
             QCheckBox::indicator:checked {{
-                background: {OVERSEER_FG};
-                border: 1px solid {OVERSEER_FG};
+                background: {_s.OVERSEER_FG};
+                border: 1px solid {_s.OVERSEER_FG};
             }}
         """
 
@@ -306,12 +309,12 @@ class OverseerWindow(QMainWindow):
         self.btn_clear.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
-                border: 1px solid {OVERSEER_BORDER};
-                color: {OVERSEER_DIM};
+                border: 1px solid {_s.OVERSEER_BORDER};
+                color: {_s.OVERSEER_DIM};
                 padding: 2px 10px; font-size: 9px; font-weight: bold;
                 border-radius: 2px;
             }}
-            QPushButton:hover {{ border: 1px solid {FG_ERROR}; color: {FG_ERROR}; }}
+            QPushButton:hover {{ border: 1px solid {_s.FG_ERROR}; color: {_s.FG_ERROR}; }}
         """)
         self.btn_clear.clicked.connect(self.log_display.clear)
 
@@ -353,11 +356,11 @@ class OverseerWindow(QMainWindow):
             return
         if not self._is_severity_visible(severity):
             return
-        color = _SEV_COLORS.get(severity.upper(), OVERSEER_FG)
+        color = _sev_colors().get(severity.upper(), _s.OVERSEER_FG)
         self.log_display.appendHtml(
-            f'<span style="color:{OVERSEER_DIM}">[{self._now_label()}]</span> '
+            f'<span style="color:{_s.OVERSEER_DIM}">[{self._now_label()}]</span> '
             f'<span style="color:{color}">[{severity}]</span> '
-            f'<span style="color:{OVERSEER_FG}">{text}</span>'
+            f'<span style="color:{_s.OVERSEER_FG}">{text}</span>'
         )
 
     def _now_label(self) -> str:

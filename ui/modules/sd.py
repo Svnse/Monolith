@@ -8,16 +8,19 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage
 
-from core.style import BG_INPUT, BORDER_DARK, FG_DIM, FG_TEXT, FG_ACCENT, FG_ERROR
 from core.state import SystemStatus
 from core.paths import CONFIG_DIR, MONOLITH_ROOT
 from monokernel.bridge import MonoBridge
 from monokernel.guard import MonoGuard
-from ui.components.atoms import SkeetGroupBox, SkeetButton, SkeetTriangleButton, CollapsibleSection
+from ui.components.atoms import MonoGroupBox, MonoButton, MonoTriangleButton, CollapsibleSection
 
 class SDModule(QWidget):
     def __init__(self, bridge: MonoBridge, guard: MonoGuard):
         super().__init__()
+        import core.style as s
+        BG_INPUT, BORDER_DARK, FG_DIM, FG_TEXT, FG_ACCENT, FG_ERROR = (
+            s.BG_INPUT, s.BORDER_DARK, s.FG_DIM, s.FG_TEXT, s.FG_ACCENT, s.FG_ERROR
+        )
         self.bridge = bridge
         self.guard = guard
 
@@ -53,7 +56,7 @@ class SDModule(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        grp = SkeetGroupBox("VISION")
+        grp = MonoGroupBox("VISION")
         inner = QVBoxLayout()
         inner.setSpacing(12)
 
@@ -63,7 +66,7 @@ class SDModule(QWidget):
         config_layout.setSpacing(8)
         
         # Model Loader
-        grp_loader = SkeetGroupBox("MODEL LOADER")
+        grp_loader = MonoGroupBox("MODEL LOADER")
         loader_layout = QVBoxLayout()
         loader_row = QHBoxLayout()
         lbl_model = QLabel("Model Path")
@@ -78,13 +81,13 @@ class SDModule(QWidget):
                 border: 1px solid {BORDER_DARK}; padding: 4px;
             }}
         """)
-        btn_browse = SkeetButton("BROWSE...")
+        btn_browse = MonoButton("BROWSE...")
         btn_browse.setFixedWidth(90)
         btn_browse.clicked.connect(self._browse_model)
         loader_row.addWidget(lbl_model, 0)
         loader_row.addWidget(self.inp_model, 1)
         loader_row.addWidget(btn_browse, 0)
-        self.btn_load = SkeetButton("LOAD MODEL")
+        self.btn_load = MonoButton("LOAD MODEL")
         self.btn_load.setCheckable(True)
         self.btn_load.setChecked(False)
         self.btn_load.clicked.connect(self._load_model)
@@ -109,9 +112,9 @@ class SDModule(QWidget):
             }}
         """)
         steps_row.addWidget(lbl_steps)
-        btn_steps_down = SkeetTriangleButton("◀")
+        btn_steps_down = MonoTriangleButton("◀")
         btn_steps_down.clicked.connect(self.inp_steps.stepDown)
-        btn_steps_up = SkeetTriangleButton("▶")
+        btn_steps_up = MonoTriangleButton("▶")
         btn_steps_up.clicked.connect(self.inp_steps.stepUp)
         steps_row.addWidget(btn_steps_down)
         steps_row.addWidget(self.inp_steps)
@@ -135,9 +138,9 @@ class SDModule(QWidget):
                 border: 1px solid {BORDER_DARK}; padding: 4px;
             }}
         """)
-        btn_strength_down = SkeetTriangleButton("◀")
+        btn_strength_down = MonoTriangleButton("◀")
         btn_strength_down.clicked.connect(self.inp_strength.stepDown)
-        btn_strength_up = SkeetTriangleButton("▶")
+        btn_strength_up = MonoTriangleButton("▶")
         btn_strength_up.clicked.connect(self.inp_strength.stepUp)
         strength_row.addWidget(lbl_strength)
         strength_row.addWidget(btn_strength_down)
@@ -162,9 +165,9 @@ class SDModule(QWidget):
                 border: 1px solid {BORDER_DARK}; padding: 4px;
             }}
         """)
-        btn_seed_down = SkeetTriangleButton("◀")
+        btn_seed_down = MonoTriangleButton("◀")
         btn_seed_down.clicked.connect(self.inp_seed.stepDown)
-        btn_seed_up = SkeetTriangleButton("▶")
+        btn_seed_up = MonoTriangleButton("▶")
         btn_seed_up.clicked.connect(self.inp_seed.stepUp)
         seed_row.addWidget(lbl_seed)
         seed_row.addWidget(btn_seed_down)
@@ -191,13 +194,13 @@ class SDModule(QWidget):
 
         # Buttons
         btn_row = QHBoxLayout()
-        self.btn_generate = SkeetButton("GENERATE", accent=True)
+        self.btn_generate = MonoButton("GENERATE", accent=True)
         self.btn_generate.clicked.connect(self._start_generate)
         self.btn_generate.setEnabled(self.is_model_loaded)
-        self.btn_stop = SkeetButton("STOP")
+        self.btn_stop = MonoButton("STOP")
         self.btn_stop.clicked.connect(lambda: self.bridge.stop("vision"))
         self.btn_stop.setEnabled(False)
-        self.btn_save = SkeetButton("SAVE IMAGE")
+        self.btn_save = MonoButton("SAVE IMAGE")
         self.btn_save.clicked.connect(self._save_image)
         self.btn_save.setEnabled(False)
         btn_row.addWidget(self.btn_generate)
@@ -292,7 +295,8 @@ class SDModule(QWidget):
             SystemStatus.RUNNING,
             SystemStatus.UNLOADING,
         ):
-            self._set_status("CONFIG SAVED", FG_ACCENT)
+            import core.style as s
+            self._set_status("CONFIG SAVED", s.FG_ACCENT)
             self._status_reset_timer.start()
 
     def _browse_model(self):
@@ -310,10 +314,11 @@ class SDModule(QWidget):
             self.is_model_loaded = False
 
     def _load_model(self):
+        import core.style as s
         if self.btn_load.isChecked():
             path = self.inp_model.text().strip()
             if not path:
-                self._set_status("ERROR: No model selected", FG_ERROR)
+                self._set_status("ERROR: No model selected", s.FG_ERROR)
                 self.btn_load.setChecked(False)
                 return
             self.model_path = path
@@ -334,22 +339,24 @@ class SDModule(QWidget):
         self._status_reset_timer.stop()
         self._config_timer.start()
 
-    def _set_status(self, status, color):
+    def _set_status(self, status, color=None):
+        import core.style as s
         self.lbl_status.setText(status)
-        self.lbl_status.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"color: {color or s.FG_TEXT}; font-size: 10px; font-weight: bold;")
 
     def _reset_status(self):
-        self._set_status("IDLE", FG_TEXT)
+        self._set_status("IDLE")
 
     def _start_generate(self):
+        import core.style as s
         prompt = self.inp_prompt.text().strip()
         if not prompt:
-            self._set_status("ERROR: No prompt", FG_ERROR)
+            self._set_status("ERROR: No prompt", s.FG_ERROR)
             return
 
         self.btn_generate.setEnabled(False)
         self.btn_save.setEnabled(False)
-        self._set_status("REQUESTED", FG_ACCENT)
+        self._set_status("REQUESTED", s.FG_ACCENT)
 
         seed_value = self.inp_seed.value()
         seed = None if seed_value < 0 else seed_value
@@ -370,19 +377,20 @@ class SDModule(QWidget):
     def _save_image(self):
         if not self.current_image:
             return
-            
+
         import time
+        import core.style as s
         filename = f"vision_{int(time.time())}.png"
         filepath = self.artifacts_dir / filename
-        
+
         try:
             if isinstance(self.current_image, QImage):
                 self.current_image.save(str(filepath))
             else:
                 self.current_image.save(filepath)
-            self._set_status(f"SAVED: {filename}", FG_ACCENT)
+            self._set_status(f"SAVED: {filename}", s.FG_ACCENT)
         except Exception as e:
-            self._set_status(f"SAVE ERROR: {str(e)}", FG_ERROR)
+            self._set_status(f"SAVE ERROR: {str(e)}", s.FG_ERROR)
 
     def _on_image(self, image):
         self.current_image = image
@@ -405,12 +413,13 @@ class SDModule(QWidget):
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation,
         ))
-        self._set_status("DONE", FG_TEXT)
+        self._set_status("DONE")
         self.btn_save.setEnabled(True)
 
     def _on_status(self, engine_key: str, status: SystemStatus) -> None:
         if engine_key != "vision":
             return
+        import core.style as s
         self._engine_status = status
         is_busy = status in (
             SystemStatus.LOADING,
@@ -421,14 +430,14 @@ class SDModule(QWidget):
         self.btn_load.setEnabled(not is_busy)
         self.btn_stop.setEnabled(is_busy)
         if status == SystemStatus.LOADING:
-            self._set_status("LOADING", FG_ACCENT)
+            self._set_status("LOADING", s.FG_ACCENT)
             self.btn_load.setText("LOADING...")
         elif status == SystemStatus.RUNNING:
-            self._set_status("RUNNING", FG_ACCENT)
+            self._set_status("RUNNING", s.FG_ACCENT)
         elif status == SystemStatus.UNLOADING:
-            self._set_status("UNLOADING", FG_ACCENT)
+            self._set_status("UNLOADING", s.FG_ACCENT)
         elif status == SystemStatus.READY:
-            self._set_status("READY", FG_TEXT)
+            self._set_status("READY")
             if self.btn_load.isChecked() and self.model_path:
                 self.is_model_loaded = True
                 self.btn_load.setText("UNLOAD MODEL")
@@ -438,7 +447,7 @@ class SDModule(QWidget):
                 self.btn_load.setText("LOAD MODEL")
             self.btn_generate.setEnabled(self.is_model_loaded and not is_busy)
         elif status == SystemStatus.ERROR:
-            self._set_status("ERROR", FG_ERROR)
+            self._set_status("ERROR", s.FG_ERROR)
             self.is_model_loaded = False
             self.btn_load.setChecked(False)
             self.btn_load.setText("LOAD MODEL")
@@ -446,4 +455,5 @@ class SDModule(QWidget):
 
     def _on_trace(self, message: str) -> None:
         if "VISION: ERROR:" in message:
-            self._set_status(message.replace("VISION: ", ""), FG_ERROR)
+            import core.style as s
+            self._set_status(message.replace("VISION: ", ""), s.FG_ERROR)

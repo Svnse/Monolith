@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QProcess, QUrl
 from PySide6.QtGui import QTextCursor, QDragEnterEvent, QDropEvent
 
-from core.style import BG_GROUP, BORDER_DARK, FG_DIM, FG_ACCENT, BG_INPUT, FG_ERROR, ACCENT_GOLD
 
 class InjectorWidget(QWidget):
     sig_closed = Signal()
@@ -15,65 +14,66 @@ class InjectorWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        import core.style as s
         self.setAcceptDrops(True)
         self.setObjectName("InjectorRoot")
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
+
         # Toolbar
         toolbar = QFrame()
         toolbar.setFixedHeight(35)
-        toolbar.setStyleSheet(f"background: {BG_GROUP}; border-bottom: 1px solid {BORDER_DARK};")
+        toolbar.setStyleSheet(f"background: {s.BG_GROUP}; border-bottom: 1px solid {s.BORDER_DARK};")
         tb_layout = QHBoxLayout(toolbar)
         tb_layout.setContentsMargins(10, 0, 10, 0)
-        
+
         lbl_title = QLabel("RUNTIME")
-        lbl_title.setStyleSheet(f"color: {ACCENT_GOLD}; font-weight: bold; font-size: 11px;")
-        
+        lbl_title.setStyleSheet(f"color: {s.ACCENT_PRIMARY}; font-weight: bold; font-size: 11px;")
+
         self.btn_run = QPushButton("▶ EXECUTE")
         self.btn_run.setCursor(Qt.PointingHandCursor)
         self.btn_run.setStyleSheet(f"""
-            QPushButton {{ background: #1a1a1a; color: {FG_ACCENT}; border: 1px solid #333; padding: 4px 10px; font-weight:bold; font-size: 10px;}}
-            QPushButton:hover {{ background: #222; border-color: {FG_ACCENT}; }}
+            QPushButton {{ background: {s.BG_BUTTON}; color: {s.FG_ACCENT}; border: 1px solid {s.BORDER_LIGHT}; padding: 4px 10px; font-weight:bold; font-size: 10px;}}
+            QPushButton:hover {{ background: {s.BG_BUTTON_HOVER}; border-color: {s.FG_ACCENT}; }}
         """)
         self.btn_run.clicked.connect(self.run_code)
 
         btn_close = QPushButton("×")
         btn_close.setFixedSize(20, 20)
         btn_close.setCursor(Qt.PointingHandCursor)
-        btn_close.setStyleSheet("background: transparent; color: #555; border: none; font-weight: bold; font-size: 14px;")
+        btn_close.setStyleSheet(f"background: transparent; color: {s.FG_PLACEHOLDER}; border: none; font-weight: bold; font-size: 14px;")
         btn_close.clicked.connect(self.close_addon)
-        
+
         tb_layout.addWidget(lbl_title)
         tb_layout.addStretch()
         tb_layout.addWidget(self.btn_run)
         tb_layout.addWidget(btn_close)
-        
+
         layout.addWidget(toolbar)
-        
+
         # Splitter (Code | Console)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(1)
-        splitter.setStyleSheet(f"QSplitter::handle {{ background: {BORDER_DARK}; }}")
-        
+        splitter.setStyleSheet(f"QSplitter::handle {{ background: {s.BORDER_DARK}; }}")
+
         self.editor = QPlainTextEdit()
         self.editor.setPlaceholderText("# Drag .py file here or write code...")
         self.editor.setStyleSheet(f"""
             QPlainTextEdit {{
-                background: {BG_INPUT}; color: #dcdcdc; 
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
                 border: none; font-family: 'Consolas', monospace; font-size: 12px; padding: 10px;
             }}
         """)
-        
+
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
         self.console.setPlaceholderText("Output...")
         self.console.setStyleSheet(f"""
             QPlainTextEdit {{
-                background: #080808; color: {FG_DIM}; 
-                border: none; border-left: 1px solid {BORDER_DARK};
+                background: {s.OVERSEER_BG}; color: {s.FG_DIM};
+                border: none; border-left: 1px solid {s.BORDER_DARK};
                 font-family: 'Consolas', monospace; font-size: 11px; padding: 10px;
             }}
         """)
