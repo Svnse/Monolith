@@ -1,6 +1,7 @@
 import uuid
 
 from ui.addons.context import AddonContext
+from ui.addons.descriptors import CapabilityDescriptor
 from ui.addons.registry import AddonRegistry
 from ui.addons.spec import AddonSpec
 from ui.modules.injector import InjectorWidget
@@ -283,6 +284,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="CHAT",
             icon="⌖",
             factory=terminal_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("generate_text", "chat", "load_model", "unload_model", "stream_tokens"),
+                appetites=("text_prompt", "gguf_file", "conversation_history", "system_prompt"),
+                emissions=("text_stream", "token_usage", "model_status"),
+            ),
         )
     )
     registry.register(
@@ -292,6 +298,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="FILES",
             icon="▤",
             factory=databank_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("browse_files", "select_file"),
+                appetites=("file_path", "directory"),
+                emissions=("file_selected",),
+            ),
         )
     )
     registry.register(
@@ -301,6 +312,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="HOME",
             icon=None,
             factory=hub_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("load_operator", "save_operator", "list_operators"),
+                appetites=("operator_name",),
+                emissions=("operator_loaded", "operator_saved"),
+            ),
         )
     )
     registry.register(
@@ -310,6 +326,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="MODULES",
             icon=None,
             factory=addons_page_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("launch_module", "list_modules"),
+                appetites=(),
+                emissions=("module_launched",),
+            ),
         )
     )
     registry.register(
@@ -319,6 +340,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="RUNTIME",
             icon="💉",
             factory=injector_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("inject_context",),
+                appetites=("text_content", "file_path", "code_snippet"),
+                emissions=("context_injected",),
+            ),
         )
     )
     registry.register(
@@ -328,6 +354,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="VISION",
             icon="⟡",
             factory=sd_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("generate_image",),
+                appetites=("text_prompt", "image_prompt", "generation_params"),
+                emissions=("image_generated",),
+            ),
         )
     )
     registry.register(
@@ -337,6 +368,11 @@ def build_builtin_registry() -> AddonRegistry:
             title="AUDIO",
             icon="♫",
             factory=audiogen_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("generate_audio",),
+                appetites=("text_prompt", "audio_params"),
+                emissions=("audio_generated",),
+            ),
         )
     )
 

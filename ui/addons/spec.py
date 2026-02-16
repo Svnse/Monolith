@@ -1,9 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal
 
 from PySide6.QtWidgets import QWidget
 
 from ui.addons.context import AddonContext
+from ui.addons.descriptors import CapabilityDescriptor
 
 AddonKind = Literal["page", "module"]
 
@@ -15,3 +16,4 @@ class AddonSpec:
     title: str
     icon: str | None
     factory: Callable[[AddonContext], QWidget]
+    descriptor: CapabilityDescriptor | None = None
