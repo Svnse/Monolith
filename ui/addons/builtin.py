@@ -226,7 +226,9 @@ def code_factory(ctx: AddonContext):
             ctx.bridge.wrap("code", "runtime_command", engine_key, payload=payload if isinstance(payload, dict) else {})
         )
     )
-    ctx.guard.sig_status.connect(w.update_status)
+    ctx.guard.sig_status.connect(
+        lambda ek, status: w.update_status(status) if ek == engine_key else None
+    )
     w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     ctx.guard.sig_token.connect(
         lambda ek, t: w.append_token(t) if ek == engine_key else None
@@ -237,7 +239,9 @@ def code_factory(ctx: AddonContext):
     ctx.guard.sig_agent_event.connect(
         lambda ek, event: w.append_agent_event(event) if ek == engine_key else None
     )
-    ctx.guard.sig_finished.connect(w.on_guard_finished)
+    ctx.guard.sig_finished.connect(
+        lambda ek, _task_id: w.on_guard_finished() if ek == engine_key else None
+    )
 
     def _cleanup_terminal(*_args):
         ctx.guard.unregister_engine(engine_key)
