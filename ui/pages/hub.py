@@ -405,6 +405,13 @@ class PageHub(QWidget):
             self.btn_delete.setEnabled(False)
             self.btn_lineage.setEnabled(False)
 
+    def _truncate_path(self, path: str | None, max_len: int = 40) -> str:
+        if not path:
+            return "no model"
+        if len(path) <= max_len:
+            return path
+        return "…" + path[-(max_len - 1):]
+
     def _on_card_clicked(self, name: str):
         self._selected_name = name
         for op_name, card in self._cards.items():
