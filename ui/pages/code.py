@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QButtonGroup,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -31,11 +32,132 @@ from ui.components.atoms import MonoButton, MonoGroupBox, MonoSlider
 from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, load_config, save_config
 from core.paths import CONFIG_DIR
-from ui.widgets import (
-    CapabilityInterruptCard,
-    ClarificationInterruptCard,
-    DestructiveInterruptCard,
-)
+
+
+class _CapabilityApprovalWidget(QFrame):
+    """Inline widget for approving/denying agent capability requests."""
+
+    sig_decision = Signal(dict)
+
+    def __init__(self, request_id: str, request: dict, parent=None):
+        super().__init__(parent)
+        self._request_id = request_id
+        self._resolved = False
+
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("capability_approval")
+        self.setStyleSheet(
+            f"QFrame#capability_approval {{"
+            f"  background: {_s.BG_INPUT};"
+            f"  border: 1px solid {_s.FG_WARN};"
+            f"  border-left: 3px solid {_s.FG_WARN};"
+            f"}}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        hdr = QLabel("CAPABILITY REQUEST")
+        hdr.setStyleSheet(
+            f"color: {_s.FG_WARN}; font-family: Consolas; font-size: 9px; "
+            f"font-weight: bold; letter-spacing: 1px; border: none; background: transparent;"
+        )
+        root.addWidget(hdr)
+
+        scope = str(request.get("scope", "READ"))
+        path = str(request.get("path_pattern", "**"))
+        reason = str(request.get("reason", ""))
+        detail_text = f"scope: {scope}  path: {path}"
+        if reason:
+            detail_text += f"\nreason: {reason}"
+
+        detail = QLabel(detail_text)
+        detail.setWordWrap(True)
+        detail.setStyleSheet(
+            f"color: {_s.FG_TEXT}; font-family: Consolas; font-size: 10px; "
+            f"border: none; background: transparent;"
+        )
+        root.addWidget(detail)
+
+        self._btn_row = QWidget()
+        self._btn_row.setStyleSheet("border: none; background: transparent;")
+        btn_layout = QHBoxLayout(self._btn_row)
+        btn_layout.setContentsMargins(0, 2, 0, 0)
+        btn_layout.setSpacing(6)
+
+        self._btn_approve = MonoButton("APPROVE", accent=True)
+        self._btn_approve.setFixedHeight(24)
+        self._btn_approve.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {_s.ACCENT_PRIMARY}; "
+            f"color: {_s.ACCENT_PRIMARY}; font-size: 9px; font-weight: bold; padding: 2px 10px; }}"
+            f"QPushButton:hover {{ background: {_s.ACCENT_PRIMARY}; color: {_s.BG_MAIN}; }}"
+        )
+
+        self._btn_deny = MonoButton("DENY")
+        self._btn_deny.setFixedHeight(24)
+        self._btn_deny.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: 1px solid {_s.FG_ERROR}; "
+            f"color: {_s.FG_ERROR}; font-size: 9px; font-weight: bold; padding: 2px 10px; }}"
+            f"QPushButton:hover {{ background: {_s.FG_ERROR}; color: {_s.BG_MAIN}; }}"
+        )
+
+        btn_layout.addWidget(self._btn_approve)
+        btn_layout.addWidget(self._btn_deny)
+        btn_layout.addStretch()
+        root.addWidget(self._btn_row)
+
+        self._lbl_result = QLabel("")
+        self._lbl_result.setStyleSheet(
+            f"font-family: Consolas; font-size: 9px; font-weight: bold; "
+            f"letter-spacing: 1px; border: none; background: transparent;"
+        )
+        self._lbl_result.setVisible(False)
+        root.addWidget(self._lbl_result)
+
+        self._btn_approve.clicked.connect(self._approve)
+        self._btn_deny.clicked.connect(self._deny)
+
+    def _approve(self):
+        if self._resolved:
+            return
+        self._resolved = True
+        self.sig_decision.emit({
+            "action": "capability_decision",
+            "request_id": self._request_id,
+            "approved": True,
+            "path_pattern": "**",
+            "reason": "approved from UI",
+        })
+        self._show_resolved("APPROVED", _s.ACCENT_PRIMARY)
+
+    def _deny(self):
+        if self._resolved:
+            return
+        self._resolved = True
+        self.sig_decision.emit({
+            "action": "capability_decision",
+            "request_id": self._request_id,
+            "approved": False,
+            "reason": "denied from UI",
+        })
+        self._show_resolved("DENIED", _s.FG_ERROR)
+
+    def _show_resolved(self, text: str, color: str):
+        self._btn_row.setVisible(False)
+        self._lbl_result.setText(text)
+        self._lbl_result.setStyleSheet(
+            f"color: {color}; font-family: Consolas; font-size: 9px; "
+            f"font-weight: bold; letter-spacing: 1px; border: none; background: transparent;"
+        )
+        self._lbl_result.setVisible(True)
+        self.setStyleSheet(
+            f"QFrame#capability_approval {{"
+            f"  background: {_s.BG_INPUT};"
+            f"  border: 1px solid {_s.BORDER_SUBTLE};"
+            f"  border-left: 3px solid {_s.BORDER_SUBTLE};"
+            f"}}"
+        )
 
 
 class PageCode(QWidget):
@@ -79,8 +201,6 @@ class PageCode(QWidget):
         self._runtime_tokens: dict[str, dict] = {}
         self._runtime_checkpoints: list[dict] = []
         self._pending_capability_requests: dict[str, dict] = {}
-        self._active_interrupt_cards: dict[str, QWidget] = {}
-        self._interrupt_sequence = 0
         self._protocol_compliance_rate: float = 1.0
 
         layout = QVBoxLayout(self)
@@ -109,14 +229,6 @@ class PageCode(QWidget):
         workspace_row.addWidget(btn_workspace)
         chat_layout.addLayout(workspace_row)
 
-        self.interrupts_widget = QWidget()
-        self.interrupts_layout = QVBoxLayout(self.interrupts_widget)
-        self.interrupts_layout.setContentsMargins(0, 0, 0, 0)
-        self.interrupts_layout.setSpacing(8)
-        self.interrupts_layout.addStretch()
-        self.interrupts_widget.setVisible(False)
-        chat_layout.addWidget(self.interrupts_widget)
-
         self.message_list = QListWidget()
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self.message_list.viewport().installEventFilter(self)
@@ -129,6 +241,11 @@ class PageCode(QWidget):
             {_s.SCROLLBAR_STYLE}
         """)
         chat_layout.addWidget(self.message_list)
+
+        self._cap_container = QVBoxLayout()
+        self._cap_container.setSpacing(4)
+        self._cap_container.setContentsMargins(0, 0, 0, 0)
+        chat_layout.addLayout(self._cap_container)
 
         input_row = QHBoxLayout()
         self.input = QLineEdit()
@@ -182,9 +299,43 @@ class PageCode(QWidget):
         right_stack = QSplitter(Qt.Vertical)
         right_stack.setChildrenCollapsible(False)
 
-        steps_group = MonoGroupBox("AGENT STEPS")
-        steps_layout = QVBoxLayout()
-        steps_layout.setSpacing(8)
+        agent_group = MonoGroupBox("AGENT")
+        agent_layout = QVBoxLayout()
+        agent_layout.setSpacing(0)
+        agent_tab_style = f"""
+            QPushButton {{
+                background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM};
+                padding: 4px 10px; font-size: 9px; font-weight: bold; border-radius: 2px;
+                letter-spacing: 1px;
+            }}
+            QPushButton:checked {{
+                background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY};
+            }}
+            QPushButton:hover {{ color: {_s.FG_TEXT}; }}
+        """
+        agent_tab_row = QHBoxLayout()
+        agent_tab_row.setSpacing(4)
+        self.btn_agent_steps = MonoButton("STEPS")
+        self.btn_agent_steps.setCheckable(True)
+        self.btn_agent_steps.setChecked(True)
+        self.btn_agent_steps.setStyleSheet(agent_tab_style)
+        self.btn_agent_trace = MonoButton("TRACE")
+        self.btn_agent_trace.setCheckable(True)
+        self.btn_agent_trace.setStyleSheet(agent_tab_style)
+        agent_tab_group = QButtonGroup(self)
+        agent_tab_group.setExclusive(True)
+        agent_tab_group.addButton(self.btn_agent_steps)
+        agent_tab_group.addButton(self.btn_agent_trace)
+        agent_tab_row.addWidget(self.btn_agent_steps)
+        agent_tab_row.addWidget(self.btn_agent_trace)
+        agent_tab_row.addStretch()
+        agent_layout.addLayout(agent_tab_row)
+
+        self.agent_stack = QStackedWidget()
+        steps_page = QWidget()
+        steps_inner = QVBoxLayout(steps_page)
+        steps_inner.setContentsMargins(0, 6, 0, 0)
+        steps_inner.setSpacing(6)
         self.steps_list = QListWidget()
         self.steps_list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.steps_list.currentRowChanged.connect(self._on_step_selected)
@@ -210,11 +361,13 @@ class PageCode(QWidget):
             }}
             {_s.SCROLLBAR_STYLE}
         """)
-        steps_layout.addWidget(self.steps_list)
-        steps_layout.addWidget(self.step_detail)
-        steps_group.add_layout(steps_layout)
+        steps_inner.addWidget(self.steps_list)
+        steps_inner.addWidget(self.step_detail)
 
-        trace_group = MonoGroupBox("REASONING TRACE")
+        trace_page = QWidget()
+        trace_inner = QVBoxLayout(trace_page)
+        trace_inner.setContentsMargins(0, 6, 0, 0)
+        trace_inner.setSpacing(0)
         self.trace = QTextEdit()
         self.trace.setReadOnly(True)
         self.trace.setStyleSheet(f"""
@@ -228,10 +381,34 @@ class PageCode(QWidget):
             QTextEdit::viewport {{ background-color: {_s.BG_INPUT}; }}
             {_s.SCROLLBAR_STYLE}
         """)
-        trace_group.add_widget(self.trace)
+        trace_inner.addWidget(self.trace)
 
-        runtime_group = MonoGroupBox("RUNTIME PANELS")
+        self.agent_stack.addWidget(steps_page)
+        self.agent_stack.addWidget(trace_page)
+        self.btn_agent_steps.toggled.connect(lambda checked: self.agent_stack.setCurrentIndex(0) if checked else None)
+        self.btn_agent_trace.toggled.connect(lambda checked: self.agent_stack.setCurrentIndex(1) if checked else None)
+        agent_layout.addWidget(self.agent_stack)
+        agent_group.add_layout(agent_layout)
+
+        runtime_group = MonoGroupBox("RUNTIME")
         runtime_layout = QVBoxLayout()
+        self._runtime_toggle = MonoButton("\u25bc RUNTIME PANELS")
+        self._runtime_toggle.setCheckable(True)
+        self._runtime_toggle.setChecked(False)
+        self._runtime_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none; color: {_s.FG_DIM};
+                font-family: Consolas; font-size: 9px; font-weight: bold;
+                letter-spacing: 1px; text-align: left; padding: 2px 0px;
+            }}
+            QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; }}
+        """)
+        runtime_layout.addWidget(self._runtime_toggle)
+        self._runtime_content = QWidget()
+        self._runtime_content.setVisible(False)
+        runtime_content_layout = QVBoxLayout(self._runtime_content)
+        runtime_content_layout.setContentsMargins(0, 4, 0, 0)
+        self._runtime_toggle.toggled.connect(self._toggle_runtime_panels)
         self.runtime_tabs = QTabWidget()
         self.runtime_tabs.setStyleSheet(f"""
             QTabWidget::pane {{ border: 1px solid {_s.BORDER_SUBTLE}; background: {_s.BG_INPUT}; }}
@@ -309,7 +486,8 @@ class PageCode(QWidget):
         self.runtime_tabs.addTab(cap_tab, "Capability Ledger")
         self.runtime_tabs.addTab(timeline_tab, "Timeline")
         self.runtime_tabs.addTab(compare_tab, "Branch Compare")
-        runtime_layout.addWidget(self.runtime_tabs)
+        runtime_content_layout.addWidget(self.runtime_tabs)
+        runtime_layout.addWidget(self._runtime_content)
         runtime_group.add_layout(runtime_layout)
 
         controls_group = MonoGroupBox("SETTINGS")
@@ -427,14 +605,12 @@ class PageCode(QWidget):
 
         controls_group.add_layout(controls_layout)
 
-        right_stack.addWidget(steps_group)
-        right_stack.addWidget(trace_group)
+        right_stack.addWidget(agent_group)
         right_stack.addWidget(runtime_group)
         right_stack.addWidget(controls_group)
-        right_stack.setStretchFactor(0, 1)
+        right_stack.setStretchFactor(0, 3)
         right_stack.setStretchFactor(1, 1)
         right_stack.setStretchFactor(2, 1)
-        right_stack.setStretchFactor(3, 1)
 
         main_split.addWidget(chat_group)
         main_split.addWidget(right_stack)
@@ -503,6 +679,7 @@ class PageCode(QWidget):
         if not isinstance(event, dict):
             return
         event_name = event.get("event")
+        self.append_trace(f"[AGENT_EVENT] {event_name}")
         step_id = event.get("step_id")
         timestamp = event.get("timestamp")
         timestamp_str = ""
@@ -592,24 +769,10 @@ class PageCode(QWidget):
             self.compare_detail.setPlainText(json.dumps(comparison, indent=2, ensure_ascii=False))
         elif event_name == "CAPABILITY_REQUEST":
             req = event.get("request") if isinstance(event.get("request"), dict) else {}
-            req_id = self._resolve_interrupt_request_id(event, req)
-            self._pending_capability_requests[req_id] = req
-            card = CapabilityInterruptCard(request_id=req_id, request=req, parent=self)
-            card.sig_decision.connect(self._on_capability_interrupt_decision)
-            self._insert_interrupt_card(req_id, card)
-        elif event_name == "CLARIFICATION_REQUEST":
-            req_id = self._resolve_interrupt_request_id(event)
-            question = str(event.get("question") or event.get("prompt") or "")
-            options = event.get("options") if isinstance(event.get("options"), list) else None
-            card = ClarificationInterruptCard(request_id=req_id, question=question, options=options, parent=self)
-            card.sig_decision.connect(self._on_clarification_interrupt_decision)
-            self._insert_interrupt_card(req_id, card)
-        elif event_name == "DESTRUCTIVE_CONFIRMATION":
-            req_id = self._resolve_interrupt_request_id(event)
-            warning = str(event.get("warning") or event.get("message") or "This will overwrite files. Proceed?")
-            card = DestructiveInterruptCard(request_id=req_id, warning=warning, parent=self)
-            card.sig_decision.connect(self._on_destructive_interrupt_decision)
-            self._insert_interrupt_card(req_id, card)
+            req_id = str(event.get("request_id") or req.get("request_id") or "")
+            if req_id:
+                self._pending_capability_requests[req_id] = req
+                self._show_capability_approval(req_id, req)
         elif event_name == "PROTOCOL_COMPLIANCE_RATE":
             rate = float(event.get("rate", 1.0) or 1.0)
             self._protocol_compliance_rate = rate
@@ -766,62 +929,11 @@ class PageCode(QWidget):
                 combo.setCurrentText(current)
             combo.blockSignals(False)
 
-    def _resolve_interrupt_request_id(self, event: dict, request: dict | None = None) -> str:
-        request = request if isinstance(request, dict) else {}
-        req_id = str(event.get("request_id") or request.get("request_id") or "").strip()
-        if req_id:
-            return req_id
-        self._interrupt_sequence += 1
-        return f"interrupt_{self._interrupt_sequence}"
-
-    def _insert_interrupt_card(self, request_id: str, card: QWidget):
-        if request_id in self._active_interrupt_cards:
-            self._remove_interrupt_card(request_id)
-        self._active_interrupt_cards[request_id] = card
-        self.interrupts_layout.insertWidget(0, card)
-        self.interrupts_widget.setVisible(True)
-
-    def _remove_interrupt_card(self, request_id: str):
-        card = self._active_interrupt_cards.pop(request_id, None)
-        if card is None:
-            return
-        self.interrupts_layout.removeWidget(card)
-        card.deleteLater()
-        if not self._active_interrupt_cards:
-            self.interrupts_widget.setVisible(False)
-
-    def _on_capability_interrupt_decision(self, payload: dict):
-        request_id = str(payload.get("request_id") or "")
-        self.sig_runtime_command.emit(
-            {
-                "action": "capability_decision",
-                "request_id": request_id,
-                "approved": bool(payload.get("approved")),
-            }
-        )
-        self._remove_interrupt_card(request_id)
-
-    def _on_clarification_interrupt_decision(self, payload: dict):
-        request_id = str(payload.get("request_id") or "")
-        self.sig_runtime_command.emit(
-            {
-                "action": "clarification_response",
-                "request_id": request_id,
-                "choice": str(payload.get("choice") or ""),
-            }
-        )
-        self._remove_interrupt_card(request_id)
-
-    def _on_destructive_interrupt_decision(self, payload: dict):
-        request_id = str(payload.get("request_id") or "")
-        self.sig_runtime_command.emit(
-            {
-                "action": "destructive_decision",
-                "request_id": request_id,
-                "approved": bool(payload.get("approved")),
-            }
-        )
-        self._remove_interrupt_card(request_id)
+    def _show_capability_approval(self, request_id: str, request: dict):
+        self.append_trace(f"[CAPABILITY] approval requested: {request_id}")
+        widget = _CapabilityApprovalWidget(request_id, request)
+        widget.sig_decision.connect(self.sig_runtime_command.emit)
+        self._cap_container.addWidget(widget)
 
     def _diff_nodes(self):
         node_a = self.diff_node_a.currentText()
@@ -1075,6 +1187,11 @@ class PageCode(QWidget):
         self.lbl_protocol.setText("protocol: 100.0%")
         self._refresh_runtime_views()
         self.sig_sync_history.emit([])
+
+    def _toggle_runtime_panels(self, expanded):
+        self._runtime_content.setVisible(expanded)
+        arrow = "\u25b2" if expanded else "\u25bc"
+        self._runtime_toggle.setText(f"{arrow} RUNTIME PANELS")
 
     def _switch_controls_tab(self, index, checked):
         if checked:

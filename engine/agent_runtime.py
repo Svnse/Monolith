@@ -406,6 +406,7 @@ class AgentRuntime:
             protocol_actions: list[dict] = []
             protocol_compliant = True
             protocol_error: str | None = None
+            capability_granted = False
             for block in blocks:
                 if block["type"] == "REASONING":
                     self._emit(
@@ -428,6 +429,7 @@ class AgentRuntime:
                         protocol_error = capability_result["error"]
                         protocol_compliant = False
                         break
+                    capability_granted = True
                     continue
 
                 try:
@@ -468,6 +470,17 @@ class AgentRuntime:
                     compliance={"parse_retry": parse_retries},
                 )
                 loop_messages = self._tree.build_messages_to_node(retry_node.node_id)
+                continue
+
+            if capability_granted and not protocol_actions and protocol_error is None:
+                self._emit_step_end(thinking_step_id, "ok", protocol_compliant=protocol_compliant)
+                cap_node = self._append_node(
+                    "system",
+                    "Capability granted. Proceed with the tool call using <ACTION> blocks.",
+                    compliance={"capability_granted": True},
+                )
+                loop_messages = self._tree.build_messages_to_node(cap_node.node_id)
+                steps += 1
                 continue
 
             actions_to_execute = protocol_actions

@@ -157,6 +157,18 @@ class MonoGuard(QObject):
             task.status = TaskStatus.DONE
             return True
 
+        if task.command == "runtime_command":
+            self.sig_trace.emit("system", f"[GUARD] submit: IMMEDIATE {task.command} task={task.id}")
+            self.sig_trace.emit("system", f"GUARD: IMMEDIATE {task.command} task={task.id}")
+            task.status = TaskStatus.RUNNING
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            command = str(payload.get("action") or "")
+            clean_payload = dict(payload)
+            clean_payload.pop("action", None)
+            handler(command, clean_payload)
+            task.status = TaskStatus.DONE
+            return True
+
         if self.active_tasks.get(task.target) is not None:
             active = self.active_tasks.get(task.target)
             self.sig_trace.emit("system", f"[GUARD] submit: REJECTED BUSY target={task.target}, active_task={active.id if active else None}, active_cmd={active.command if active else None}")

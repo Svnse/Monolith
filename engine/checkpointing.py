@@ -39,7 +39,7 @@ class CheckpointStore:
         self.snapshots_dir = self.root / "snapshots"
         self.blobs_dir = self.root / "blobs"
         self.index_path = self.root / "index.json"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._ensure_dirs()
 
     def create_checkpoint(
