@@ -716,7 +716,29 @@ class AgentRuntime:
         if not isinstance(payload, dict):
             return {"ok": False, "error": "invalid <CAPABILITY_REQUEST> payload: expected JSON object"}
 
-        scope_value = payload.get("scope", CapabilityScope.READ.value)
+        scope_value = payload.get("scope")
+        path_pattern_value = payload.get("path_pattern", "**")
+
+        if "scope" not in payload:
+            for shorthand_key, shorthand_scope in {
+                "read": CapabilityScope.READ.value,
+                "write": CapabilityScope.WRITE.value,
+                "exec": CapabilityScope.EXEC.value,
+                "network": CapabilityScope.NETWORK.value,
+            }.items():
+                if shorthand_key in payload:
+                    scope_value = shorthand_scope
+                    path_pattern_value = payload.get(shorthand_key)
+                    break
+
+            if scope_value is None and "type" in payload and "path" in payload:
+                scope_value = str(payload.get("type", "")).upper()
+                path_pattern_value = payload.get("path")
+
+        if scope_value is None:
+            scope_value = CapabilityScope.READ.value
+
+        scope_value = str(scope_value).upper()
         try:
             scope = CapabilityScope(scope_value)
         except Exception:
@@ -725,7 +747,7 @@ class AgentRuntime:
         request = {
             "request_id": str(payload.get("request_id") or request_id),
             "scope": scope.value,
-            "path_pattern": str(payload.get("path_pattern", "**")),
+            "path_pattern": str(path_pattern_value),
             "ttl_seconds": payload.get("ttl_seconds", 300),
             "constraints": payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {},
             "reason": str(payload.get("reason", "")),
