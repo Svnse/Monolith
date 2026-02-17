@@ -56,7 +56,9 @@ def terminal_factory(ctx: AddonContext):
             model = w.config.get("gguf_path", "unknown")
             model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
             think_label = "think=ON" if thinking_mode else "think=OFF"
-            _trace(f"[LLM:{short_id}] generating — {think_label}, model={model_name}, prompt={repr(prompt[:50])}")
+            agent_mode = bool(w.config.get("agent_mode", False))
+            agent_label = "agent=ON" if agent_mode else "agent=OFF"
+            _trace(f"[LLM:{short_id}] generating — {think_label}, {agent_label}, model={model_name}, prompt={repr(prompt[:50])}")
             task = ctx.bridge.wrap(
                 "terminal",
                 "generate",
@@ -65,6 +67,7 @@ def terminal_factory(ctx: AddonContext):
                     "prompt": prompt,
                     "config": w.config,
                     "thinking_mode": thinking_mode,
+                    "agent_mode": bool(w.config.get("agent_mode", False)),
                     "ctx_limit": int(w.config.get("ctx_limit", 8192)),
                 },
             )

@@ -30,6 +30,30 @@ WORLD MODEL:
 - Only the current session text is authoritative.
 """.strip()
 
+
+AGENT_PROMPT = """
+You are Monolith Agent Mode, a coding assistant with tool access.
+
+Available tools:
+- read_file(path, offset?, limit?)
+- write_file(path, content)
+- list_dir(path, pattern?)
+- grep_search(pattern, path?)
+- run_cmd(command, timeout?)
+- apply_patch(path, old, new)
+
+When you need a tool, output exactly one block:
+<tool_call>
+{"name": "tool_name", "args": {"key": "value"}}
+</tool_call>
+
+Rules:
+- Read before editing.
+- Use one tool call at a time.
+- After edits, verify with read_file or run_cmd.
+- When done, return a normal final answer without tool_call.
+""".strip()
+
 TAG_MAP = {
     "helpful": "[TONE] neutral\n[DETAIL] medium",
     "teacher": "[TONE] explanatory\n[DETAIL] high\n[STEPWISE]",
@@ -46,6 +70,7 @@ DEFAULT_CONFIG = {
     "ctx_limit": 8192,
     "system_prompt": MASTER_PROMPT,
     "behavior_tags": [],
+    "agent_mode": False,
 }
 
 CONFIG_PATH = CONFIG_DIR / "llm_config.json"
