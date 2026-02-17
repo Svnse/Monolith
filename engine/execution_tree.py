@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from engine.checkpointing import get_checkpoint_store
+
 
 @dataclass
 class ExecutionNode:
@@ -170,11 +172,30 @@ class ExecutionTree:
         compliant = sum(1 for n in steps if bool(n.compliance.get("protocol_compliant", False)))
         return compliant / len(steps)
 
+    def _resolve_checkpoint_ref(self, node_id: str) -> str | None:
+        if node_id not in self.nodes:
+            return None
+        cursor: str | None = node_id
+        while cursor is not None:
+            node = self.nodes.get(cursor)
+            if node is None:
+                return None
+            if node.checkpoint_ref:
+                return node.checkpoint_ref
+            cursor = node.parent_node_id
+        return None
+
     def diff_nodes(self, node_a: str, node_b: str) -> dict[str, Any]:
-        meta_a = self.get_node(node_a).metadata if node_a in self.nodes else {}
-        meta_b = self.get_node(node_b).metadata if node_b in self.nodes else {}
-        manifest_a = meta_a.get("workspace_manifest") if isinstance(meta_a.get("workspace_manifest"), dict) else {}
-        manifest_b = meta_b.get("workspace_manifest") if isinstance(meta_b.get("workspace_manifest"), dict) else {}
+        checkpoint_a = self._resolve_checkpoint_ref(node_a)
+        checkpoint_b = self._resolve_checkpoint_ref(node_b)
+        if not checkpoint_a or not checkpoint_b:
+            return {"ok": False, "error": "no checkpoints available for diff"}
+
+        store = get_checkpoint_store()
+        manifest_a = store.load_manifest(checkpoint_a)
+        manifest_b = store.load_manifest(checkpoint_b)
+        if manifest_a is None or manifest_b is None:
+            return {"ok": False, "error": "checkpoint manifest unavailable"}
 
         files_a = set(manifest_a.keys())
         files_b = set(manifest_b.keys())
@@ -183,25 +204,38 @@ class ExecutionTree:
         modified = sorted(path for path in (files_a & files_b) if manifest_a.get(path) != manifest_b.get(path))
 
         modified_diffs: dict[str, str] = {}
+        modified_unavailable: dict[str, str] = {}
         for path in modified:
-            content_a = str(meta_a.get("workspace_files", {}).get(path, ""))
-            content_b = str(meta_b.get("workspace_files", {}).get(path, ""))
+            digest_a = manifest_a.get(path, "")
+            digest_b = manifest_b.get(path, "")
+            content_a = store.read_blob_text(digest_a)
+            content_b = store.read_blob_text(digest_b)
+            if content_a is None or content_b is None:
+                reason = "binary or too large"
+                if store.read_blob_bytes(digest_a) is None or store.read_blob_bytes(digest_b) is None:
+                    reason = "missing blob"
+                modified_unavailable[path] = reason
+                continue
             diff = difflib.unified_diff(
                 content_a.splitlines(),
                 content_b.splitlines(),
-                fromfile=f"{node_a}/{path}",
-                tofile=f"{node_b}/{path}",
+                fromfile=f"{checkpoint_a}/{path}",
+                tofile=f"{checkpoint_b}/{path}",
                 lineterm="",
             )
             modified_diffs[path] = "\n".join(diff)
 
         return {
+            "ok": True,
             "node_a": node_a,
             "node_b": node_b,
+            "checkpoint_a": checkpoint_a,
+            "checkpoint_b": checkpoint_b,
             "added_files": added,
             "removed_files": removed,
             "modified_files": modified,
             "modified_diffs": modified_diffs,
+            "modified_unavailable": modified_unavailable,
         }
 
     def to_dict(self) -> dict:

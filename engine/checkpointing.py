@@ -17,6 +17,7 @@ from core.config import DEFAULT_WORKSPACE_ROOT
 
 CHECKPOINT_ROOT = Path(os.getenv("MONOLITH_CHECKPOINT_ROOT", DEFAULT_WORKSPACE_ROOT / ".monolith" / "checkpoints"))
 CHECKPOINT_STORAGE_CEILING_BYTES = int(os.getenv("MONOLITH_CHECKPOINT_STORAGE_CEILING_MB", "512")) * 1024 * 1024
+WORKSPACE_MANAGED_MARKER = ".monolith_workspace"
 
 
 @dataclass
@@ -101,7 +102,7 @@ class CheckpointStore:
     def mark_branch_pruned(self, branch_id: str) -> dict[str, int]:
         return self.garbage_collect(pruned_branches=[branch_id])
 
-    def restore_checkpoint(self, checkpoint_id: str, workspace_root: Path) -> bool:
+    def restore_checkpoint(self, checkpoint_id: str, workspace_root: Path) -> bool | dict[str, Any]:
         with self._lock:
             index = self._load_index()
             entry = index.get("checkpoints", {}).get(checkpoint_id)
@@ -127,11 +128,16 @@ class CheckpointStore:
             target_root = workspace_root.resolve()
             target_root.mkdir(parents=True, exist_ok=True)
 
-            existing_files = [p for p in target_root.rglob("*") if p.is_file() and not self._is_inside_checkpoint_store(p)]
-            manifest_paths = {target_root / rel for rel in manifest.keys()}
-            for path in existing_files:
-                if path not in manifest_paths:
-                    path.unlink(missing_ok=True)
+            managed_workspace = (target_root / WORKSPACE_MANAGED_MARKER).exists()
+            skipped_deletes = False
+            if managed_workspace:
+                existing_files = [p for p in target_root.rglob("*") if p.is_file() and not self._is_inside_checkpoint_store(p)]
+                manifest_paths = {target_root / rel for rel in manifest.keys()}
+                for path in existing_files:
+                    if path not in manifest_paths:
+                        path.unlink(missing_ok=True)
+            else:
+                skipped_deletes = True
 
             for rel_path, digest in manifest.items():
                 blob_path = self.blobs_dir / str(digest)
@@ -146,8 +152,51 @@ class CheckpointStore:
                 shutil.copy2(blob_path, destination)
 
             rebuilt = self._build_manifest_for_root(target_root)
-            return self._hash_manifest(rebuilt) == actual_manifest_hash
+            result_ok = self._hash_manifest(rebuilt) == actual_manifest_hash
+            if not result_ok:
+                return False
+            if skipped_deletes:
+                return {"ok": True, "warning": "workspace not marked as managed; skipped deleting extraneous files"}
+            return True
 
+
+
+    def load_checkpoint_snapshot(self, checkpoint_id: str) -> dict[str, Any] | None:
+        snapshot_path = self.snapshots_dir / f"{checkpoint_id}.json"
+        if not snapshot_path.exists():
+            return None
+        try:
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def load_manifest(self, checkpoint_id: str) -> dict[str, str] | None:
+        snapshot = self.load_checkpoint_snapshot(checkpoint_id)
+        if not isinstance(snapshot, dict):
+            return None
+        manifest = snapshot.get("workspace_manifest")
+        if not isinstance(manifest, dict):
+            return None
+        return {str(path): str(digest) for path, digest in manifest.items()}
+
+    def read_blob_bytes(self, digest: str) -> bytes | None:
+        blob_path = self.blobs_dir / str(digest)
+        if not blob_path.exists() or not blob_path.is_file():
+            return None
+        try:
+            return blob_path.read_bytes()
+        except Exception:
+            return None
+
+    def read_blob_text(self, digest: str, max_bytes: int = 400_000) -> str | None:
+        raw = self.read_blob_bytes(digest)
+        if raw is None or len(raw) > max_bytes:
+            return None
+        try:
+            return raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return None
 
     def _ensure_dirs(self) -> None:
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
