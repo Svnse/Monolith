@@ -32,6 +32,7 @@ class MonoGuard(QObject):
     sig_usage = Signal(str, int)
     sig_image = Signal(object)
     sig_finished = Signal(str, str)
+    sig_agent_event = Signal(str, dict)
 
     def __init__(self, state: AppState, engines: dict[str, EnginePort]):
         super().__init__()
@@ -68,6 +69,11 @@ class MonoGuard(QObject):
             image_slot = self.sig_image.emit
             engine.sig_image.connect(image_slot)
 
+        agent_event_slot = None
+        if hasattr(engine, "sig_agent_event"):
+            agent_event_slot = lambda event, ek=key: self.sig_agent_event.emit(ek, event)
+            engine.sig_agent_event.connect(agent_event_slot)
+
         has_finished = hasattr(engine, "sig_finished")
         if has_finished:
             engine.sig_finished.connect(finished_slot)
@@ -79,6 +85,7 @@ class MonoGuard(QObject):
             "usage": usage_slot,
             "image": image_slot,
             "finished": finished_slot if has_finished else None,
+            "agent_event": agent_event_slot,
         }
 
     def _disconnect_engine_signals(self, key: str, engine: EnginePort) -> None:
