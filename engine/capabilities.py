@@ -156,6 +156,37 @@ class CapabilityManager:
         token.revoked = True
         return True
 
+    def update_token(
+        self,
+        *,
+        branch_id: str,
+        token_id: str,
+        path_pattern: str | None = None,
+        ttl_seconds: int | None = None,
+        constraints: dict[str, object] | None = None,
+    ) -> CapabilityToken | None:
+        if token_id not in self._branch_tokens.get(branch_id, set()):
+            return None
+        token = self._tokens.get(token_id)
+        if token is None:
+            return None
+        if path_pattern is not None:
+            token.path_pattern = path_pattern
+        if ttl_seconds is not None:
+            token.expires_at = time.time() + max(1, int(ttl_seconds))
+        if constraints is not None:
+            token.constraints = dict(constraints)
+        return token
+
+    def active_tokens(self, branch_id: str) -> list[CapabilityToken]:
+        token_ids = self._branch_tokens.get(branch_id, set())
+        now = time.time()
+        return [
+            self._tokens[token_id]
+            for token_id in token_ids
+            if token_id in self._tokens and self._tokens[token_id].is_active(now)
+        ]
+
 
 def extract_tool_path(tool: str, arguments: dict) -> str | None:
     if not isinstance(arguments, dict):

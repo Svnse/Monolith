@@ -221,6 +221,11 @@ def code_factory(ctx: AddonContext):
             traceback.print_exc()
 
     w.sig_sync_history.connect(_on_sync_history)
+    w.sig_runtime_command.connect(
+        lambda payload: ctx.bridge.submit(
+            ctx.bridge.wrap("code", "runtime_command", engine_key, payload=payload if isinstance(payload, dict) else {})
+        )
+    )
     ctx.guard.sig_status.connect(w.update_status)
     w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     ctx.guard.sig_token.connect(
