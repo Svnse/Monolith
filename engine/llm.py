@@ -349,7 +349,7 @@ class LLMEngine(QObject):
                 }
             )
 
-        set_workspace_root(payload.get("workspace_root") if isinstance(payload, dict) else None)
+        set_workspace_root()
         self._worker_seed_count = len(messages)
         self._worker_agent_mode = request_agent_mode
 

@@ -7,18 +7,21 @@ import re
 import subprocess
 from typing import Callable
 
-WORKSPACE_ROOT: Path | None = None
+from core.config import DEFAULT_WORKSPACE_ROOT
+
+WORKSPACE_ROOT: Path = DEFAULT_WORKSPACE_ROOT
 
 
-def set_workspace_root(path: str | Path | None) -> None:
+def set_workspace_root(_: str | Path | None = None) -> None:
     global WORKSPACE_ROOT
-    WORKSPACE_ROOT = Path(path).expanduser().resolve() if path else None
+    WORKSPACE_ROOT = DEFAULT_WORKSPACE_ROOT
 
 
-def _enforce_workspace_boundary(resolved: Path) -> Path:
-    if WORKSPACE_ROOT is not None and not resolved.is_relative_to(WORKSPACE_ROOT):
-        raise ValueError(f"path outside workspace boundary: {resolved}")
-    return resolved
+def resolve_path(user_path: str) -> Path:
+    target = (WORKSPACE_ROOT / user_path).expanduser().resolve()
+    if not str(target).startswith(str(WORKSPACE_ROOT)):
+        raise ValueError(f"path outside workspace boundary: {target}")
+    return target
 
 
 @dataclass
@@ -37,8 +40,7 @@ class ToolResult:
 
 def _resolve_path(args: dict, default: str = ".") -> Path:
     raw = str(args.get("path", default))
-    resolved = Path(raw).expanduser().resolve()
-    return _enforce_workspace_boundary(resolved)
+    return resolve_path(raw)
 
 
 def read_file(args: dict) -> ToolResult:
@@ -189,7 +191,7 @@ def run_cmd(args: dict) -> ToolResult:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=str(WORKSPACE_ROOT) if WORKSPACE_ROOT is not None else None,
+            cwd=str(WORKSPACE_ROOT),
         )
     except subprocess.TimeoutExpired:
         return ToolResult(False, "", f"command timed out after {timeout}s")

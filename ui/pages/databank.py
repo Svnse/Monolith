@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction
 
 from ui.components.atoms import MonoGroupBox, MonoButton
 import core.style as _s  # dynamic theme bridge
+from core.config import DEFAULT_WORKSPACE_ROOT
 
 class TerminalFileTree(QTreeView):
     def __init__(self, start_path):
@@ -75,7 +76,7 @@ class PageFiles(QWidget):
         
         base_dir = "C:\\Models\\knowledge_base"
         if not os.path.exists("C:\\Models"):
-            base_dir = os.path.join(os.getcwd(), "knowledge_base")
+            base_dir = str(DEFAULT_WORKSPACE_ROOT / "knowledge_base")
             
         self.current_path = base_dir
         

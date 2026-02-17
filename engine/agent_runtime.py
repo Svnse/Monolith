@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from enum import Enum
 from typing import Callable
@@ -9,13 +10,12 @@ from engine.agent_bridge import AgentBridge
 
 MAX_AGENT_STEPS = 25
 MAX_AGENT_TIMEOUT = 120
-MAX_INVALID_RETRIES = 2
+MAX_PARSE_RETRIES = 2
 
-STRUCTURED_OUTPUT_PROMPT = (
-    "Return ONLY valid JSON. "
-    "If you need a tool, return {\"tool\": \"<registered_tool_name>\", \"arguments\": {...}, \"thought\": \"<optional summary>\"}. "
-    "If done, return {\"final\": \"<text>\", \"thought\": \"<optional summary>\"}. "
-    "Any other shape is invalid."
+FLEXIBLE_OUTPUT_PROMPT = (
+    "You may answer normally in freeform text. "
+    "If you want a tool, include exactly one JSON object with shape "
+    '{"tool": "<registered_tool_name>", "arguments": {...}}.'
 )
 
 
@@ -70,12 +70,12 @@ class AgentRuntime:
 
     def run(self, messages: list[dict]) -> tuple[bool, str, list[dict]]:
         loop_messages = list(messages)
-        loop_messages.append({"role": "system", "content": STRUCTURED_OUTPUT_PROMPT})
+        loop_messages.append({"role": "system", "content": FLEXIBLE_OUTPUT_PROMPT})
         self._state = AgentState.IDLE
         self._step_id = 0
         started = time.monotonic()
         steps = 0
-        invalid_retries = 0
+        parse_retries = 0
 
         while True:
             if self._should_stop():
@@ -91,52 +91,50 @@ class AgentRuntime:
             self._emit_event({"event": "LLM_THINKING_START", "step_id": thinking_step_id, "timestamp": time.time()})
             raw = self._llm_call(loop_messages)
             self._emit_event({"event": "LLM_TOKEN", "data": raw, "step_id": thinking_step_id, "timestamp": time.time()})
+            self._emit_event(
+                {
+                    "event": "AGENT_THOUGHT",
+                    "step_id": thinking_step_id,
+                    "thought": raw,
+                    "timestamp": time.time(),
+                }
+            )
 
-            parsed = self._parse_structured(raw)
-            if "error" in parsed:
-                invalid_retries += 1
-                self._emit_event(
-                    {
-                        "event": "PARSE_INVALID",
-                        "step_id": thinking_step_id,
-                        "error": parsed["error"],
-                        "retry": invalid_retries,
-                        "timestamp": time.time(),
-                    }
-                )
-                self._emit_step_end(thinking_step_id, "error", error=parsed["error"])
-                if invalid_retries > MAX_INVALID_RETRIES:
-                    return self._error(parsed["error"], loop_messages)
-                loop_messages.append(
-                    {
-                        "role": "system",
-                        "content": "Previous response invalid. Reply with ONLY one JSON object following the contract.",
-                    }
-                )
-                continue
+            parsed = self._extract_first_json_block(raw)
+            if parsed is None:
+                if self._contains_json_candidate(raw):
+                    parse_retries += 1
+                    error = "invalid tool JSON block: expected {'tool': <str>, 'arguments': <object>}"
+                    self._emit_event(
+                        {
+                            "event": "PARSE_ERROR",
+                            "step_id": thinking_step_id,
+                            "error": error,
+                            "retry": parse_retries,
+                            "timestamp": time.time(),
+                        }
+                    )
+                    self._emit_step_end(thinking_step_id, "error", error=error)
+                    if parse_retries > MAX_PARSE_RETRIES:
+                        return self._error(error, loop_messages)
+                    loop_messages.append(
+                        {
+                            "role": "system",
+                            "content": "Parse error: if you need a tool, include one valid JSON object with tool and arguments keys.",
+                        }
+                    )
+                    continue
 
-            invalid_retries = 0
-            thought = parsed.get("thought")
-            if isinstance(thought, str) and thought.strip():
-                self._emit_event(
-                    {
-                        "event": "AGENT_THOUGHT",
-                        "step_id": thinking_step_id,
-                        "thought": thought.strip(),
-                        "timestamp": time.time(),
-                    }
-                )
-            if "final" in parsed:
-                final_text = parsed["final"]
                 self._state = AgentState.FINAL
                 self._emit_step_end(thinking_step_id, "ok")
-                loop_messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+                loop_messages.append({"role": "assistant", "content": raw})
                 final_step_id = self._next_step_id()
                 self._emit_step_start(final_step_id, "Final Output", "final")
-                self._emit_event({"event": "FINAL_OUTPUT", "data": final_text, "step_id": final_step_id, "timestamp": time.time()})
+                self._emit_event({"event": "FINAL_OUTPUT", "data": raw, "step_id": final_step_id, "timestamp": time.time()})
                 self._emit_step_end(final_step_id, "ok")
-                return True, final_text, loop_messages
+                return True, raw, loop_messages
 
+            parse_retries = 0
             tool = parsed["tool"]
             arguments = parsed["arguments"]
             self._state = AgentState.TOOL_CALL
@@ -150,7 +148,7 @@ class AgentRuntime:
             self._emit_event({"event": "TOOL_RESULT", "step_id": tool_step_id, "tool": tool, "result": result_payload, "timestamp": time.time()})
             self._emit_step_end(tool_step_id, "ok" if result_payload.get("ok", False) else "error")
 
-            loop_messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+            loop_messages.append({"role": "assistant", "content": raw})
             loop_messages.append(
                 {
                     "role": "tool",
@@ -165,33 +163,32 @@ class AgentRuntime:
         self._emit_event({"event": "FINAL_OUTPUT", "data": ""})
         return False, message, loop_messages
 
-    def _parse_structured(self, raw: str) -> dict:
-        try:
-            obj = json.loads(raw)
-        except Exception:
-            return {"error": "invalid structured output: must be valid JSON object"}
+    def _contains_json_candidate(self, text: str) -> bool:
+        return bool(re.search(r"\{.*?\}", text, flags=re.DOTALL))
 
-        if not isinstance(obj, dict):
-            return {"error": "invalid structured output: must be a JSON object"}
-
-        thought = obj.get("thought")
-        if thought is not None and not isinstance(thought, str):
-            return {"error": "invalid structured output: thought must be a string"}
-
-        allowed = {"tool", "arguments", "final", "thought"}
-        keys = set(obj.keys())
-        if not keys.issubset(allowed):
-            return {"error": "invalid structured output: unknown keys"}
-
-        if "final" in obj and isinstance(obj.get("final"), str) and keys.issubset({"final", "thought"}):
-            payload = {"final": obj["final"]}
-            if isinstance(thought, str):
-                payload["thought"] = thought
-            return payload
-        if "tool" in obj and "arguments" in obj and isinstance(obj.get("tool"), str) and isinstance(obj.get("arguments"), dict) and keys.issubset({"tool", "arguments", "thought"}):
-            payload = {"tool": obj["tool"], "arguments": obj["arguments"]}
-            if isinstance(thought, str):
-                payload["thought"] = thought
-            return payload
-
-        return {"error": "invalid structured output: expected {tool,arguments,thought?} or {final,thought?}"}
+    def _extract_first_json_block(self, text: str) -> dict | None:
+        starts = [i for i, ch in enumerate(text) if ch == "{"]
+        for start in starts:
+            depth = 0
+            for idx in range(start, len(text)):
+                ch = text[idx]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        block = text[start : idx + 1]
+                        try:
+                            obj = json.loads(block)
+                        except Exception:
+                            break
+                        if (
+                            isinstance(obj, dict)
+                            and "tool" in obj
+                            and "arguments" in obj
+                            and isinstance(obj["tool"], str)
+                            and isinstance(obj["arguments"], dict)
+                        ):
+                            return {"tool": obj["tool"], "arguments": obj["arguments"]}
+                        break
+        return None
