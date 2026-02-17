@@ -227,7 +227,7 @@ def code_factory(ctx: AddonContext):
         lambda ek, t: w.append_token(t) if ek == engine_key else None
     )
     ctx.guard.sig_trace.connect(
-        lambda ek, m: w.append_trace(m) if ek == engine_key else None
+        lambda ek, m: w.append_trace(f"[{ek}] {m}" if ek != engine_key else m)
     )
     ctx.guard.sig_finished.connect(w.on_guard_finished)
 

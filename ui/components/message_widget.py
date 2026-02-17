@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QTextOption
 
+import core.style as _s
+
 
 class _AutoTextView(QTextEdit):
     """Read-only text display that auto-sizes to its content height."""
@@ -22,7 +24,15 @@ class _AutoTextView(QTextEdit):
         self.setCursor(Qt.IBeamCursor)
         self.document().setDocumentMargin(0)
         self.document().contentsChanged.connect(self._schedule_update)
-        self.setStyleSheet("background: transparent; border: none; padding: 0px; margin: 0px;")
+        self.setStyleSheet("""
+            QTextEdit {
+                background: transparent; border: none; padding: 0px; margin: 0px;
+                selection-background-color: rgba(255, 255, 255, 0.15);
+                selection-color: inherit;
+            }
+        """)
+        font = QFont("Consolas, Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji", 12)
+        self.setFont(font)
         self._last_h = 18
         self.setFixedHeight(18)
         self._pending = False
@@ -42,7 +52,7 @@ class _AutoTextView(QTextEdit):
             vw = self.width() - 4
         doc = self.document()
         doc.setTextWidth(max(vw, 20))
-        h = int(doc.size().height()) + 2
+        h = int(doc.size().height()) + 6
         h = max(h, 18)
         if h != self._last_h:
             self._last_h = h
@@ -57,7 +67,7 @@ class _AutoTextView(QTextEdit):
         doc = self.document().clone()
         doc.setDocumentMargin(0)
         doc.setTextWidth(max(available_width, 20))
-        h = int(doc.size().height()) + 2
+        h = int(doc.size().height()) + 6
         return max(h, 18)
 
 
@@ -79,7 +89,7 @@ class MessageWidget(QFrame):
     sig_height_changed = Signal()  # emitted when internal height changes
 
     _HEADER_H = 16
-    _MARGINS = (12, 4, 6, 4)  # left, top, right, bottom
+    _MARGINS = (8, 4, 8, 4)  # left, top, right, bottom
     _SPACING = 1
 
     def __init__(self, index: int, role: str, text: str, timestamp: str):
@@ -92,6 +102,7 @@ class MessageWidget(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setProperty("class", "MessageWidget")
         self.setProperty("role", role)
+        self.setStyleSheet(f"border-left: 2px solid {_s.BORDER_SUBTLE};")
 
         is_assistant = role == "assistant"
         is_system = role == "system"
