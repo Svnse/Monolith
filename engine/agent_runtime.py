@@ -10,6 +10,8 @@ from engine.agent_bridge import AgentBridge
 from engine.capabilities import CapabilityManager, CapabilityScope
 from engine.checkpointing import get_checkpoint_store
 from engine.execution_tree import ExecutionTree
+from engine.pty_runtime import get_pty_session_manager
+from engine.tools import WORKSPACE_ROOT
 
 MAX_AGENT_STEPS = 25
 MAX_AGENT_TIMEOUT = 120
@@ -80,8 +82,13 @@ class AgentRuntime:
         return node
 
     def fork(self, node_id: str) -> str:
+        parent_branch_id = self._tree.get_node(node_id).branch_id
         branch = self._tree.fork(node_id)
-        self._capability_manager.fork_branch(self._tree.get_node(node_id).branch_id, branch.branch_id)
+        self._capability_manager.fork_branch(parent_branch_id, branch.branch_id)
+        try:
+            get_pty_session_manager(workspace_root=WORKSPACE_ROOT).fork_branch(parent_branch_id, branch.branch_id)
+        except Exception:
+            pass
         return branch.branch_id
 
     def resume(self, leaf_node_id: str) -> None:
@@ -90,6 +97,10 @@ class AgentRuntime:
 
     def prune(self, branch_id: str) -> None:
         self._tree.prune(branch_id)
+        try:
+            get_pty_session_manager(workspace_root=WORKSPACE_ROOT).destroy_branch(branch_id)
+        except Exception:
+            pass
         try:
             get_checkpoint_store().mark_branch_pruned(branch_id)
         except Exception:

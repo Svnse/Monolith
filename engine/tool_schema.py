@@ -17,7 +17,7 @@ TOOL_ARGUMENT_SCHEMAS = {
     },
     "run_cmd": {
         "required": {"command": str},
-        "optional": {"timeout": int},
+        "optional": {"timeout": int, "pty_enabled": bool},
     },
     "apply_patch": {
         "required": {"path": str, "old": str, "new": str},
