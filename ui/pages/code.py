@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QButtonGroup,
@@ -88,6 +88,7 @@ class PageCode(QWidget):
 
         self.message_list = QListWidget()
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self.message_list.viewport().installEventFilter(self)
         self.message_list.setStyleSheet(f"""
             QListWidget {{
                 background: transparent; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
@@ -307,11 +308,45 @@ class PageCode(QWidget):
 
     def _append_message_widget(self, idx):
         msg = self._current_session["messages"][idx]
+        item = QListWidgetItem()
         widget = MessageWidget(idx, msg["role"], msg["text"], msg["timestamp"])
-        item = QListWidgetItem(self.message_list)
-        item.setSizeHint(widget.sizeHint())
+        widget.sig_height_changed.connect(
+            lambda _item=item, _widget=widget: self._sync_widget_item_size(_item, _widget, relayout=True)
+        )
+        self.message_list.addItem(item)
+        self._sync_widget_item_size(item, widget)
         self.message_list.setItemWidget(item, widget)
         return widget
+
+    def _sync_widget_item_size(self, item, widget, relayout=False):
+        if item is None or widget is None:
+            return
+        vw = self.message_list.viewport().width()
+        if vw > 50:
+            widget.setFixedWidth(vw)
+        item.setSizeHint(widget.sizeHint())
+        if relayout:
+            self.message_list.doItemsLayout()
+
+    def _sync_message_list_item_sizes(self, visible_only=False):
+        viewport_rect = self.message_list.viewport().rect()
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            if visible_only:
+                item_rect = self.message_list.visualItemRect(item)
+                if not item_rect.intersects(viewport_rect):
+                    continue
+            widget = self.message_list.itemWidget(item)
+            if isinstance(widget, MessageWidget):
+                self._sync_widget_item_size(item, widget)
+
+    def _widget_for_index(self, idx):
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            widget = self.message_list.itemWidget(item)
+            if isinstance(widget, MessageWidget) and getattr(widget, "_index", None) == idx:
+                return widget
+        return None
 
     def send(self):
         txt = self.input.text().strip()
@@ -366,11 +401,27 @@ class PageCode(QWidget):
             return
         chunk = "".join(self._token_buf)
         self._token_buf.clear()
+        if self._active_widget is None and self._active_assistant_index is not None:
+            self._active_widget = self._widget_for_index(self._active_assistant_index)
         if self._active_widget is None or self._active_assistant_index is None:
             return
+
+        sb = self.message_list.verticalScrollBar()
+        previous_scroll = sb.value()
+        at_bottom = sb.value() >= sb.maximum() - 40
+
         self._current_session["messages"][self._active_assistant_index]["text"] += chunk
         self._active_widget.append_token(chunk)
-        self.message_list.scrollToBottom()
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            widget = self.message_list.itemWidget(item)
+            if widget is self._active_widget:
+                self._sync_widget_item_size(item, widget, relayout=True)
+                break
+        if at_bottom:
+            self.message_list.scrollToBottom()
+        else:
+            sb.setValue(previous_scroll)
 
     def append_token(self, token):
         if not token:
@@ -584,9 +635,19 @@ class PageCode(QWidget):
         }
         self._workspace_root = meta.get("workspace_root", self._workspace_root)
         self._sync_workspace_display()
-        for idx in range(len(self._current_session["messages"])):
-            self._append_message_widget(idx)
+        self._render_session()
         self.sig_sync_history.emit(self._current_session["messages"])
+
+    def _render_session(self):
+        self.message_list.clear()
+        for idx, _msg in enumerate(self._current_session["messages"]):
+            self._append_message_widget(idx)
+        self._sync_message_list_item_sizes()
+
+    def eventFilter(self, source, event):
+        if source is self.message_list.viewport() and event.type() == QEvent.Resize:
+            self._sync_message_list_item_sizes(visible_only=True)
+        return super().eventFilter(source, event)
 
     def _refresh_code_archive_list(self):
         self.code_archive_list.clear()
