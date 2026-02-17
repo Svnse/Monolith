@@ -42,6 +42,7 @@ class _CapabilityApprovalWidget(QFrame):
     def __init__(self, request_id: str, request: dict, parent=None):
         super().__init__(parent)
         self._request_id = request_id
+        self._request = request if isinstance(request, dict) else {}
         self._resolved = False
 
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -65,9 +66,9 @@ class _CapabilityApprovalWidget(QFrame):
         )
         root.addWidget(hdr)
 
-        scope = str(request.get("scope", "READ"))
-        path = str(request.get("path_pattern", "**"))
-        reason = str(request.get("reason", ""))
+        scope = str(self._request.get("scope", "READ"))
+        path = str(self._request.get("path_pattern", "**"))
+        reason = str(self._request.get("reason", ""))
         detail_text = f"scope: {scope}  path: {path}"
         if reason:
             detail_text += f"\nreason: {reason}"
@@ -126,7 +127,8 @@ class _CapabilityApprovalWidget(QFrame):
             "action": "capability_decision",
             "request_id": self._request_id,
             "approved": True,
-            "path_pattern": "**",
+            "path_pattern": self._request.get("path_pattern", "**"),
+            "scope": str(self._request.get("scope", "READ")),
             "reason": "approved from UI",
         })
         self._show_resolved("APPROVED", _s.ACCENT_PRIMARY)
