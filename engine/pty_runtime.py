@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import base64
 import os
-import pty
 import re
 import select
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+PTY_SUPPORTED = sys.platform != "win32"
+
+if PTY_SUPPORTED:
+    import pty
 
 
 @dataclass
@@ -223,11 +229,41 @@ class BranchPtySessionManager:
                 self.destroy_branch(branch_id)
 
 
-_MANAGER: BranchPtySessionManager | None = None
+class NoopPtySessionManager:
+    def __init__(self, workspace_root: Path, idle_timeout_seconds: int = 300):
+        self.workspace_root = workspace_root
+        self.idle_timeout_seconds = max(1, int(idle_timeout_seconds))
+
+    def run(self, branch_id: str, command: str, timeout: int) -> tuple[int | None, str, str | None]:
+        return None, "", "PTY runtime is not available on Windows"
+
+    def fork_branch(self, parent_branch_id: str, child_branch_id: str) -> None:
+        return
+
+    def destroy_branch(self, branch_id: str) -> None:
+        return
+
+    def destroy_all(self) -> None:
+        return
 
 
-def get_pty_session_manager(workspace_root: Path, idle_timeout_seconds: int = 300) -> BranchPtySessionManager:
+_MANAGER: BranchPtySessionManager | NoopPtySessionManager | None = None
+
+
+def get_pty_session_manager(
+    workspace_root: Path,
+    idle_timeout_seconds: int = 300,
+) -> BranchPtySessionManager | NoopPtySessionManager:
     global _MANAGER
     if _MANAGER is None or _MANAGER.workspace_root != workspace_root:
-        _MANAGER = BranchPtySessionManager(workspace_root=workspace_root, idle_timeout_seconds=idle_timeout_seconds)
+        if PTY_SUPPORTED:
+            _MANAGER = BranchPtySessionManager(
+                workspace_root=workspace_root,
+                idle_timeout_seconds=idle_timeout_seconds,
+            )
+        else:
+            _MANAGER = NoopPtySessionManager(
+                workspace_root=workspace_root,
+                idle_timeout_seconds=idle_timeout_seconds,
+            )
     return _MANAGER
