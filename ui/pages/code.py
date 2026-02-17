@@ -519,6 +519,17 @@ class PageCode(QWidget):
         tab_row.addWidget(self.btn_tab_history)
         tab_row.addWidget(self.btn_tab_config)
         tab_row.addStretch()
+
+        self.btn_new_session = MonoButton("NEW")
+        self.btn_new_session.clicked.connect(self._new_session)
+        self.btn_save_code_session = MonoButton("SAVE")
+        self.btn_save_code_session.clicked.connect(self._save_code_archive)
+        self.btn_load_code_session = MonoButton("LOAD")
+        self.btn_load_code_session.clicked.connect(self._load_code_archive)
+        tab_row.addWidget(self.btn_new_session)
+        tab_row.addWidget(self.btn_save_code_session)
+        tab_row.addWidget(self.btn_load_code_session)
+
         controls_layout.addLayout(tab_row)
 
         self.controls_stack = QStackedWidget()
@@ -527,19 +538,6 @@ class PageCode(QWidget):
         history_tab = QWidget()
         history_layout = QVBoxLayout(history_tab)
         history_layout.setSpacing(10)
-
-        history_actions = QHBoxLayout()
-        self.btn_new_session = MonoButton("NEW SESSION")
-        self.btn_new_session.clicked.connect(self._new_session)
-        self.btn_save_code_session = MonoButton("SAVE")
-        self.btn_save_code_session.clicked.connect(self._save_code_archive)
-        self.btn_load_code_session = MonoButton("LOAD")
-        self.btn_load_code_session.clicked.connect(self._load_code_archive)
-        history_actions.addWidget(self.btn_new_session)
-        history_actions.addStretch()
-        history_actions.addWidget(self.btn_save_code_session)
-        history_actions.addWidget(self.btn_load_code_session)
-        history_layout.addLayout(history_actions)
 
         self.code_archive_list = QListWidget()
         self.code_archive_list.setStyleSheet(f"""
