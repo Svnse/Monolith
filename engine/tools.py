@@ -5,10 +5,12 @@ from fnmatch import fnmatch
 from pathlib import Path
 import re
 import subprocess
+import os
 from typing import Callable
 
 from core.config import DEFAULT_WORKSPACE_ROOT
 from engine.checkpointing import get_checkpoint_store
+from engine.pty_runtime import get_pty_session_manager
 
 WORKSPACE_ROOT: Path = DEFAULT_WORKSPACE_ROOT
 
@@ -206,6 +208,19 @@ def run_cmd(args: dict) -> ToolResult:
         timeout = max(1, int(timeout))
     except Exception:
         timeout = 30
+
+    checkpoint_ctx = args.get("_checkpoint") if isinstance(args.get("_checkpoint"), dict) else {}
+    branch_id = str(checkpoint_ctx.get("branch_id", "main"))
+    pty_enabled = bool(args.get("pty_enabled", True)) and os.environ.get("MONOLITH_DISABLE_PTY_RUNTIME", "0") != "1"
+
+    if pty_enabled:
+        idle_timeout = int(os.environ.get("MONOLITH_PTY_IDLE_TIMEOUT", "300") or "300")
+        manager = get_pty_session_manager(workspace_root=WORKSPACE_ROOT, idle_timeout_seconds=idle_timeout)
+        exit_code, stdout, error = manager.run(branch_id=branch_id, command=command, timeout=timeout)
+        if error is not None:
+            return ToolResult(False, "", error)
+        payload = f"exit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n"
+        return ToolResult(exit_code == 0, payload)
 
     try:
         completed = subprocess.run(

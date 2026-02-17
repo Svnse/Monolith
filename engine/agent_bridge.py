@@ -3,8 +3,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from engine.capabilities import CapabilityManager, extract_tool_path
+from engine.pty_runtime import get_pty_session_manager
 from engine.tool_dispatcher import ToolDispatcher
 from engine.tool_schema import TOOL_ARGUMENT_SCHEMAS
+from engine.tools import WORKSPACE_ROOT
 
 
 class AgentBridge:
@@ -15,6 +17,10 @@ class AgentBridge:
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
+        try:
+            get_pty_session_manager(workspace_root=WORKSPACE_ROOT).destroy_all()
+        except Exception:
+            pass
 
     def execute(self, tool: str, arguments: dict, *, branch_id: str = "main") -> dict:
         validation = self._validate(tool, arguments, branch_id=branch_id)
@@ -47,6 +53,8 @@ class AgentBridge:
         allowed_keys = set(required.keys()) | set(optional.keys())
 
         for key in arguments.keys():
+            if key.startswith("_"):
+                continue
             if key not in allowed_keys:
                 return {"ok": False, "tool": tool, "error": f"unexpected argument: {key}"}
 
