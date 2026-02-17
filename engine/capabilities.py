@@ -49,7 +49,8 @@ class CapabilityToken:
         candidate = _normalize_path(path)
         if not candidate:
             candidate = "."
-        return fnmatch(candidate, self.path_pattern)
+        pattern = _normalize_path(self.path_pattern)
+        return fnmatch(candidate, pattern)
 
 
 @dataclass
@@ -76,10 +77,11 @@ class CapabilityManager:
     ) -> CapabilityToken:
         now = time.time()
         expires_at = None if ttl_seconds is None else now + max(1, int(ttl_seconds))
+        normalized_pattern = _normalize_path(path_pattern)
         token = CapabilityToken(
             token_id=f"cap_{uuid.uuid4().hex[:12]}",
             scope=scope,
-            path_pattern=path_pattern,
+            path_pattern=normalized_pattern,
             constraints=constraints or {},
             issued_at=now,
             expires_at=expires_at,
@@ -103,6 +105,9 @@ class CapabilityManager:
                 continue
             if token.scope != required_scope:
                 continue
+            candidate = _normalize_path(path)
+            pattern = _normalize_path(token.path_pattern)
+            print(f"[CAPABILITY_AUTH] tool={tool} branch={branch_id} candidate={candidate} pattern={pattern}")
             if not token.matches_path(path):
                 continue
             if not self._matches_constraints(token, tool, path):
@@ -194,7 +199,7 @@ def extract_tool_path(tool: str, arguments: dict) -> str | None:
     if tool in {"read_file", "write_file", "list_dir", "grep_search", "apply_patch"}:
         raw = arguments.get("path", ".")
         if isinstance(raw, str):
-            return raw
+            return PurePosixPath(raw).as_posix()
     return "."
 
 
