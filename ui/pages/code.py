@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QButtonGroup,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,7 +17,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +43,7 @@ class PageCode(QWidget):
     sig_set_ctx_limit = Signal(int)
     sig_debug = Signal(str)
     sig_finished = Signal()
+    sig_runtime_command = Signal(dict)
 
     def __init__(self, state, ui_bridge):
         super().__init__()
@@ -63,6 +68,11 @@ class PageCode(QWidget):
         self._agent_steps: list[dict] = []
         self._agent_step_index_by_id: dict[int, int] = {}
         self._current_agent_step_id: int | None = None
+        self._runtime_nodes: dict[str, dict] = {}
+        self._runtime_branches: dict[str, dict] = {}
+        self._runtime_actions: dict[str, dict] = {}
+        self._runtime_tokens: dict[str, dict] = {}
+        self._runtime_checkpoints: list[dict] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -200,6 +210,79 @@ class PageCode(QWidget):
         """)
         trace_group.add_widget(self.trace)
 
+        runtime_group = MonoGroupBox("RUNTIME PANELS")
+        runtime_layout = QVBoxLayout()
+        self.runtime_tabs = QTabWidget()
+        self.runtime_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: 1px solid {_s.BORDER_SUBTLE}; background: {_s.BG_INPUT}; }}
+            QTabBar::tab {{ background: {_s.BG_BUTTON}; color: {_s.FG_DIM}; padding: 4px 8px; }}
+            QTabBar::tab:selected {{ color: {_s.ACCENT_PRIMARY}; background: {_s.BG_BUTTON_HOVER}; }}
+        """)
+
+        tree_tab = QWidget(); tree_layout = QVBoxLayout(tree_tab)
+        self.tree_nodes = QTreeWidget(); self.tree_nodes.setHeaderLabels(["Node", "Branch", "Role"])
+        self.tree_nodes.itemSelectionChanged.connect(self._on_tree_node_selected)
+        tree_layout.addWidget(self.tree_nodes)
+        tree_controls = QHBoxLayout()
+        self.btn_fork_node = MonoButton("FORK")
+        self.btn_resume_node = MonoButton("RESUME")
+        self.btn_prune_branch = MonoButton("PRUNE")
+        self.btn_fork_node.clicked.connect(self._fork_selected_node)
+        self.btn_resume_node.clicked.connect(self._resume_selected_node)
+        self.btn_prune_branch.clicked.connect(self._prune_selected_branch)
+        tree_controls.addWidget(self.btn_fork_node); tree_controls.addWidget(self.btn_resume_node); tree_controls.addWidget(self.btn_prune_branch)
+        tree_layout.addLayout(tree_controls)
+
+        action_tab = QWidget(); action_layout = QVBoxLayout(action_tab)
+        self.action_queue = QListWidget(); action_layout.addWidget(self.action_queue)
+        self.action_edit = QTextEdit(); self.action_edit.setFixedHeight(80); action_layout.addWidget(self.action_edit)
+        action_controls = QHBoxLayout()
+        btn_action_edit = MonoButton("APPLY EDIT")
+        btn_action_up = MonoButton("MOVE UP")
+        btn_action_down = MonoButton("MOVE DOWN")
+        btn_action_cancel = MonoButton("CANCEL")
+        btn_action_edit.clicked.connect(self._edit_selected_action)
+        btn_action_up.clicked.connect(lambda: self._reorder_selected_action(-1))
+        btn_action_down.clicked.connect(lambda: self._reorder_selected_action(1))
+        btn_action_cancel.clicked.connect(self._cancel_selected_action)
+        action_controls.addWidget(btn_action_edit); action_controls.addWidget(btn_action_up); action_controls.addWidget(btn_action_down); action_controls.addWidget(btn_action_cancel)
+        action_layout.addLayout(action_controls)
+
+        cap_tab = QWidget(); cap_layout = QVBoxLayout(cap_tab)
+        self.capability_list = QListWidget(); cap_layout.addWidget(self.capability_list)
+        self.capability_pattern = QLineEdit(); self.capability_pattern.setPlaceholderText("path pattern")
+        self.capability_ttl = QLineEdit(); self.capability_ttl.setPlaceholderText("ttl seconds")
+        cap_layout.addWidget(self.capability_pattern); cap_layout.addWidget(self.capability_ttl)
+        cap_controls = QHBoxLayout()
+        btn_cap_narrow = MonoButton("NARROW/EXTEND")
+        btn_cap_revoke = MonoButton("REVOKE")
+        btn_cap_narrow.clicked.connect(self._update_selected_capability)
+        btn_cap_revoke.clicked.connect(self._revoke_selected_capability)
+        cap_controls.addWidget(btn_cap_narrow); cap_controls.addWidget(btn_cap_revoke)
+        cap_layout.addLayout(cap_controls)
+
+        timeline_tab = QWidget(); timeline_layout = QVBoxLayout(timeline_tab)
+        self.timeline_list = QListWidget(); timeline_layout.addWidget(self.timeline_list)
+        self.checkpoint_detail = QTextEdit(); self.checkpoint_detail.setReadOnly(True); self.checkpoint_detail.setFixedHeight(100)
+        timeline_layout.addWidget(self.checkpoint_detail)
+        self.timeline_list.currentRowChanged.connect(self._show_checkpoint_detail)
+
+        compare_tab = QWidget(); compare_layout = QVBoxLayout(compare_tab)
+        compare_row = QHBoxLayout()
+        self.compare_a = QComboBox(); self.compare_b = QComboBox(); btn_compare = MonoButton("COMPARE")
+        btn_compare.clicked.connect(self._compare_branches)
+        compare_row.addWidget(self.compare_a); compare_row.addWidget(self.compare_b); compare_row.addWidget(btn_compare)
+        compare_layout.addLayout(compare_row)
+        self.compare_detail = QTextEdit(); self.compare_detail.setReadOnly(True); compare_layout.addWidget(self.compare_detail)
+
+        self.runtime_tabs.addTab(tree_tab, "Execution Tree")
+        self.runtime_tabs.addTab(action_tab, "Action Queue")
+        self.runtime_tabs.addTab(cap_tab, "Capability Ledger")
+        self.runtime_tabs.addTab(timeline_tab, "Timeline")
+        self.runtime_tabs.addTab(compare_tab, "Branch Compare")
+        runtime_layout.addWidget(self.runtime_tabs)
+        runtime_group.add_layout(runtime_layout)
+
         controls_group = MonoGroupBox("SETTINGS")
         controls_layout = QVBoxLayout()
         controls_layout.setSpacing(10)
@@ -317,10 +400,12 @@ class PageCode(QWidget):
 
         right_stack.addWidget(steps_group)
         right_stack.addWidget(trace_group)
+        right_stack.addWidget(runtime_group)
         right_stack.addWidget(controls_group)
         right_stack.setStretchFactor(0, 1)
         right_stack.setStretchFactor(1, 1)
         right_stack.setStretchFactor(2, 1)
+        right_stack.setStretchFactor(3, 1)
 
         main_split.addWidget(chat_group)
         main_split.addWidget(right_stack)
@@ -439,12 +524,179 @@ class PageCode(QWidget):
             if self.steps_list.currentRow() == row:
                 self._on_step_selected(row)
 
+        if event_name == "NODE_CREATED":
+            node_id = event.get("created_node_id")
+            if isinstance(node_id, str):
+                self._runtime_nodes[node_id] = {
+                    "branch_id": event.get("created_branch_id"),
+                    "parent_node_id": event.get("created_parent_node_id"),
+                    "role": event.get("role"),
+                    "content": event.get("content", ""),
+                }
+        elif event_name in {"BRANCH_FORKED", "BRANCH_RESUMED", "BRANCH_PRUNED"}:
+            branch_id = event.get("branch_id")
+            if isinstance(branch_id, str):
+                self._runtime_branches[branch_id] = dict(event)
+        elif event_name in {"ACTION_QUEUED", "ACTION_UPDATED", "ACTION_STARTED", "ACTION_FINISHED", "ACTION_CANCELLED"}:
+            action = event.get("action")
+            if isinstance(action, dict) and isinstance(action.get("action_id"), str):
+                self._runtime_actions[action["action_id"]] = action
+        elif event_name == "ACTION_REORDERED":
+            order = event.get("order")
+            if isinstance(order, list):
+                self._runtime_actions = {aid: self._runtime_actions[aid] for aid in order if aid in self._runtime_actions}
+        elif event_name == "CHECKPOINT_CREATED":
+            checkpoint = event.get("checkpoint")
+            if isinstance(checkpoint, dict):
+                self._runtime_checkpoints.append(checkpoint)
+                self.timeline_list.addItem(QListWidgetItem(checkpoint.get("checkpoint_id", "checkpoint")))
+        elif event_name in {"CAPABILITY_ISSUED", "CAPABILITY_UPDATED"}:
+            token = event.get("token")
+            if isinstance(token, dict) and isinstance(token.get("token_id"), str):
+                self._runtime_tokens[token["token_id"]] = token
+        elif event_name == "CAPABILITY_REVOKED":
+            token_id = event.get("token_id")
+            if isinstance(token_id, str):
+                self._runtime_tokens.pop(token_id, None)
+        elif event_name == "BRANCH_COMPARED":
+            comparison = event.get("comparison", {})
+            self.compare_detail.setPlainText(json.dumps(comparison, indent=2, ensure_ascii=False))
+        elif event_name == "RUNTIME_COMMAND_RESULT":
+            result = event.get("result", {})
+            if isinstance(result, dict) and isinstance(result.get("comparison"), dict):
+                self.compare_detail.setPlainText(json.dumps(result.get("comparison"), indent=2, ensure_ascii=False))
+
+        self._refresh_runtime_views()
+
         if event_name == "PARSE_ERROR":
             retry = event.get("retry")
             if retry is not None:
                 self.lbl_step_status.setText(f"retry: {retry}/{25}")
         else:
             self.lbl_step_status.setText(f"step: {len(self._agent_steps)}/{25}")
+
+
+    def _on_tree_node_selected(self):
+        items = self.tree_nodes.selectedItems()
+        if not items:
+            return
+        node_id = items[0].data(0, Qt.UserRole)
+        if isinstance(node_id, str):
+            branch_id = self._runtime_nodes.get(node_id, {}).get("branch_id", "")
+            self.lbl_step_status.setText(f"node: {node_id} @ {branch_id}")
+
+    def _fork_selected_node(self):
+        items = self.tree_nodes.selectedItems()
+        if not items:
+            return
+        node_id = items[0].data(0, Qt.UserRole)
+        self.sig_runtime_command.emit({"action": "fork", "node_id": node_id})
+
+    def _resume_selected_node(self):
+        items = self.tree_nodes.selectedItems()
+        if not items:
+            return
+        node_id = items[0].data(0, Qt.UserRole)
+        self.sig_runtime_command.emit({"action": "resume", "node_id": node_id})
+
+    def _prune_selected_branch(self):
+        items = self.tree_nodes.selectedItems()
+        if not items:
+            return
+        node_id = items[0].data(0, Qt.UserRole)
+        branch_id = self._runtime_nodes.get(node_id, {}).get("branch_id")
+        if branch_id:
+            self.sig_runtime_command.emit({"action": "prune", "branch_id": branch_id})
+
+    def _edit_selected_action(self):
+        row = self.action_queue.currentRow()
+        if row < 0:
+            return
+        action_id = self.action_queue.item(row).data(Qt.UserRole)
+        try:
+            payload = json.loads(self.action_edit.toPlainText() or "{}")
+        except Exception:
+            return
+        self.sig_runtime_command.emit({"action": "action_queue", "op": "edit", "action_id": action_id, "arguments": payload.get("arguments", payload), "tool": payload.get("tool")})
+
+    def _reorder_selected_action(self, direction: int):
+        row = self.action_queue.currentRow()
+        if row < 0:
+            return
+        order = [self.action_queue.item(i).data(Qt.UserRole) for i in range(self.action_queue.count())]
+        target = row + direction
+        if target < 0 or target >= len(order):
+            return
+        order[row], order[target] = order[target], order[row]
+        self.sig_runtime_command.emit({"action": "action_queue", "op": "reorder", "order": order})
+
+    def _cancel_selected_action(self):
+        row = self.action_queue.currentRow()
+        if row < 0:
+            return
+        action_id = self.action_queue.item(row).data(Qt.UserRole)
+        self.sig_runtime_command.emit({"action": "action_queue", "op": "cancel", "action_id": action_id})
+
+    def _update_selected_capability(self):
+        row = self.capability_list.currentRow()
+        if row < 0:
+            return
+        token_id = self.capability_list.item(row).data(Qt.UserRole)
+        payload = {"action": "capability_update", "token_id": token_id}
+        if self.capability_pattern.text().strip():
+            payload["path_pattern"] = self.capability_pattern.text().strip()
+        if self.capability_ttl.text().strip().isdigit():
+            payload["ttl_seconds"] = int(self.capability_ttl.text().strip())
+        self.sig_runtime_command.emit(payload)
+
+    def _revoke_selected_capability(self):
+        row = self.capability_list.currentRow()
+        if row < 0:
+            return
+        token_id = self.capability_list.item(row).data(Qt.UserRole)
+        self.sig_runtime_command.emit({"action": "capability_revoke", "token_id": token_id})
+
+    def _show_checkpoint_detail(self, row: int):
+        if row < 0 or row >= len(self._runtime_checkpoints):
+            self.checkpoint_detail.clear()
+            return
+        self.checkpoint_detail.setPlainText(json.dumps(self._runtime_checkpoints[row], indent=2, ensure_ascii=False))
+
+    def _compare_branches(self):
+        a = self.compare_a.currentText()
+        b = self.compare_b.currentText()
+        if not a or not b:
+            return
+        self.sig_runtime_command.emit({"action": "compare", "branch_a": a, "branch_b": b})
+
+    def _refresh_runtime_views(self):
+        self.tree_nodes.clear()
+        for node_id, node in self._runtime_nodes.items():
+            item = QTreeWidgetItem([node_id, node.get("branch_id", ""), node.get("role", "")])
+            item.setData(0, Qt.UserRole, node_id)
+            self.tree_nodes.addTopLevelItem(item)
+
+        self.action_queue.clear()
+        for action_id, action in self._runtime_actions.items():
+            item = QListWidgetItem(f"{action_id} [{action.get('status')}] {action.get('tool')}")
+            item.setData(Qt.UserRole, action_id)
+            self.action_queue.addItem(item)
+
+        self.capability_list.clear()
+        for token_id, token in self._runtime_tokens.items():
+            item = QListWidgetItem(f"{token_id} · {token.get('scope')} · {token.get('path_pattern')}")
+            item.setData(Qt.UserRole, token_id)
+            self.capability_list.addItem(item)
+
+        branch_ids = sorted({node.get("branch_id") for node in self._runtime_nodes.values() if node.get("branch_id")})
+        for combo in (self.compare_a, self.compare_b):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(branch_ids)
+            if current in branch_ids:
+                combo.setCurrentText(current)
+            combo.blockSignals(False)
 
     def _create_session(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -511,6 +763,14 @@ class PageCode(QWidget):
         self._current_agent_step_id = None
         self.steps_list.clear()
         self.step_detail.clear()
+        self._runtime_nodes.clear()
+        self._runtime_branches.clear()
+        self._runtime_actions.clear()
+        self._runtime_tokens.clear()
+        self._runtime_checkpoints.clear()
+        self.timeline_list.clear()
+        self.compare_detail.clear()
+        self._refresh_runtime_views()
         self._set_send_button_state(True)
         self.input.clear()
         user_idx = self._add_message("user", txt)
@@ -639,6 +899,14 @@ class PageCode(QWidget):
         self._current_agent_step_id = None
         self.steps_list.clear()
         self.step_detail.clear()
+        self._runtime_nodes.clear()
+        self._runtime_branches.clear()
+        self._runtime_actions.clear()
+        self._runtime_tokens.clear()
+        self._runtime_checkpoints.clear()
+        self.timeline_list.clear()
+        self.compare_detail.clear()
+        self._refresh_runtime_views()
         self.sig_sync_history.emit([])
 
     def _switch_controls_tab(self, index, checked):

@@ -17,6 +17,7 @@ class ModelLoader(QThread):
         self.n_ctx = n_ctx
         self.n_gpu_layers = n_gpu_layers
 
+
     def run(self):
         try:
             try:
@@ -61,6 +62,7 @@ class GeneratorWorker(QThread):
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.agent_mode = bool(agent_mode)
+        self.runtime = None
 
     def _extract_text(self, response: dict) -> str:
         choices = response.get("choices", [])
@@ -102,6 +104,34 @@ class GeneratorWorker(QThread):
             if isinstance(token, str) and token:
                 self.token.emit(token)
 
+    def runtime_command(self, payload: dict) -> dict:
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            return {"ok": False, "error": "runtime unavailable"}
+        action = payload.get("action") if isinstance(payload, dict) else None
+        try:
+            if action == "fork":
+                return {"ok": True, "branch_id": runtime.fork(str(payload.get("node_id")))}
+            if action == "resume":
+                runtime.resume(str(payload.get("node_id")))
+                return {"ok": True}
+            if action == "prune":
+                runtime.prune(str(payload.get("branch_id")))
+                return {"ok": True}
+            if action == "compare":
+                return {"ok": True, "comparison": runtime.compare(str(payload.get("branch_a")), str(payload.get("branch_b")))}
+            if action == "action_queue":
+                return {"ok": True, "queue": runtime.action_queue_update(payload)}
+            if action == "capability_update":
+                return runtime.update_capability(payload)
+            if action == "capability_revoke":
+                return {"ok": runtime.revoke_capability(str(payload.get("token_id")), payload.get("branch_id"))}
+            if action == "ledger":
+                return {"ok": True, "ledger": runtime.capability_ledger()}
+            return {"ok": False, "error": f"unknown runtime action: {action}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def run(self):
         self.trace.emit(
             f"[WORKER] started: msgs={len(self.messages)}, temp={self.temp}, max_tokens={self.max_tokens}, agent_mode={self.agent_mode}"
@@ -112,12 +142,12 @@ class GeneratorWorker(QThread):
 
         try:
             if self.agent_mode:
-                runtime = AgentRuntime(
+                self.runtime = AgentRuntime(
                     llm_call=self._chat_once_text,
                     emit_event=self._emit_runtime_event,
                     should_stop=self.isInterruptionRequested,
                 )
-                completed, assistant_text, loop_history = runtime.run(self.messages)
+                completed, assistant_text, loop_history = self.runtime.run(self.messages)
             else:
                 assistant_text = self._chat_once_text(self.messages)
                 if assistant_text:
@@ -367,6 +397,13 @@ class LLMEngine(QObject):
         self.worker.event.connect(self.sig_agent_event)
         self.worker.done.connect(self._on_gen_finish)
         self.worker.start()
+
+
+    def runtime_command(self, payload: dict) -> None:
+        result = {"ok": False, "error": "no worker"}
+        if self.worker and self.worker.isRunning():
+            result = self.worker.runtime_command(payload if isinstance(payload, dict) else {})
+        self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": payload, "result": result})
 
     def stop_generation(self):
         if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():

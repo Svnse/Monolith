@@ -59,6 +59,8 @@ class AgentRuntime:
         self._active_branch_id = "main"
         self._active_leaf_node_id: str | None = None
         self._capability_decisions: dict[str, dict] = {}
+        self._pending_actions: list[dict] = []
+        self._action_counter = 0
 
     def _next_step_id(self) -> int:
         self._step_id += 1
@@ -79,6 +81,18 @@ class AgentRuntime:
     def _append_node(self, role: str, content: str, **extra):
         node = self._tree.append_node(self._active_branch_id, role, content, **extra)
         self._active_leaf_node_id = node.node_id
+        self._emit(
+            {
+                "event": "NODE_CREATED",
+                "created_node_id": node.node_id,
+                "created_parent_node_id": node.parent_node_id,
+                "created_branch_id": node.branch_id,
+                "role": role,
+                "content": content,
+                "timestamp": time.time(),
+            },
+            node_id=node.node_id,
+        )
         return node
 
     def fork(self, node_id: str) -> str:
@@ -89,11 +103,30 @@ class AgentRuntime:
             get_pty_session_manager(workspace_root=WORKSPACE_ROOT).fork_branch(parent_branch_id, branch.branch_id)
         except Exception:
             pass
+        self._emit(
+            {
+                "event": "BRANCH_FORKED",
+                "source_node_id": node_id,
+                "parent_branch_id": parent_branch_id,
+                "branch_id": branch.branch_id,
+                "timestamp": time.time(),
+            },
+            node_id=node_id,
+        )
         return branch.branch_id
 
     def resume(self, leaf_node_id: str) -> None:
         self._active_leaf_node_id = leaf_node_id
         self._active_branch_id = self._tree.branch_from_leaf(leaf_node_id)
+        self._emit(
+            {
+                "event": "BRANCH_RESUMED",
+                "branch_id": self._active_branch_id,
+                "node_id": leaf_node_id,
+                "timestamp": time.time(),
+            },
+            node_id=leaf_node_id,
+        )
 
     def prune(self, branch_id: str) -> None:
         self._tree.prune(branch_id)
@@ -105,9 +138,102 @@ class AgentRuntime:
             get_checkpoint_store().mark_branch_pruned(branch_id)
         except Exception:
             pass
+        self._emit(
+            {
+                "event": "BRANCH_PRUNED",
+                "branch_id": branch_id,
+                "timestamp": time.time(),
+            }
+        )
 
     def compare(self, branch_a: str, branch_b: str) -> dict:
-        return self._tree.compare(branch_a, branch_b)
+        result = self._tree.compare(branch_a, branch_b)
+        self._emit({"event": "BRANCH_COMPARED", "comparison": result, "timestamp": time.time()})
+        return result
+
+    def queue_snapshot(self) -> list[dict]:
+        return [dict(item) for item in self._pending_actions]
+
+    def action_queue_update(self, payload: dict) -> list[dict]:
+        action = payload.get("op") if isinstance(payload, dict) else None
+        if action == "cancel":
+            action_id = str(payload.get("action_id", ""))
+            for item in self._pending_actions:
+                if item.get("action_id") == action_id and item.get("status") == "pending":
+                    item["status"] = "cancelled"
+                    self._emit({"event": "ACTION_CANCELLED", "action": dict(item), "timestamp": time.time()})
+                    break
+        elif action == "edit":
+            action_id = str(payload.get("action_id", ""))
+            for item in self._pending_actions:
+                if item.get("action_id") == action_id and item.get("status") == "pending":
+                    if isinstance(payload.get("tool"), str) and payload.get("tool"):
+                        item["tool"] = payload.get("tool")
+                    if isinstance(payload.get("arguments"), dict):
+                        item["arguments"] = payload.get("arguments")
+                    self._emit({"event": "ACTION_UPDATED", "action": dict(item), "timestamp": time.time()})
+                    break
+        elif action == "reorder":
+            order = payload.get("order") if isinstance(payload.get("order"), list) else []
+            index = {item.get("action_id"): item for item in self._pending_actions}
+            reordered: list[dict] = []
+            for action_id in order:
+                if action_id in index:
+                    reordered.append(index.pop(action_id))
+            reordered.extend(index.values())
+            self._pending_actions = reordered
+            self._emit(
+                {
+                    "event": "ACTION_REORDERED",
+                    "order": [item.get("action_id") for item in self._pending_actions],
+                    "timestamp": time.time(),
+                }
+            )
+        return self.queue_snapshot()
+
+    def update_capability(self, payload: dict) -> dict:
+        token_id = str(payload.get("token_id", ""))
+        token = self._capability_manager.update_token(
+            branch_id=str(payload.get("branch_id") or self._active_branch_id),
+            token_id=token_id,
+            path_pattern=payload.get("path_pattern") if isinstance(payload.get("path_pattern"), str) else None,
+            ttl_seconds=payload.get("ttl_seconds") if isinstance(payload.get("ttl_seconds"), int) else None,
+            constraints=payload.get("constraints") if isinstance(payload.get("constraints"), dict) else None,
+        )
+        serialized = self._serialize_token(token) if token is not None else None
+        self._emit(
+            {
+                "event": "CAPABILITY_UPDATED",
+                "token": serialized,
+                "ok": token is not None,
+                "timestamp": time.time(),
+            }
+        )
+        return {"ok": token is not None, "token": serialized}
+
+    def capability_ledger(self) -> dict:
+        return {
+            "branch_id": self._active_branch_id,
+            "tokens": [
+                self._serialize_token(token)
+                for token in self._capability_manager.active_tokens(self._active_branch_id)
+            ],
+        }
+
+    def _serialize_token(self, token) -> dict | None:
+        if token is None:
+            return None
+        return {
+            "token_id": token.token_id,
+            "scope": token.scope.value,
+            "path_pattern": token.path_pattern,
+            "constraints": dict(token.constraints),
+            "issued_at": token.issued_at,
+            "expires_at": token.expires_at,
+            "branch_id": token.branch_id,
+            "revoked": token.revoked,
+            "inherited_from": token.inherited_from,
+        }
 
     def apply_capability_decision(
         self,
@@ -338,10 +464,28 @@ class AgentRuntime:
                 compliance={"protocol_compliant": protocol_compliant, "terminal": False},
             )
             loop_messages = self._tree.build_messages_to_node(assistant_node.node_id)
+
             for action in actions_to_execute:
-                tool = action["tool"]
-                arguments = action["arguments"]
+                self._action_counter += 1
+                queued = {
+                    "action_id": f"a{self._action_counter}",
+                    "tool": action["tool"],
+                    "arguments": dict(action["arguments"]),
+                    "synthetic": action.get("synthetic", False),
+                    "status": "pending",
+                    "step_id": thinking_step_id,
+                }
+                self._pending_actions.append(queued)
+                self._emit({"event": "ACTION_QUEUED", "action": dict(queued), "timestamp": time.time()})
+
+            for queued in list(self._pending_actions):
+                if queued.get("status") != "pending":
+                    continue
+                tool = queued["tool"]
+                arguments = queued["arguments"]
                 tool_step_id = self._next_step_id()
+                queued["status"] = "running"
+                self._emit({"event": "ACTION_STARTED", "action": dict(queued), "timestamp": time.time()})
                 self._checkpoint_before_tool(tool, arguments, loop_messages)
                 self._emit_step_start(tool_step_id, f"Tool: {tool}", "tool", tool=tool, arguments=arguments)
                 self._emit(
@@ -350,13 +494,15 @@ class AgentRuntime:
                         "step_id": tool_step_id,
                         "tool": tool,
                         "arguments": arguments,
-                        "synthetic": action.get("synthetic", False),
+                        "synthetic": queued.get("synthetic", False),
                         "timestamp": time.time(),
                     }
                 )
                 bridge_result = self._bridge.execute(tool, arguments, branch_id=self._active_branch_id)
                 self._state = AgentState.TOOL_RESULT
                 result_payload = bridge_result.get("result", {"ok": False, "content": "", "error": bridge_result.get("error")})
+                queued["status"] = "done" if result_payload.get("ok", False) else "error"
+                queued["result"] = result_payload
                 self._emit(
                     {
                         "event": "TOOL_RESULT",
@@ -366,6 +512,7 @@ class AgentRuntime:
                         "timestamp": time.time(),
                     }
                 )
+                self._emit({"event": "ACTION_FINISHED", "action": dict(queued), "timestamp": time.time()})
                 self._emit_step_end(tool_step_id, "ok" if result_payload.get("ok", False) else "error")
 
                 tool_node = self._append_node(
@@ -434,6 +581,15 @@ class AgentRuntime:
             path_pattern=str(decision.get("path_pattern") or request.get("path_pattern") or "**"),
             ttl_seconds=decision.get("ttl_seconds") if decision.get("ttl_seconds") is not None else request.get("ttl_seconds"),
             constraints=decision.get("constraints") if isinstance(decision.get("constraints"), dict) else request.get("constraints", {}),
+        )
+        self._emit(
+            {
+                "event": "CAPABILITY_ISSUED",
+                "step_id": step_id,
+                "request_id": request_id,
+                "token": self._serialize_token(token),
+                "timestamp": time.time(),
+            }
         )
         self._emit(
             {
@@ -522,13 +678,21 @@ class AgentRuntime:
         message_history: list[dict] | None = None,
     ) -> None:
         try:
-            get_checkpoint_store().create_checkpoint(
+            checkpoint_result = get_checkpoint_store().create_checkpoint(
                 branch_id=self._active_branch_id,
                 node_id=self._active_leaf_node_id,
                 message_history=message_history or [],
                 pending_action=pending_action,
                 capabilities=capabilities or {},
                 pty_state_ref=pty_state_ref,
+            )
+            self._emit(
+                {
+                    "event": "CHECKPOINT_CREATED",
+                    "checkpoint": checkpoint_result,
+                    "pending_action": pending_action,
+                    "timestamp": time.time(),
+                }
             )
         except Exception:
             return

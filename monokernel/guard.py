@@ -18,10 +18,11 @@ ENGINE_DISPATCH = {
     "load": "load_model",
     "unload": "unload_model",
     "generate": "generate",
+    "runtime_command": "runtime_command",
 }
 
 IMMEDIATE_COMMANDS = {"set_history", "set_path", "set_ctx_limit"}
-PAYLOAD_COMMANDS = {"generate"}
+PAYLOAD_COMMANDS = {"generate", "runtime_command"}
 
 
 class MonoGuard(QObject):
