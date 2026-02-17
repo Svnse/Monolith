@@ -11,6 +11,7 @@ class EngineBridge(QObject):
     sig_usage = Signal(int)
     sig_image = Signal(object)
     sig_finished = Signal()
+    sig_agent_event = Signal(dict)
 
     def __init__(self, impl: EnginePort):
         super().__init__()
@@ -21,6 +22,8 @@ class EngineBridge(QObject):
         impl.sig_status.connect(self.sig_status)
         if hasattr(impl, "sig_finished"):
             impl.sig_finished.connect(self.sig_finished)
+        if hasattr(impl, "sig_agent_event"):
+            impl.sig_agent_event.connect(self._on_agent_event)
 
         impl.sig_token.connect(self._on_token)
         impl.sig_trace.connect(self._on_trace)
@@ -47,6 +50,10 @@ class EngineBridge(QObject):
     def _on_image(self, image: object) -> None:
         if self._is_current_generation():
             self.sig_image.emit(image)
+
+    def _on_agent_event(self, event: dict) -> None:
+        if self._is_current_generation():
+            self.sig_agent_event.emit(event)
 
     def set_history(self, payload: dict) -> None:
         if hasattr(self.impl, "set_history"):

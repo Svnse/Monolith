@@ -229,6 +229,9 @@ def code_factory(ctx: AddonContext):
     ctx.guard.sig_trace.connect(
         lambda ek, m: w.append_trace(f"[{ek}] {m}" if ek != engine_key else m)
     )
+    ctx.guard.sig_agent_event.connect(
+        lambda ek, event: w.append_trace(f"[agent-event] {event}") if ek == engine_key else None
+    )
     ctx.guard.sig_finished.connect(w.on_guard_finished)
 
     def _cleanup_terminal(*_args):

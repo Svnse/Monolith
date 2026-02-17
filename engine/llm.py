@@ -1,109 +1,9 @@
-import json
-import re
-import time
-
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
+
+from core.llm_config import AGENT_PROMPT, MASTER_PROMPT, load_config
 from core.state import AppState, SystemStatus
-from core.llm_config import load_config, MASTER_PROMPT, AGENT_PROMPT
-from engine.tools import TOOL_REGISTRY, set_workspace_root
-
-MAX_AGENT_STEPS = 25
-MAX_AGENT_TIMEOUT = 120
-
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read contents of a file",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path to read"},
-                    "offset": {"type": "integer", "description": "Line offset to start from"},
-                    "limit": {"type": "integer", "description": "Max lines to return"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write content to a file, creating directories if needed",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File path to write"},
-                    "content": {"type": "string", "description": "Content to write"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_dir",
-            "description": "List directory contents",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Directory path"},
-                    "pattern": {"type": "string", "description": "Glob filter pattern"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "grep_search",
-            "description": "Search file contents with regex",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string", "description": "Regex pattern to search"},
-                    "path": {"type": "string", "description": "File or directory to search in"},
-                },
-                "required": ["pattern"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_cmd",
-            "description": "Execute a shell command",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "Shell command to run"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds"},
-                },
-                "required": ["command"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "apply_patch",
-            "description": "Find and replace text in a file",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "File to patch"},
-                    "old": {"type": "string", "description": "Text to find"},
-                    "new": {"type": "string", "description": "Replacement text"},
-                },
-                "required": ["path", "old", "new"],
-            },
-        },
-    },
-]
+from engine.agent_runtime import AgentRuntime
+from engine.tools import set_workspace_root
 
 
 class ModelLoader(QThread):
@@ -143,6 +43,7 @@ class GeneratorWorker(QThread):
     trace = Signal(str)
     done = Signal(bool, str, list)
     usage = Signal(int)
+    event = Signal(dict)
 
     def __init__(
         self,
@@ -152,8 +53,6 @@ class GeneratorWorker(QThread):
         top_p,
         max_tokens,
         agent_mode=False,
-        model_path: str | None = None,
-        force_prompt_tool_mode: bool = False,
     ):
         super().__init__()
         self.llm = llm
@@ -162,19 +61,6 @@ class GeneratorWorker(QThread):
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.agent_mode = bool(agent_mode)
-        self.model_path = model_path or ""
-        self.force_prompt_tool_mode = bool(force_prompt_tool_mode)
-
-    def _should_force_prompt_tool_mode(self) -> tuple[bool, str]:
-        if self.force_prompt_tool_mode:
-            return True, "config flag force_prompt_tool_mode=true"
-
-        path = self.model_path.lower()
-        is_qwen_coder = "qwen2.5" in path and "coder" in path
-        is_gguf = path.endswith(".gguf") or ".gguf" in path
-        if is_qwen_coder and is_gguf:
-            return True, "heuristic match: qwen2.5 coder gguf on llama.cpp"
-        return False, ""
 
     def _extract_text(self, response: dict) -> str:
         choices = response.get("choices", [])
@@ -189,51 +75,7 @@ class GeneratorWorker(QThread):
             return "".join(chunks)
         return ""
 
-    def _extract_native_tool_calls(self, response: dict) -> list[dict]:
-        choices = response.get("choices", [])
-        if not choices:
-            return []
-        message = choices[0].get("message", {})
-        tool_calls = message.get("tool_calls")
-        if not isinstance(tool_calls, list):
-            return []
-        parsed = []
-        for call in tool_calls:
-            if not isinstance(call, dict):
-                continue
-            fn = call.get("function", {})
-            name = fn.get("name")
-            raw_args = fn.get("arguments", "{}")
-            if not isinstance(name, str) or not name:
-                continue
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except Exception:
-                args = {}
-            if not isinstance(args, dict):
-                args = {}
-            parsed.append({"name": name, "args": args})
-        return parsed
-
-    def _extract_prompt_tool_calls(self, text: str) -> list[dict]:
-        if not text:
-            return []
-        blocks = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
-        out = []
-        for block in blocks:
-            try:
-                obj = json.loads(block)
-            except Exception:
-                continue
-            if not isinstance(obj, dict):
-                continue
-            name = obj.get("name")
-            args = obj.get("args", {})
-            if isinstance(name, str) and isinstance(args, dict):
-                out.append({"name": name, "args": args})
-        return out
-
-    def _try_chat_completion(self, messages, tools=None):
+    def _try_chat_completion(self, messages):
         kwargs = {
             "messages": messages,
             "temperature": self.temp,
@@ -241,164 +83,56 @@ class GeneratorWorker(QThread):
             "max_tokens": self.max_tokens,
             "stream": False,
         }
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
         return self.llm.create_chat_completion(**kwargs)
 
-    def _chat_once(self, messages):
-        if not self.agent_mode:
-            return self._try_chat_completion(messages), False
+    def _chat_once_text(self, messages: list[dict]) -> str:
+        response = self._try_chat_completion(messages)
+        return self._extract_text(response)
 
-        force_prompt_mode, reason = self._should_force_prompt_tool_mode()
-        if force_prompt_mode:
-            self.trace.emit(
-                f"[WORKER] native tool calling unavailable; using prompt tool blocks (forced: {reason})"
-            )
-            return self._try_chat_completion(messages), False
-
-        try:
-            return self._try_chat_completion(messages, tools=TOOL_SCHEMAS), True
-        except Exception as exc:
-            self.trace.emit(
-                "[WORKER] native tool calling unavailable; using prompt tool blocks "
-                f"(exception: {exc.__class__.__name__}: {exc})"
-            )
-            return self._try_chat_completion(messages), False
-
-    def _execute_tool_call(self, call: dict) -> dict:
-        name = call.get("name")
-        args = call.get("args", {})
-        if not isinstance(name, str) or name not in TOOL_REGISTRY:
-            return {"ok": False, "content": "", "error": f"tool not found: {name}"}
-        if not isinstance(args, dict):
-            return {"ok": False, "content": "", "error": "tool args must be an object"}
-        try:
-            result = TOOL_REGISTRY[name](args)
-            return result.to_message()
-        except Exception as exc:
-            return {"ok": False, "content": "", "error": f"tool execution failed: {exc}"}
+    def _emit_runtime_event(self, payload: dict) -> None:
+        self.event.emit(payload)
+        event_name = payload.get("event")
+        if event_name == "LLM_TOKEN":
+            token = payload.get("data", "")
+            if isinstance(token, str) and token:
+                self.token.emit(token)
+                self.usage.emit(len(token))
+        elif event_name == "FINAL_OUTPUT":
+            token = payload.get("data", "")
+            if isinstance(token, str) and token:
+                self.token.emit(token)
 
     def run(self):
-        self.trace.emit(f"[WORKER] started: msgs={len(self.messages)}, temp={self.temp}, max_tokens={self.max_tokens}, agent_mode={self.agent_mode}")
-        assistant_chunks = []
+        self.trace.emit(
+            f"[WORKER] started: msgs={len(self.messages)}, temp={self.temp}, max_tokens={self.max_tokens}, agent_mode={self.agent_mode}"
+        )
         completed = False
-        total_generated = 0
-        loop_messages = list(self.messages)
-        step_count = 0
-        loop_start = time.monotonic()
-        last_assistant_text = ""
-        last_tool_signature = None
+        assistant_text = ""
+        loop_history = list(self.messages)
 
         try:
-            while True:
-                if self.isInterruptionRequested():
-                    self.trace.emit("→ inference aborted")
-                    break
-
-                if self.agent_mode and (time.monotonic() - loop_start > MAX_AGENT_TIMEOUT):
-                    self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] timeout reached ({MAX_AGENT_TIMEOUT}s), forcing termination")
-                    if last_assistant_text:
-                        assistant_chunks = [last_assistant_text]
-                    completed = True
-                    break
-
-                self.trace.emit("→ inference started")
-                response, native_tool_mode = self._chat_once(loop_messages)
-                assistant_text = self._extract_text(response)
-                last_assistant_text = assistant_text or last_assistant_text
-
-                native_tool_calls = self._extract_native_tool_calls(response)
-                prompt_fallback_attempted = not native_tool_calls
-                self.trace.emit(
-                    "[WORKER] tool parse: "
-                    f"native_tool_mode={native_tool_mode}, "
-                    f"native_tool_calls={len(native_tool_calls)}, "
-                    f"prompt_fallback_attempted={prompt_fallback_attempted}"
+            if self.agent_mode:
+                runtime = AgentRuntime(
+                    llm_call=self._chat_once_text,
+                    emit_event=self._emit_runtime_event,
+                    should_stop=self.isInterruptionRequested,
                 )
-
-                prompt_tool_calls = []
-                if prompt_fallback_attempted:
-                    prompt_tool_calls = self._extract_prompt_tool_calls(assistant_text)
-                    self.trace.emit(
-                        f"[WORKER] prompt-block extraction {'found' if prompt_tool_calls else 'found none'}: count={len(prompt_tool_calls)}"
-                    )
-
-                if native_tool_mode and not native_tool_calls and not prompt_tool_calls:
-                    self.trace.emit("[WORKER] native mode: no tool calls returned")
-
-                tool_calls = native_tool_calls or prompt_tool_calls
-
-                if self.agent_mode and tool_calls:
-                    loop_messages.append({"role": "assistant", "content": assistant_text})
-                    for call in tool_calls:
-                        if self.isInterruptionRequested():
-                            self.trace.emit("→ inference aborted")
-                            break
-                        name = call.get("name", "unknown")
-                        signature = json.dumps({"name": name, "args": call.get("args", {})}, sort_keys=True, ensure_ascii=False)
-                        if last_tool_signature == signature:
-                            self.trace.emit("[AGENT] Duplicate tool call detected — breaking loop to prevent pathological repeat.")
-                            completed = True
-                            break
-                        last_tool_signature = signature
-                        self.token.emit(f"\n[agent] running {name}...\n")
-                        result = self._execute_tool_call(call)
-                        if native_tool_mode:
-                            loop_messages.append(
-                                {
-                                    "role": "tool",
-                                    "content": json.dumps(result, ensure_ascii=False),
-                                    "name": str(name),
-                                }
-                            )
-                        else:
-                            loop_messages.append(
-                                {
-                                    "role": "user",
-                                    "content": f"[Tool Result: {name}]\n{json.dumps(result, ensure_ascii=False)}",
-                                }
-                            )
-                        outcome = "ok" if result.get("ok") else "error"
-                        self.trace.emit(
-                            f"[AGENT {step_count + 1}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] {name} → {outcome}"
-                        )
-                    if self.isInterruptionRequested():
-                        break
-                    if completed:
-                        break
-
-                    step_count += 1
-                    if step_count >= MAX_AGENT_STEPS:
-                        self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] step limit reached, forcing termination")
-                        if last_assistant_text:
-                            assistant_chunks = [last_assistant_text]
-                        completed = True
-                        break
-
-                    if native_tool_mode:
-                        self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] tool loop iteration complete (native tools)")
-                    else:
-                        self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] tool loop iteration complete (prompt blocks)")
-                    continue
-
+                completed, assistant_text, loop_history = runtime.run(self.messages)
+            else:
+                assistant_text = self._chat_once_text(self.messages)
                 if assistant_text:
-                    assistant_chunks.append(assistant_text)
                     self.token.emit(assistant_text)
-                    total_generated += len(assistant_text)
-                    self.usage.emit(total_generated)
-
+                    self.usage.emit(len(assistant_text))
                 completed = not self.isInterruptionRequested()
-                if completed:
-                    self.trace.emit("→ inference complete")
-                break
 
+            if completed:
+                self.trace.emit("→ inference complete")
         except Exception as e:
             self.trace.emit(f"[WORKER] EXCEPTION: {e}")
             self.trace.emit(f"<span style='color:red'>ERROR: {e}</span>")
         finally:
-            self.trace.emit(f"[WORKER] finished: completed={completed}, chunks={len(assistant_chunks)}")
-            self.done.emit(completed, "".join(assistant_chunks), loop_messages)
+            self.trace.emit(f"[WORKER] finished: completed={completed}, text_len={len(assistant_text)}")
+            self.done.emit(completed, assistant_text, loop_history)
 
 
 class LLMEngine(QObject):
@@ -409,6 +143,7 @@ class LLMEngine(QObject):
     sig_usage = Signal(int)
     sig_image = Signal(object)
     sig_model_capabilities = Signal(dict)
+    sig_agent_event = Signal(dict)
 
     def __init__(self, state: AppState):
         super().__init__()
@@ -581,7 +316,6 @@ class LLMEngine(QObject):
         temp = float(config.get("temp", 0.7))
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
-        force_prompt_tool_mode = bool(config.get("force_prompt_tool_mode", False))
 
         self._ephemeral_generation = bool(payload.get("ephemeral", False))
         thinking_mode = bool(payload.get("thinking_mode", False))
@@ -626,12 +360,11 @@ class LLMEngine(QObject):
             top_p,
             max_tokens,
             agent_mode=self._worker_agent_mode,
-            model_path=self.model_path or self.gguf_path,
-            force_prompt_tool_mode=force_prompt_tool_mode,
         )
         self.worker.token.connect(self.sig_token)
         self.worker.trace.connect(self.sig_trace)
         self.worker.usage.connect(self._on_usage_update)
+        self.worker.event.connect(self.sig_agent_event)
         self.worker.done.connect(self._on_gen_finish)
         self.worker.start()
 
