@@ -171,7 +171,9 @@ class MonoGuard(QObject):
         if task.command == "runtime_command":
             payload = task.payload if isinstance(task.payload, dict) else {}
             command = str(payload.get("action") or "")
-            handler(command, payload)
+            clean_payload = dict(payload)
+            clean_payload.pop("action", None)
+            handler(command, clean_payload)
         elif task.command in PAYLOAD_COMMANDS:
             handler(task.payload)
         else:

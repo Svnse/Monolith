@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -101,29 +100,8 @@ class AgentRuntime:
         except Exception:
             return
 
-    def _workspace_snapshot(self) -> dict:
-        manifest: dict[str, str] = {}
-        files: dict[str, str] = {}
-        root = Path(WORKSPACE_ROOT)
-        if not root.exists():
-            return {"workspace_manifest": manifest, "workspace_files": files}
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root).as_posix()
-            if rel.startswith(".monolith/checkpoints/"):
-                continue
-            try:
-                content = path.read_text(encoding="utf-8")
-            except Exception:
-                content = ""
-            manifest[rel] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
-            files[rel] = content
-        return {"workspace_manifest": manifest, "workspace_files": files}
-
     def _append_node(self, role: str, content: str, **extra):
         payload = dict(extra)
-        payload.setdefault("metadata", self._workspace_snapshot())
         node = self._tree.append_node(self._active_branch_id, role, content, **payload)
         self._active_leaf_node_id = node.node_id
         self._emit(
