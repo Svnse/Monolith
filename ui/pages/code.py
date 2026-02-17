@@ -8,9 +8,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QButtonGroup,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -34,6 +31,11 @@ from ui.components.atoms import MonoButton, MonoGroupBox, MonoSlider
 from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, load_config, save_config
 from core.paths import CONFIG_DIR
+from ui.widgets import (
+    CapabilityInterruptCard,
+    ClarificationInterruptCard,
+    DestructiveInterruptCard,
+)
 
 
 class PageCode(QWidget):
@@ -77,6 +79,8 @@ class PageCode(QWidget):
         self._runtime_tokens: dict[str, dict] = {}
         self._runtime_checkpoints: list[dict] = []
         self._pending_capability_requests: dict[str, dict] = {}
+        self._active_interrupt_cards: dict[str, QWidget] = {}
+        self._interrupt_sequence = 0
         self._protocol_compliance_rate: float = 1.0
 
         layout = QVBoxLayout(self)
@@ -104,6 +108,14 @@ class PageCode(QWidget):
         workspace_row.addWidget(self.workspace_input)
         workspace_row.addWidget(btn_workspace)
         chat_layout.addLayout(workspace_row)
+
+        self.interrupts_widget = QWidget()
+        self.interrupts_layout = QVBoxLayout(self.interrupts_widget)
+        self.interrupts_layout.setContentsMargins(0, 0, 0, 0)
+        self.interrupts_layout.setSpacing(8)
+        self.interrupts_layout.addStretch()
+        self.interrupts_widget.setVisible(False)
+        chat_layout.addWidget(self.interrupts_widget)
 
         self.message_list = QListWidget()
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -580,10 +592,24 @@ class PageCode(QWidget):
             self.compare_detail.setPlainText(json.dumps(comparison, indent=2, ensure_ascii=False))
         elif event_name == "CAPABILITY_REQUEST":
             req = event.get("request") if isinstance(event.get("request"), dict) else {}
-            req_id = str(event.get("request_id") or req.get("request_id") or "")
-            if req_id:
-                self._pending_capability_requests[req_id] = req
-                self._show_capability_approval(req_id, req)
+            req_id = self._resolve_interrupt_request_id(event, req)
+            self._pending_capability_requests[req_id] = req
+            card = CapabilityInterruptCard(request_id=req_id, request=req, parent=self)
+            card.sig_decision.connect(self._on_capability_interrupt_decision)
+            self._insert_interrupt_card(req_id, card)
+        elif event_name == "CLARIFICATION_REQUEST":
+            req_id = self._resolve_interrupt_request_id(event)
+            question = str(event.get("question") or event.get("prompt") or "")
+            options = event.get("options") if isinstance(event.get("options"), list) else None
+            card = ClarificationInterruptCard(request_id=req_id, question=question, options=options, parent=self)
+            card.sig_decision.connect(self._on_clarification_interrupt_decision)
+            self._insert_interrupt_card(req_id, card)
+        elif event_name == "DESTRUCTIVE_CONFIRMATION":
+            req_id = self._resolve_interrupt_request_id(event)
+            warning = str(event.get("warning") or event.get("message") or "This will overwrite files. Proceed?")
+            card = DestructiveInterruptCard(request_id=req_id, warning=warning, parent=self)
+            card.sig_decision.connect(self._on_destructive_interrupt_decision)
+            self._insert_interrupt_card(req_id, card)
         elif event_name == "PROTOCOL_COMPLIANCE_RATE":
             rate = float(event.get("rate", 1.0) or 1.0)
             self._protocol_compliance_rate = rate
@@ -740,51 +766,62 @@ class PageCode(QWidget):
                 combo.setCurrentText(current)
             combo.blockSignals(False)
 
-    def _show_capability_approval(self, request_id: str, request: dict):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Capability Request")
-        layout = QVBoxLayout(dialog)
-        form = QFormLayout()
-        lbl_scope = QLabel(str(request.get("scope", "read")))
-        lbl_pattern = QLabel(str(request.get("path_pattern", "**")))
-        lbl_reason = QLabel(str(request.get("reason", "")))
-        scope_override = QLineEdit()
-        scope_override.setPlaceholderText("Optional override scope")
-        form.addRow("Scope:", lbl_scope)
-        form.addRow("Path:", lbl_pattern)
-        form.addRow("Reason:", lbl_reason)
-        form.addRow("Override Scope:", scope_override)
-        layout.addLayout(form)
-        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No)
-        buttons.button(QDialogButtonBox.Yes).setText("Approve")
-        buttons.button(QDialogButtonBox.No).setText("Deny")
-        layout.addWidget(buttons)
+    def _resolve_interrupt_request_id(self, event: dict, request: dict | None = None) -> str:
+        request = request if isinstance(request, dict) else {}
+        req_id = str(event.get("request_id") or request.get("request_id") or "").strip()
+        if req_id:
+            return req_id
+        self._interrupt_sequence += 1
+        return f"interrupt_{self._interrupt_sequence}"
 
-        def _approve():
-            payload = {
+    def _insert_interrupt_card(self, request_id: str, card: QWidget):
+        if request_id in self._active_interrupt_cards:
+            self._remove_interrupt_card(request_id)
+        self._active_interrupt_cards[request_id] = card
+        self.interrupts_layout.insertWidget(0, card)
+        self.interrupts_widget.setVisible(True)
+
+    def _remove_interrupt_card(self, request_id: str):
+        card = self._active_interrupt_cards.pop(request_id, None)
+        if card is None:
+            return
+        self.interrupts_layout.removeWidget(card)
+        card.deleteLater()
+        if not self._active_interrupt_cards:
+            self.interrupts_widget.setVisible(False)
+
+    def _on_capability_interrupt_decision(self, payload: dict):
+        request_id = str(payload.get("request_id") or "")
+        self.sig_runtime_command.emit(
+            {
                 "action": "capability_decision",
                 "request_id": request_id,
-                "approved": True,
-                "path_pattern": str(request.get("path_pattern", "**")),
-                "reason": "approved from UI",
+                "approved": bool(payload.get("approved")),
             }
-            if scope_override.text().strip():
-                payload["scope"] = scope_override.text().strip()
-            self.sig_runtime_command.emit(payload)
-            dialog.accept()
+        )
+        self._remove_interrupt_card(request_id)
 
-        def _deny():
-            self.sig_runtime_command.emit({
-                "action": "capability_decision",
+    def _on_clarification_interrupt_decision(self, payload: dict):
+        request_id = str(payload.get("request_id") or "")
+        self.sig_runtime_command.emit(
+            {
+                "action": "clarification_response",
                 "request_id": request_id,
-                "approved": False,
-                "reason": "denied from UI",
-            })
-            dialog.reject()
+                "choice": str(payload.get("choice") or ""),
+            }
+        )
+        self._remove_interrupt_card(request_id)
 
-        buttons.accepted.connect(_approve)
-        buttons.rejected.connect(_deny)
-        dialog.show()
+    def _on_destructive_interrupt_decision(self, payload: dict):
+        request_id = str(payload.get("request_id") or "")
+        self.sig_runtime_command.emit(
+            {
+                "action": "destructive_decision",
+                "request_id": request_id,
+                "approved": bool(payload.get("approved")),
+            }
+        )
+        self._remove_interrupt_card(request_id)
 
     def _diff_nodes(self):
         node_a = self.diff_node_a.currentText()
