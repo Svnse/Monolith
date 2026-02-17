@@ -8,8 +8,28 @@ import subprocess
 from typing import Callable
 
 from core.config import DEFAULT_WORKSPACE_ROOT
+from engine.checkpointing import get_checkpoint_store
 
 WORKSPACE_ROOT: Path = DEFAULT_WORKSPACE_ROOT
+
+
+def _capture_checkpoint(args: dict, action_type: str, action_payload: dict) -> None:
+    context = args.get("_checkpoint") if isinstance(args.get("_checkpoint"), dict) else {}
+    message_history = context.get("message_history")
+    if not isinstance(message_history, list):
+        message_history = []
+
+    try:
+        get_checkpoint_store().create_checkpoint(
+            branch_id=str(context.get("branch_id", "main")),
+            node_id=context.get("node_id"),
+            message_history=message_history,
+            pending_action={"type": action_type, **action_payload},
+            capabilities=context.get("capabilities") if isinstance(context.get("capabilities"), dict) else {},
+            pty_state_ref=context.get("pty_state_ref"),
+        )
+    except Exception:
+        return
 
 
 def set_workspace_root(_: str | Path | None = None) -> None:
@@ -87,6 +107,7 @@ def write_file(args: dict) -> ToolResult:
     content = args.get("content")
     if not isinstance(content, str):
         return ToolResult(False, "", "content must be a string")
+    _capture_checkpoint(args, "write_file", {"path": args.get("path")})
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -178,6 +199,8 @@ def run_cmd(args: dict) -> ToolResult:
     if any(pat in lowered for pat in _BLOCKED_CMD_PATTERNS):
         return ToolResult(False, "", "Command blocked (matches dangerous pattern). Try a safer alternative.")
 
+    _capture_checkpoint(args, "run_cmd", {"command": command})
+
     timeout = args.get("timeout", 30)
     try:
         timeout = max(1, int(timeout))
@@ -224,6 +247,8 @@ def apply_patch(args: dict) -> ToolResult:
         return ToolResult(False, "", "old and new must be strings")
     if not path.exists() or not path.is_file():
         return ToolResult(False, "", f"file not found: {path}")
+
+    _capture_checkpoint(args, "apply_patch", {"path": args.get("path")})
 
     try:
         current = path.read_text(encoding="utf-8")
