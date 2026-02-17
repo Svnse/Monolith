@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QDragEnterEvent
+from PySide6.QtGui import QDragEnterEvent, QPainter, QPen, QColor, QFont
 
 
 def import_vbox(widget, l=15, t=25, r=15, b=15):
@@ -15,19 +15,87 @@ def import_vbox(widget, l=15, t=25, r=15, b=15):
 
 
 class MonoGroupBox(QFrame):
+    """Group box with a bordered rectangle and title embedded in the top border."""
+
     def __init__(self, title, parent=None):
         super().__init__(parent)
+        self._title = title
         self.setObjectName("mono_group_box")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.layout_main = import_vbox(self)
-        self.lbl_title = QLabel(title, self)
-        self.lbl_title.setObjectName("group_title")
-        self.lbl_title.move(10, -3)
+        self.layout_main.setContentsMargins(10, 22, 10, 8)
 
     def add_widget(self, widget):
         self.layout_main.addWidget(widget)
 
     def add_layout(self, layout):
         self.layout_main.addLayout(layout)
+
+    def _resolve_parent_bg(self):
+        """Walk up the parent chain to find the first opaque background color."""
+        import core.style as s
+        widget = self.parentWidget()
+        while widget is not None:
+            role = widget.backgroundRole()
+            palette_color = widget.palette().color(role)
+            if palette_color.alpha() == 255 and palette_color != QColor(0, 0, 0, 255):
+                return palette_color
+            widget = widget.parentWidget()
+        return QColor(s.BG_MAIN)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        import core.style as s
+        from PySide6.QtCore import QRectF
+
+        border_color = QColor(s.BORDER_LIGHT)
+        bg_color = QColor(s.BG_MAIN)
+        radius = 4
+        y_top = 10  # the top border line sits at y=10
+
+        # Draw the full rounded rectangle border (all 4 sides)
+        pen = QPen(border_color)
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        box_rect = QRectF(0.5, y_top, self.width() - 1, self.height() - y_top - 0.5)
+        painter.drawRoundedRect(box_rect, radius, radius)
+
+        if not self._title:
+            painter.end()
+            return
+
+        # Title font
+        font = QFont("Consolas", 8)
+        font.setBold(True)
+        font.setLetterSpacing(QFont.AbsoluteSpacing, 1.5)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        title_text = self._title
+        text_width = fm.horizontalAdvance(title_text)
+        text_height = fm.height()
+
+        # Position title on the top border
+        x_start = 12
+        pad_h = 6  # horizontal padding around title text
+
+        # Fill a background rect behind the title to "cut" the border
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(bg_color)
+        painter.drawRect(QRectF(x_start, y_top - text_height / 2,
+                                text_width + pad_h * 2, text_height))
+
+        # Draw the title text
+        text_color = QColor(s.FG_DIM)
+        painter.setPen(text_color)
+        text_y = y_top + text_height // 2 - fm.descent()
+        painter.drawText(int(x_start + pad_h), int(text_y), title_text)
+
+        painter.end()
 
 
 class MonoButton(QPushButton):
@@ -84,7 +152,8 @@ class SidebarButton(QPushButton):
         super().__init__()
         self.setCheckable(checkable)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(60, 45)
+        self.setFixedHeight(30)
+        self.setMinimumWidth(60)
         if checkable:
             self.setAutoExclusive(False)
         self.setAcceptDrops(True)
@@ -104,12 +173,28 @@ class SidebarButton(QPushButton):
         self.update_style(checked)
 
     def update_style(self, checked):
+        import core.style as s
         self.setProperty("checked", checked)
         self.style().unpolish(self)
         self.style().polish(self)
-        self.lbl_text.setProperty("active", "true" if checked else "false")
-        self.lbl_text.style().unpolish(self.lbl_text)
-        self.lbl_text.style().polish(self.lbl_text)
+        color = s.ACCENT_PRIMARY if checked else s.FG_DIM
+        self.lbl_text.setStyleSheet(
+            f"color: {color}; font-size: 9px; font-weight: bold;"
+            f" letter-spacing: 1px; background: transparent;"
+        )
+
+    def enterEvent(self, event):
+        if not self.isChecked():
+            import core.style as s
+            self.lbl_text.setStyleSheet(
+                f"color: {s.FG_TEXT}; font-size: 9px; font-weight: bold;"
+                f" letter-spacing: 1px; background: transparent;"
+            )
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update_style(self.isChecked())
+        super().leaveEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():

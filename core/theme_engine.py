@@ -44,13 +44,27 @@ QPushButton.MonoButton {{ font-size: 10px; letter-spacing: 1px; }}
 QPushButton.MonoButton[accent="true"] {{ color: {t.fg_accent}; }}
 QPushButton.MonoButton[accent="true"]:hover {{ color: {t.accent_primary}; }}
 QPushButton.MonoTriangleButton {{ color: {t.fg_text}; }}
-QPushButton.SidebarButton {{ background: transparent; border: none; border-left: 2px solid transparent; padding: 4px; color: {t.fg_dim}; }}
-QPushButton.SidebarButton:checked {{ border-left-color: {t.accent_primary}; color: {t.accent_primary}; }}
+QPushButton.SidebarButton {{
+    background: transparent;
+    border: none;
+    border-left: 2px solid transparent;
+    border-right: 1px solid transparent;
+    margin-right: -1px;
+    padding: 6px 4px;
+    color: {t.fg_dim};
+}}
+QPushButton.SidebarButton:hover {{
+    background: rgba(255, 255, 255, 0.03);
+}}
+QPushButton.SidebarButton:checked {{
+    border-left: 2px solid {t.accent_primary};
+    background: {t.bg_main};
+    border-right: 1px solid {t.bg_main};
+}}
 QPushButton#collapsible_toggle {{ background: transparent; border: none; text-align: left; font-weight: bold; font-size: 10px; color: {t.fg_dim}; padding: 4px; }}
 QPushButton#collapsible_toggle:checked {{ color: {t.accent_primary}; }}
 QWidget#collapsible_content {{ background: {t.bg_input}; }}
-QFrame#mono_group_box {{ background: {t.bg_group}; border: 1px solid {t.border_dark}; border-radius: 3px; margin-top: 8px; padding: 14px 8px 8px 8px; }}
-QFrame#mono_group_box > QLabel#group_title {{ font-weight: bold; font-size: 10px; color: {t.fg_text}; background: {t.bg_group}; padding: 0 4px; }}
+QFrame#mono_group_box {{ background: transparent; border: none; margin: 0px; padding: 0px; }}
 QLabel#slider_label {{ color: {t.fg_dim}; font-size: 9px; }}
 QLabel#slider_value {{ color: {t.fg_text}; font-size: 10px; font-weight: bold; }}
 QSlider::groove:horizontal {{ border: none; height: 4px; background: {t.bg_button_hover}; border-radius: 2px; }}
@@ -76,16 +90,32 @@ QFrame.PaletteResultRow[selected="true"] {{ border-left: 2px solid {t.accent_pri
 QWidget#drop_overlay {{ background: rgba({bg_main_rgb}, 0.88); }}
 QFrame#drop_panel {{ background: transparent; border: 2px dashed {t.accent_primary}; border-radius: 8px; }}
 
-QFrame.MessageWidget {{ border-left: 2px solid {t.border_subtle}; background: transparent; padding: 8px; }}
+QFrame.MessageWidget {{ border-left: 2px solid {t.border_subtle}; background: transparent; padding: 0px; }}
 QFrame.MessageWidget[role="assistant"] {{ border-left-color: {t.accent_primary}; }}
-QLabel#msg_role {{ font-size: 9px; font-weight: bold; color: {t.fg_dim}; }}
-QLabel#msg_time {{ font-size: 8px; color: {t.fg_info}; }}
-QLabel#msg_content {{ color: {t.fg_text}; font-size: 11px; }}
+QLabel#msg_role {{ font-size: 9px; font-weight: bold; color: {t.fg_dim}; background: transparent; }}
+QLabel#msg_time {{ font-size: 8px; color: {t.fg_info}; background: transparent; }}
+QLabel#msg_content {{ color: {t.fg_text}; font-size: 11px; background: transparent; padding: 0px; }}
+QTextEdit#msg_content {{ color: {t.fg_text}; font-size: 11px; background: transparent; border: none; padding: 0px; margin: 0px; }}
+QPushButton.msg_icon_action {{
+    background: transparent;
+    border: 1px solid {t.border_subtle};
+    color: {t.fg_dim};
+    font-size: 12px;
+    border-radius: 3px;
+    padding: 0px;
+}}
+QPushButton.msg_icon_action:hover {{
+    color: {t.accent_primary};
+    border-color: {t.accent_primary};
+    background: {t.bg_button_hover};
+}}
 
 QWidget#MainFrame {{ border: 1px solid {t.border_light}; }}
-QFrame#sidebar {{ background: {t.bg_sidebar}; border-right: 1px solid {t.border_subtle}; }}
+QFrame#sidebar {{ background: {t.bg_sidebar}; border-right: 1px solid {t.border_subtle}; padding: 0px; }}
 QFrame#top_bar {{ background: {t.bg_sidebar}; border-bottom: 1px solid {t.border_subtle}; }}
 QLabel#lbl_monolith {{ color: {t.accent_primary_dark}; font-size: 14px; font-weight: bold; letter-spacing: 3px; background: transparent; }}
+QLabel#lbl_chat_title {{ color: {t.fg_text}; font-size: 10px; font-weight: bold; letter-spacing: 1px; background: transparent; }}
+QLabel#lbl_chat_time {{ color: {t.fg_dim}; font-size: 9px; font-weight: bold; letter-spacing: 1px; background: transparent; }}
 QLabel#lbl_status {{ color: {t.fg_placeholder}; font-size: 8px; font-weight: bold; background: transparent; }}
 QLabel#lbl_status[state="error"] {{ color: {t.fg_error}; }}
 QLabel#lbl_status[state="loading"] {{ color: {t.fg_warn}; }}
