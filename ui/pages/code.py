@@ -431,7 +431,7 @@ class PageCode(QWidget):
             elif event_name == "TOOL_CALL_START":
                 step["tool"] = event.get("tool")
                 step["arguments"] = event.get("arguments")
-            elif event_name == "PARSE_INVALID":
+            elif event_name == "PARSE_ERROR":
                 step["error"] = event.get("error")
                 step["status"] = "error"
 
@@ -439,7 +439,7 @@ class PageCode(QWidget):
             if self.steps_list.currentRow() == row:
                 self._on_step_selected(row)
 
-        if event_name == "PARSE_INVALID":
+        if event_name == "PARSE_ERROR":
             retry = event.get("retry")
             if retry is not None:
                 self.lbl_step_status.setText(f"retry: {retry}/{25}")
