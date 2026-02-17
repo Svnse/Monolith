@@ -47,7 +47,7 @@ def read_file(args: dict) -> ToolResult:
     except ValueError as exc:
         return ToolResult(False, "", str(exc))
     if not path.exists() or not path.is_file():
-        return ToolResult(False, "", f"file not found: {path}")
+        return ToolResult(False, "", f"File not found: {path}. Use list_dir to check available files.")
 
     offset = int(args.get("offset", 0) or 0)
     limit = args.get("limit")
@@ -67,6 +67,13 @@ def read_file(args: dict) -> ToolResult:
             lines = lines[offset:]
     else:
         lines = lines[offset:]
+        total_lines = len(lines)
+        if total_lines > 200:
+            lines = lines[:200]
+            lines.append(
+                f"[OUTPUT TRUNCATED — showing first 200 of {total_lines} lines. Use offset/limit for specific ranges, or grep_search to find what you need.]"
+            )
+
     return ToolResult(True, "\n".join(lines))
 
 
@@ -81,6 +88,8 @@ def write_file(args: dict) -> ToolResult:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+    except PermissionError:
+        return ToolResult(False, "", f"Permission denied: {path}. Check workspace boundary.")
     except Exception as exc:
         return ToolResult(False, "", f"failed to write file: {exc}")
     return ToolResult(True, f"wrote {len(content)} chars to {path}")
@@ -137,7 +146,16 @@ def grep_search(args: dict) -> ToolResult:
         except Exception:
             continue
 
-    return ToolResult(True, "\n".join(matches) if matches else "")
+    if not matches:
+        return ToolResult(True, f"No matches found for pattern '{pattern}' in {root}. Try a broader pattern or different path.")
+
+    total_matches = len(matches)
+    if total_matches > 50:
+        matches = matches[:50]
+        matches.append(
+            f"[RESULTS TRUNCATED — showing first 50 of {total_matches} matches. Narrow your pattern.]"
+        )
+    return ToolResult(True, "\n".join(matches))
 
 
 _BLOCKED_CMD_PATTERNS = (
@@ -156,7 +174,7 @@ def run_cmd(args: dict) -> ToolResult:
 
     lowered = command.lower()
     if any(pat in lowered for pat in _BLOCKED_CMD_PATTERNS):
-        return ToolResult(False, "", "command blocked by safety policy")
+        return ToolResult(False, "", "Command blocked (matches dangerous pattern). Try a safer alternative.")
 
     timeout = args.get("timeout", 30)
     try:
@@ -178,9 +196,16 @@ def run_cmd(args: dict) -> ToolResult:
     except Exception as exc:
         return ToolResult(False, "", f"command failed to start: {exc}")
 
+    stdout_lines = completed.stdout.splitlines()
+    if len(stdout_lines) > 150:
+        truncated_stdout = "\n".join(stdout_lines[:150])
+        truncated_stdout += f"\n[OUTPUT TRUNCATED — showing first 150 of {len(stdout_lines)} lines.]"
+    else:
+        truncated_stdout = completed.stdout
+
     payload = (
         f"exit_code: {completed.returncode}\n"
-        f"stdout:\n{completed.stdout}\n"
+        f"stdout:\n{truncated_stdout}\n"
         f"stderr:\n{completed.stderr}"
     )
     return ToolResult(completed.returncode == 0, payload)
@@ -204,7 +229,7 @@ def apply_patch(args: dict) -> ToolResult:
         return ToolResult(False, "", f"failed to read file: {exc}")
 
     if old not in current:
-        return ToolResult(False, "", "old text not found in file")
+        return ToolResult(False, "", f"Text to replace not found in {path}. Use read_file to verify current contents.")
 
     updated = current.replace(old, new, 1)
     try:

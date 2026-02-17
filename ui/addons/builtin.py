@@ -9,6 +9,7 @@ from ui.modules.sd import SDModule
 from ui.modules.audiogen import AudioGenModule
 from ui.modules.manager import PageAddons
 from ui.pages.chat import PageChat
+from ui.pages.code import PageCode
 from ui.pages.databank import PageFiles
 from ui.pages.hub import PageHub
 from core.operators import OperatorManager
@@ -56,9 +57,7 @@ def terminal_factory(ctx: AddonContext):
             model = w.config.get("gguf_path", "unknown")
             model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
             think_label = "think=ON" if thinking_mode else "think=OFF"
-            agent_mode = bool(w.config.get("agent_mode", False))
-            agent_label = "agent=ON" if agent_mode else "agent=OFF"
-            _trace(f"[LLM:{short_id}] generating — {think_label}, {agent_label}, model={model_name}, prompt={repr(prompt[:50])}")
+            _trace(f"[LLM:{short_id}] generating — {think_label}, model={model_name}, prompt={repr(prompt[:50])}")
             task = ctx.bridge.wrap(
                 "terminal",
                 "generate",
@@ -67,7 +66,6 @@ def terminal_factory(ctx: AddonContext):
                     "prompt": prompt,
                     "config": w.config,
                     "thinking_mode": thinking_mode,
-                    "agent_mode": bool(w.config.get("agent_mode", False)),
                     "ctx_limit": int(w.config.get("ctx_limit", 8192)),
                 },
             )
@@ -115,6 +113,116 @@ def terminal_factory(ctx: AddonContext):
     ctx.guard.sig_status.connect(w.update_status)
     w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     # incoming (guard -> addon)
+    ctx.guard.sig_token.connect(
+        lambda ek, t: w.append_token(t) if ek == engine_key else None
+    )
+    ctx.guard.sig_trace.connect(
+        lambda ek, m: w.append_trace(m) if ek == engine_key else None
+    )
+    ctx.guard.sig_finished.connect(w.on_guard_finished)
+
+    def _cleanup_terminal(*_args):
+        ctx.guard.unregister_engine(engine_key)
+        engine_bridge.shutdown()
+
+    w.destroyed.connect(_cleanup_terminal)
+    return w
+
+
+def code_factory(ctx: AddonContext):
+    instance_id = str(uuid.uuid4())
+    engine_key = f"llm_{instance_id}"
+
+    short_id = instance_id[:8]
+
+    def _trace(msg):
+        ctx.guard.sig_trace.emit("system", msg)
+
+    llm_engine = LLMEngine(ctx.state)
+    engine_bridge = EngineBridge(llm_engine)
+    ctx.guard.register_engine(engine_key, engine_bridge)
+
+    w = PageCode(ctx.state, ctx.ui_bridge)
+    w._mod_id = instance_id
+    w._engine_key = engine_key
+    ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
+
+    w.sig_set_model_path.connect(
+        lambda path: ctx.bridge.submit(
+            ctx.bridge.wrap("code", "set_path", engine_key, payload={"path": path})
+        )
+    )
+    w.sig_set_ctx_limit.connect(
+        lambda limit: None if limit is None else ctx.bridge.submit(
+            ctx.bridge.wrap("code", "set_ctx_limit", engine_key, payload={"ctx_limit": int(limit)})
+        )
+    )
+
+    if w.config.get("gguf_path"):
+        w.sig_set_model_path.emit(str(w.config.get("gguf_path")))
+    w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
+
+    def _on_generate(prompt):
+        try:
+            model = w.config.get("gguf_path", "unknown")
+            model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
+            _trace(f"[LLM:{short_id}] generating — agent=ON, model={model_name}, prompt={repr(prompt[:50])}")
+            task = ctx.bridge.wrap(
+                "code",
+                "generate",
+                engine_key,
+                payload={
+                    "prompt": prompt,
+                    "config": w.config,
+                    "agent_mode": True,
+                    "workspace_root": w._workspace_root,
+                    "ctx_limit": int(w.config.get("ctx_limit", 8192)),
+                },
+            )
+            ctx.bridge.submit(task)
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in generate: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_generate.connect(_on_generate)
+    w.sig_load.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("code", "load", engine_key))
+    )
+    w.sig_unload.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("code", "unload", engine_key))
+    )
+
+    def _on_stop():
+        try:
+            _trace(f"[LLM:{short_id}] stopped — generation halted")
+            ctx.bridge.stop(engine_key)
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in stop: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_stop.connect(_on_stop)
+
+    def _on_sync_history(history):
+        try:
+            _trace(f"[LLM:{short_id}] syncing history — {len(history)} messages")
+            ctx.bridge.submit(
+                ctx.bridge.wrap(
+                    "code",
+                    "set_history",
+                    engine_key,
+                    payload={"history": history},
+                )
+            )
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in sync_history: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_sync_history.connect(_on_sync_history)
+    ctx.guard.sig_status.connect(w.update_status)
+    w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     ctx.guard.sig_token.connect(
         lambda ek, t: w.append_token(t) if ek == engine_key else None
     )
@@ -297,6 +405,20 @@ def build_builtin_registry() -> AddonRegistry:
                 verbs=("generate_text", "chat", "load_model", "unload_model", "stream_tokens"),
                 appetites=("text_prompt", "gguf_file", "conversation_history", "system_prompt"),
                 emissions=("text_stream", "token_usage", "model_status"),
+            ),
+        )
+    )
+    registry.register(
+        AddonSpec(
+            id="code",
+            kind="module",
+            title="CODE",
+            icon="▶",
+            factory=code_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("generate_text", "agent", "tool_use", "code"),
+                appetites=("text_prompt", "gguf_file", "workspace_path"),
+                emissions=("text_stream", "tool_result", "code_output"),
             ),
         )
     )
