@@ -73,7 +73,7 @@ class PageChat(QWidget):
         main_split.setChildrenCollapsible(False)
         layout.addWidget(main_split)
 
-        # === MODEL LOADER (lives in CONTROL tab) ===
+        # === MODEL LOADER (lives in MODEL tab) ===
         grp_load = MonoGroupBox("MODEL LOADER")
         self.path_display = QLineEdit()
         self.path_display.setReadOnly(True)
@@ -92,7 +92,7 @@ class PageChat(QWidget):
         grp_load.add_layout(row_file)
         grp_load.add_widget(self.btn_load)
 
-        # === AI CONFIGURATION (lives in SETTINGS tab) ===
+        # === AI CONFIGURATION (lives in CONFIG tab) ===
         self.s_temp = MonoSlider("Temperature", 0.1, 2.0, self.config.get("temp", 0.7))
         self.s_temp.valueChanged.connect(lambda v: self._update_config_value("temp", v))
         self.s_top = MonoSlider("Top-P", 0.1, 1.0, self.config.get("top_p", 0.9))
@@ -120,8 +120,8 @@ class PageChat(QWidget):
         save_row.addWidget(btn_reset_config)
         save_row.addWidget(self.btn_save_config)
 
-        # === OPERATIONS GROUP with 3 tabs ===
-        operations_group = MonoGroupBox("OPERATIONS")
+        # === TOOLS GROUP with 2 tabs ===
+        operations_group = MonoGroupBox("TOOLS")
         operations_layout = QVBoxLayout()
         operations_layout.setSpacing(10)
 
@@ -136,23 +136,18 @@ class PageChat(QWidget):
             }}
             QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
         """
-        self.btn_tab_control = MonoButton("CONTROL")
+        self.btn_tab_control = MonoButton("MODEL")
         self.btn_tab_control.setCheckable(True)
         self.btn_tab_control.setChecked(True)
         self.btn_tab_control.setStyleSheet(tab_style)
-        self.btn_tab_archive = MonoButton("ARCHIVE")
-        self.btn_tab_archive.setCheckable(True)
-        self.btn_tab_archive.setStyleSheet(tab_style)
-        self.btn_tab_settings = MonoButton("SETTINGS")
+        self.btn_tab_settings = MonoButton("CONFIG")
         self.btn_tab_settings.setCheckable(True)
         self.btn_tab_settings.setStyleSheet(tab_style)
         tab_group = QButtonGroup(self)
         tab_group.setExclusive(True)
         tab_group.addButton(self.btn_tab_control)
-        tab_group.addButton(self.btn_tab_archive)
         tab_group.addButton(self.btn_tab_settings)
         tab_row.addWidget(self.btn_tab_control)
-        tab_row.addWidget(self.btn_tab_archive)
         tab_row.addWidget(self.btn_tab_settings)
         tab_row.addStretch()
         operations_layout.addLayout(tab_row)
@@ -160,15 +155,15 @@ class PageChat(QWidget):
         self.ops_stack = QStackedWidget()
         operations_layout.addWidget(self.ops_stack)
 
-        # --- CONTROL tab: Model Loader (top-level, no collapsible) ---
+        # --- MODEL tab: Model Loader (top-level, no collapsible) ---
         control_tab = QWidget()
         control_layout = QVBoxLayout(control_tab)
         control_layout.setSpacing(12)
         control_layout.addWidget(grp_load)
 
-        # --- Collapsible OPTIONS panel ---
+        # --- Collapsible ADVANCED panel ---
         self._options_expanded = False
-        self.btn_options_toggle = QPushButton("▸ OPTIONS")
+        self.btn_options_toggle = QPushButton("▸ ADVANCED")
         self.btn_options_toggle.setCursor(Qt.PointingHandCursor)
         self.btn_options_toggle.setStyleSheet(f"""
             QPushButton {{
@@ -241,10 +236,10 @@ class PageChat(QWidget):
         control_layout.addWidget(self.options_panel)
         control_layout.addStretch()
 
-        # --- ARCHIVE tab ---
-        archive_tab = QWidget()
-        archive_layout = QVBoxLayout(archive_tab)
-        archive_layout.setSpacing(10)
+        # --- HISTORY group ---
+        history_group = MonoGroupBox("HISTORY")
+        history_layout = QVBoxLayout()
+        history_layout.setSpacing(10)
 
         archive_controls = QHBoxLayout()
         self.btn_save_chat = MonoButton("SAVE")
@@ -260,7 +255,7 @@ class PageChat(QWidget):
         archive_controls.addWidget(self.btn_delete_chat)
         archive_controls.addWidget(self.btn_clear_chat)
         archive_controls.addStretch()
-        archive_layout.addLayout(archive_controls)
+        history_layout.addLayout(archive_controls)
 
         self.archive_list = QListWidget()
         self.archive_list.setStyleSheet(f"""
@@ -272,7 +267,8 @@ class PageChat(QWidget):
             QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
             {_s.SCROLLBAR_STYLE}
         """)
-        archive_layout.addWidget(self.archive_list)
+        history_layout.addWidget(self.archive_list)
+        history_group.add_layout(history_layout)
 
         self.lbl_behavior = QLabel("BEHAVIOR TAGS")
         self.lbl_behavior.setStyleSheet(
@@ -285,7 +281,7 @@ class PageChat(QWidget):
         )
         self.behavior_tags.setMaximumHeight(36)
 
-        # --- SETTINGS tab: AI Configuration + Save/Reset ---
+        # --- CONFIG tab: AI Configuration + Save/Reset ---
         settings_tab = QWidget()
         settings_layout = QVBoxLayout(settings_tab)
         settings_layout.setSpacing(10)
@@ -299,11 +295,9 @@ class PageChat(QWidget):
         settings_layout.addStretch()
 
         self.ops_stack.addWidget(control_tab)
-        self.ops_stack.addWidget(archive_tab)
         self.ops_stack.addWidget(settings_tab)
         self.btn_tab_control.toggled.connect(lambda checked: self._switch_ops_tab(0, checked))
-        self.btn_tab_archive.toggled.connect(lambda checked: self._switch_ops_tab(1, checked))
-        self.btn_tab_settings.toggled.connect(lambda checked: self._switch_ops_tab(2, checked))
+        self.btn_tab_settings.toggled.connect(lambda checked: self._switch_ops_tab(1, checked))
 
         operations_group.add_layout(operations_layout)
 
@@ -331,7 +325,7 @@ class PageChat(QWidget):
         # --- Input row ---
         input_row = QHBoxLayout()
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Enter command...")
+        self.input.setPlaceholderText("Type a message...")
         self.input.returnPressed.connect(self.handle_send_click)
         self.input.textChanged.connect(self._on_input_changed)
         self.input.setStyleSheet(f"""
@@ -370,32 +364,10 @@ class PageChat(QWidget):
         right_stack = QSplitter(Qt.Vertical)
         right_stack.setChildrenCollapsible(False)
 
-        trace_group = MonoGroupBox("REASONING TRACE")
         self.trace = QTextEdit()
-        self.trace.setReadOnly(True)
-        self.trace.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {_s.BG_INPUT};
-                color: {_s.FG_TEXT};
-                border: 1px solid {_s.BORDER_SUBTLE};
-                font-family: 'Consolas', monospace;
-                font-size: 10px;
-            }}
-            QTextEdit::viewport {{
-                background-color: {_s.BG_INPUT};
-            }}
-            {_s.SCROLLBAR_STYLE}
-        """)
-        self.lbl_config_update = QLabel("")
-        self.lbl_config_update.setStyleSheet(f"color: {_s.ACCENT_PRIMARY}; font-size: 10px; font-weight: bold;")
-        self.lbl_config_update.hide()
-        self._config_update_fade = QTimer(self)
-        self._config_update_fade.setSingleShot(True)
-        self._config_update_fade.timeout.connect(self.lbl_config_update.hide)
-        trace_group.add_widget(self.trace)
-        trace_group.add_widget(self.lbl_config_update)
+        self.trace.hide()
 
-        right_stack.addWidget(trace_group)
+        right_stack.addWidget(history_group)
         right_stack.addWidget(operations_group)
         right_stack.setStretchFactor(0, 1)
         right_stack.setStretchFactor(1, 1)
@@ -405,6 +377,7 @@ class PageChat(QWidget):
         main_split.addWidget(right_stack)
         main_split.setStretchFactor(0, 3)
         main_split.setStretchFactor(1, 2)
+        main_split.widget(1).setMaximumWidth(500)
         self._active_assistant_started = False
         self._active_assistant_token_count = 0
 
@@ -654,11 +627,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
 
     def _save_config(self):
         save_config(self.config)
-        self._last_config_update = QDateTime.currentDateTime()
-        stamp = self._last_config_update.toString("HH:mm:ss")
-        self.lbl_config_update.setText(f"USER (UPDATED): {stamp}")
-        self.lbl_config_update.show()
-        self._config_update_fade.start(2500)
         self._set_config_dirty(False)
 
     def _update_config_value(self, key, value):
@@ -731,7 +699,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                 "CTX",
             )
             self._trace_html(
-                f"Increase context limit in SETTINGS to use full {model_ctx_length:,} capacity",
+                f"Increase context limit in CONFIG to use full {model_ctx_length:,} capacity",
                 "CTX",
             )
         else:
@@ -762,7 +730,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
     def _toggle_options_panel(self):
         self._options_expanded = not self._options_expanded
         self.options_panel.setVisible(self._options_expanded)
-        self.btn_options_toggle.setText("▾ OPTIONS" if self._options_expanded else "▸ OPTIONS")
+        self.btn_options_toggle.setText("▾ ADVANCED" if self._options_expanded else "▸ ADVANCED")
 
     def _update_thinking_button_style(self):
         # Update the think toggle buttons in the OPTIONS panel

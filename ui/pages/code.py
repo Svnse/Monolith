@@ -1,15 +1,20 @@
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -20,6 +25,7 @@ import core.style as _s
 from ui.components.atoms import MonoButton, MonoGroupBox, MonoSlider
 from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, load_config, save_config
+from core.paths import CONFIG_DIR
 
 
 class PageCode(QWidget):
@@ -45,6 +51,8 @@ class PageCode(QWidget):
         self._flush_timer.setInterval(25)
         self._flush_timer.timeout.connect(self._flush_tokens)
         self._current_session = self._create_session()
+        self._archive_dir = self._get_archive_dir()
+        self._archive_dir.mkdir(parents=True, exist_ok=True)
         self._active_widget: MessageWidget | None = None
         self._active_assistant_index = None
         self._is_running = False
@@ -134,13 +142,6 @@ class PageCode(QWidget):
         status_row.addWidget(self.lbl_step_status)
         chat_layout.addLayout(status_row)
 
-        session_row = QHBoxLayout()
-        btn_new_session = MonoButton("NEW SESSION")
-        btn_new_session.clicked.connect(self._new_session)
-        session_row.addStretch()
-        session_row.addWidget(btn_new_session)
-        chat_layout.addLayout(session_row)
-
         chat_group.add_layout(chat_layout)
 
         right_stack = QSplitter(Qt.Vertical)
@@ -166,6 +167,69 @@ class PageCode(QWidget):
         controls_layout = QVBoxLayout()
         controls_layout.setSpacing(10)
 
+        tab_row = QHBoxLayout()
+        tab_style = f"""
+            QPushButton {{
+                background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM};
+                padding: 6px 12px; font-size: 10px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:checked {{
+                background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY};
+            }}
+            QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
+        """
+        self.btn_tab_history = MonoButton("HISTORY")
+        self.btn_tab_history.setCheckable(True)
+        self.btn_tab_history.setChecked(True)
+        self.btn_tab_history.setStyleSheet(tab_style)
+        self.btn_tab_config = MonoButton("CONFIG")
+        self.btn_tab_config.setCheckable(True)
+        self.btn_tab_config.setStyleSheet(tab_style)
+        tab_group = QButtonGroup(self)
+        tab_group.setExclusive(True)
+        tab_group.addButton(self.btn_tab_history)
+        tab_group.addButton(self.btn_tab_config)
+        tab_row.addWidget(self.btn_tab_history)
+        tab_row.addWidget(self.btn_tab_config)
+        tab_row.addStretch()
+        controls_layout.addLayout(tab_row)
+
+        self.controls_stack = QStackedWidget()
+        controls_layout.addWidget(self.controls_stack)
+
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+        history_layout.setSpacing(10)
+
+        history_actions = QHBoxLayout()
+        self.btn_new_session = MonoButton("NEW SESSION")
+        self.btn_new_session.clicked.connect(self._new_session)
+        self.btn_save_code_session = MonoButton("SAVE")
+        self.btn_save_code_session.clicked.connect(self._save_code_archive)
+        self.btn_load_code_session = MonoButton("LOAD")
+        self.btn_load_code_session.clicked.connect(self._load_code_archive)
+        history_actions.addWidget(self.btn_new_session)
+        history_actions.addStretch()
+        history_actions.addWidget(self.btn_save_code_session)
+        history_actions.addWidget(self.btn_load_code_session)
+        history_layout.addLayout(history_actions)
+
+        self.code_archive_list = QListWidget()
+        self.code_archive_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {_s.BG_INPUT}; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
+                font-family: 'Consolas', monospace; font-size: 10px;
+            }}
+            QListWidget::item {{ padding: 6px; }}
+            QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
+        """)
+        history_layout.addWidget(self.code_archive_list)
+
+        config_tab = QWidget()
+        config_layout = QVBoxLayout(config_tab)
+        config_layout.setSpacing(10)
+
         self.path_display = QLineEdit()
         self.path_display.setReadOnly(True)
         self.path_display.setPlaceholderText("No GGUF Selected")
@@ -180,8 +244,8 @@ class PageCode(QWidget):
         model_row.addWidget(btn_browse)
         self.btn_load = MonoButton("LOAD MODEL")
         self.btn_load.clicked.connect(self.toggle_load)
-        controls_layout.addLayout(model_row)
-        controls_layout.addWidget(self.btn_load)
+        config_layout.addLayout(model_row)
+        config_layout.addWidget(self.btn_load)
 
         self.s_temp = MonoSlider("Temperature", 0.1, 2.0, self.config.get("temp", 0.7))
         self.s_temp.valueChanged.connect(lambda v: self._update_config_value("temp", v))
@@ -191,10 +255,10 @@ class PageCode(QWidget):
         self.s_tok.valueChanged.connect(lambda v: self._update_config_value("max_tokens", int(v)))
         self.s_ctx = MonoSlider("Context Limit", 1024, 16384, self.config.get("ctx_limit", 8192), is_int=True)
         self.s_ctx.valueChanged.connect(self._on_ctx_limit_changed)
-        controls_layout.addWidget(self.s_temp)
-        controls_layout.addWidget(self.s_top)
-        controls_layout.addWidget(self.s_tok)
-        controls_layout.addWidget(self.s_ctx)
+        config_layout.addWidget(self.s_temp)
+        config_layout.addWidget(self.s_top)
+        config_layout.addWidget(self.s_tok)
+        config_layout.addWidget(self.s_ctx)
 
         save_row = QHBoxLayout()
         self.btn_save_config = MonoButton("SAVE SETTINGS")
@@ -204,8 +268,14 @@ class PageCode(QWidget):
         save_row.addWidget(btn_reset)
         save_row.addStretch()
         save_row.addWidget(self.btn_save_config)
-        controls_layout.addLayout(save_row)
-        controls_layout.addStretch()
+        config_layout.addLayout(save_row)
+        config_layout.addStretch()
+
+        self.controls_stack.addWidget(history_tab)
+        self.controls_stack.addWidget(config_tab)
+        self.btn_tab_history.toggled.connect(lambda checked: self._switch_controls_tab(0, checked))
+        self.btn_tab_config.toggled.connect(lambda checked: self._switch_controls_tab(1, checked))
+
         controls_group.add_layout(controls_layout)
 
         right_stack.addWidget(trace_group)
@@ -220,6 +290,7 @@ class PageCode(QWidget):
 
         self._sync_path_display()
         self._sync_workspace_display()
+        self._refresh_code_archive_list()
         self._update_load_button_text()
         self._set_send_button_state(False)
         self._sync_send_availability()
@@ -359,6 +430,10 @@ class PageCode(QWidget):
         self.lbl_step_status.setText("step: 0/25")
         self.sig_sync_history.emit([])
 
+    def _switch_controls_tab(self, index, checked):
+        if checked:
+            self.controls_stack.setCurrentIndex(index)
+
     def apply_operator(self, operator_data: dict):
         if not isinstance(operator_data, dict):
             return
@@ -403,7 +478,23 @@ class PageCode(QWidget):
             self.sig_load.emit()
 
     def _update_load_button_text(self):
-        self.btn_load.setText("UNLOAD MODEL" if self._is_model_loaded else "LOAD MODEL")
+        status = self._last_status
+        if status == SystemStatus.LOADING:
+            self.btn_load.setText("LOADING...")
+            self.btn_load.setEnabled(False)
+        elif status == SystemStatus.UNLOADING:
+            self.btn_load.setText("UNLOADING...")
+            self.btn_load.setEnabled(False)
+        elif status == SystemStatus.ERROR:
+            self.btn_load.setText("ERROR — RETRY")
+            self.btn_load.setEnabled(True)
+            self._is_model_loaded = False
+        elif self._is_model_loaded:
+            self.btn_load.setText("UNLOAD MODEL")
+            self.btn_load.setEnabled(True)
+        else:
+            self.btn_load.setText("LOAD MODEL")
+            self.btn_load.setEnabled(True)
 
     def _sync_path_display(self):
         model_path = self.config.get("gguf_path")
@@ -436,3 +527,79 @@ class PageCode(QWidget):
         self.s_tok.slider.setValue(int(DEFAULT_CONFIG["max_tokens"]))
         self.s_ctx.slider.setValue(int(DEFAULT_CONFIG["ctx_limit"]))
         self.sig_set_ctx_limit.emit(int(DEFAULT_CONFIG["ctx_limit"]))
+
+    def _get_archive_dir(self):
+        return CONFIG_DIR / "code_archive"
+
+    def _save_code_archive(self):
+        now = datetime.now(timezone.utc).isoformat()
+        messages = self._current_session.get("messages", [])
+        if not messages:
+            return
+        title = self._workspace_root or "code_session"
+        slug = Path(title).name if title else "code_session"
+        slug = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in slug).strip("_") or "code_session"
+        archive_path = self._current_session.get("archive_path")
+        if archive_path:
+            archive_path = Path(archive_path)
+        else:
+            stamp = now.replace(":", "-").replace(".", "-")
+            archive_path = self._archive_dir / f"{slug}_{stamp}.json"
+
+        payload = {
+            "meta": {
+                "created_at": self._current_session.get("created_at", now),
+                "updated_at": now,
+                "workspace_root": self._workspace_root,
+                "message_count": len(messages),
+            },
+            "messages": messages,
+        }
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with archive_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        self._current_session["archive_path"] = str(archive_path)
+        self._refresh_code_archive_list()
+
+    def _load_code_archive(self):
+        item = self.code_archive_list.currentItem()
+        if not item:
+            return
+        archive_path = Path(item.data(Qt.UserRole))
+        try:
+            with archive_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except Exception:
+            QMessageBox.warning(self, "Load Failed", "Could not read code archive file.")
+            return
+
+        meta = payload.get("meta", {})
+        messages = payload.get("messages", [])
+        self.message_list.clear()
+        self._current_session = {
+            "id": meta.get("created_at", datetime.now(timezone.utc).isoformat()),
+            "messages": messages,
+            "created_at": meta.get("created_at"),
+            "archive_path": str(archive_path),
+        }
+        self._workspace_root = meta.get("workspace_root", self._workspace_root)
+        self._sync_workspace_display()
+        for idx in range(len(self._current_session["messages"])):
+            self._append_message_widget(idx)
+        self.sig_sync_history.emit(self._current_session["messages"])
+
+    def _refresh_code_archive_list(self):
+        self.code_archive_list.clear()
+        for path in sorted(self._archive_dir.glob("*.json")):
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except Exception:
+                continue
+            meta = payload.get("meta", {})
+            workspace = meta.get("workspace_root") or "(no workspace)"
+            updated = meta.get("updated_at", "")
+            item = QListWidgetItem(f"{Path(workspace).name} · {updated[:19]}")
+            item.setToolTip(str(path))
+            item.setData(Qt.UserRole, str(path))
+            self.code_archive_list.addItem(item)
