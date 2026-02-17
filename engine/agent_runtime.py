@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Callable
 
 from engine.agent_bridge import AgentBridge
+from engine.checkpointing import get_checkpoint_store
 from engine.execution_tree import ExecutionTree
 
 MAX_AGENT_STEPS = 25
@@ -82,6 +83,10 @@ class AgentRuntime:
 
     def prune(self, branch_id: str) -> None:
         self._tree.prune(branch_id)
+        try:
+            get_checkpoint_store().mark_branch_pruned(branch_id)
+        except Exception:
+            pass
 
     def compare(self, branch_a: str, branch_b: str) -> dict:
         return self._tree.compare(branch_a, branch_b)
@@ -161,6 +166,11 @@ class AgentRuntime:
                     continue
 
                 if block["type"] == "CAPABILITY_REQUEST":
+                    self._create_checkpoint(
+                        pending_action={"type": "capability_escalation", "request": block["content"]},
+                        capabilities={"requested": block["content"]},
+                        message_history=loop_messages,
+                    )
                     self._emit(
                         {
                             "event": "CAPABILITY_REQUEST",
@@ -285,6 +295,7 @@ class AgentRuntime:
                 tool = action["tool"]
                 arguments = action["arguments"]
                 tool_step_id = self._next_step_id()
+                self._checkpoint_before_tool(tool, arguments, loop_messages)
                 self._emit_step_start(tool_step_id, f"Tool: {tool}", "tool", tool=tool, arguments=arguments)
                 self._emit(
                     {
@@ -324,6 +335,50 @@ class AgentRuntime:
         self._state = AgentState.ERROR
         self._emit({"event": "FINAL_OUTPUT", "data": ""})
         return False, message, loop_messages
+
+    def _checkpoint_before_tool(self, tool: str, arguments: dict, message_history: list[dict]) -> None:
+        if tool not in {"write_file", "apply_patch", "run_cmd", "delete_file", "move_file"}:
+            return
+        capabilities = arguments.get("capabilities") if isinstance(arguments, dict) else {}
+        pty_state_ref = arguments.get("pty_state_ref") if isinstance(arguments, dict) else None
+        self._create_checkpoint(
+            pending_action={"type": "tool_call", "tool": tool, "arguments": arguments},
+            capabilities=capabilities if isinstance(capabilities, dict) else {},
+            pty_state_ref=pty_state_ref if isinstance(pty_state_ref, str) else None,
+            message_history=message_history,
+        )
+
+        if isinstance(arguments, dict):
+            checkpoint_context = {
+                "branch_id": self._active_branch_id,
+                "node_id": self._active_leaf_node_id,
+                "message_history": message_history,
+            }
+            if isinstance(capabilities, dict):
+                checkpoint_context["capabilities"] = capabilities
+            if isinstance(pty_state_ref, str):
+                checkpoint_context["pty_state_ref"] = pty_state_ref
+            arguments["_checkpoint"] = checkpoint_context
+
+    def _create_checkpoint(
+        self,
+        *,
+        pending_action: dict,
+        capabilities: dict[str, str] | dict[str, object] | None = None,
+        pty_state_ref: str | None = None,
+        message_history: list[dict] | None = None,
+    ) -> None:
+        try:
+            get_checkpoint_store().create_checkpoint(
+                branch_id=self._active_branch_id,
+                node_id=self._active_leaf_node_id,
+                message_history=message_history or [],
+                pending_action=pending_action,
+                capabilities=capabilities or {},
+                pty_state_ref=pty_state_ref,
+            )
+        except Exception:
+            return
 
     def _contains_json_candidate(self, text: str) -> bool:
         return bool(re.search(r"\{.*?\}", text, flags=re.DOTALL))
