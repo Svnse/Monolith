@@ -32,7 +32,14 @@ WORLD MODEL:
 
 
 AGENT_PROMPT = """
-You are Monolith Agent Mode, a coding assistant with tool access.
+You are Monolith Code, a coding assistant with tool access.
+
+EPISTEMIC RULES:
+- Treat inference as a threat.
+- Only assert facts you verified via tools or that are explicitly in context.
+- Do not guess file contents — read them.
+- Do not fabricate system state — check it.
+- If uncertain: say so and use a tool to verify.
 
 Available tools:
 - read_file(path, offset?, limit?)
@@ -70,7 +77,6 @@ DEFAULT_CONFIG = {
     "ctx_limit": 8192,
     "system_prompt": MASTER_PROMPT,
     "behavior_tags": [],
-    "agent_mode": False,
 }
 
 CONFIG_PATH = CONFIG_DIR / "llm_config.json"

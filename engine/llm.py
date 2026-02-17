@@ -255,6 +255,7 @@ class GeneratorWorker(QThread):
         step_count = 0
         loop_start = time.monotonic()
         last_assistant_text = ""
+        last_tool_signature = None
 
         try:
             while True:
@@ -263,7 +264,7 @@ class GeneratorWorker(QThread):
                     break
 
                 if self.agent_mode and (time.monotonic() - loop_start > MAX_AGENT_TIMEOUT):
-                    self.trace.emit(f"[WORKER] agent timeout reached ({MAX_AGENT_TIMEOUT}s), forcing termination")
+                    self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] timeout reached ({MAX_AGENT_TIMEOUT}s), forcing termination")
                     if last_assistant_text:
                         assistant_chunks = [last_assistant_text]
                     completed = True
@@ -285,6 +286,12 @@ class GeneratorWorker(QThread):
                             self.trace.emit("→ inference aborted")
                             break
                         name = call.get("name", "unknown")
+                        signature = json.dumps({"name": name, "args": call.get("args", {})}, sort_keys=True, ensure_ascii=False)
+                        if last_tool_signature == signature:
+                            self.trace.emit("[AGENT] Duplicate tool call detected — breaking loop to prevent pathological repeat.")
+                            completed = True
+                            break
+                        last_tool_signature = signature
                         self.token.emit(f"\n[agent] running {name}...\n")
                         result = self._execute_tool_call(call)
                         if native_tool_mode:
@@ -302,22 +309,27 @@ class GeneratorWorker(QThread):
                                     "content": f"[Tool Result: {name}]\n{json.dumps(result, ensure_ascii=False)}",
                                 }
                             )
-                        self.trace.emit(f"[WORKER] tool={name} ok={result.get('ok')}")
+                        outcome = "ok" if result.get("ok") else "error"
+                        self.trace.emit(
+                            f"[AGENT {step_count + 1}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] {name} → {outcome}"
+                        )
                     if self.isInterruptionRequested():
+                        break
+                    if completed:
                         break
 
                     step_count += 1
                     if step_count >= MAX_AGENT_STEPS:
-                        self.trace.emit(f"[WORKER] agent step limit reached ({MAX_AGENT_STEPS}), forcing termination")
+                        self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] step limit reached, forcing termination")
                         if last_assistant_text:
                             assistant_chunks = [last_assistant_text]
                         completed = True
                         break
 
                     if native_tool_mode:
-                        self.trace.emit("[WORKER] tool loop iteration complete (native tools)")
+                        self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] tool loop iteration complete (native tools)")
                     else:
-                        self.trace.emit("[WORKER] tool loop iteration complete (prompt blocks)")
+                        self.trace.emit(f"[AGENT {step_count}/{MAX_AGENT_STEPS} | {int(time.monotonic() - loop_start)}s] tool loop iteration complete (prompt blocks)")
                     continue
 
                 if assistant_text:
@@ -478,8 +490,8 @@ class LLMEngine(QObject):
         self.conversation_history = [h for h in history if isinstance(h, dict)]
         self._pending_user_index = None
 
-    def _compile_system_prompt(self, config):
-        base_prompt = AGENT_PROMPT if bool(config.get("agent_mode", False)) else MASTER_PROMPT
+    def _compile_system_prompt(self, config, agent_mode=False):
+        base_prompt = AGENT_PROMPT if agent_mode else MASTER_PROMPT
         tags = config.get("behavior_tags", [])
         cleaned = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
         if not cleaned:
@@ -513,7 +525,9 @@ class LLMEngine(QObject):
         if config is None:
             config = load_config()
 
-        system_prompt = self._compile_system_prompt(config)
+        request_agent_mode = bool(payload.get("agent_mode", False))
+
+        system_prompt = self._compile_system_prompt(config, agent_mode=request_agent_mode)
         temp = float(config.get("temp", 0.7))
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
@@ -552,7 +566,7 @@ class LLMEngine(QObject):
 
         set_workspace_root(payload.get("workspace_root") if isinstance(payload, dict) else None)
         self._worker_seed_count = len(messages)
-        self._worker_agent_mode = bool(config.get("agent_mode", False))
+        self._worker_agent_mode = request_agent_mode
 
         self.worker = GeneratorWorker(
             self.llm,

@@ -60,7 +60,6 @@ class PageChat(QWidget):
         self._update_progress_index = 0
         self._config_dirty = False
         self._thinking_mode = bool(self.config.get("thinking_mode", False))
-        self._agent_mode = bool(self.config.get("agent_mode", False))
         # When user clicks Edit/Regen/Delete while a generation is running, we STOP first,
         # then apply the mutation on the next READY.
         self._pending_mutation = None  # type: ignore[assignment]
@@ -238,23 +237,6 @@ class PageChat(QWidget):
         think_row.addWidget(self.btn_think_ext)
         think_row.addStretch()
         options_layout.addLayout(think_row)
-
-        # Agent mode toggle row
-        agent_row = QHBoxLayout()
-        agent_row.setSpacing(4)
-        lbl_agent = QLabel("AGENT")
-        lbl_agent.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 1px;")
-        agent_row.addWidget(lbl_agent)
-
-        self.btn_agent_mode = QPushButton("ON" if self._agent_mode else "OFF")
-        self.btn_agent_mode.setCheckable(True)
-        self.btn_agent_mode.setChecked(self._agent_mode)
-        self.btn_agent_mode.setStyleSheet(think_style)
-        self.btn_agent_mode.clicked.connect(self._toggle_agent_mode)
-
-        agent_row.addWidget(self.btn_agent_mode)
-        agent_row.addStretch()
-        options_layout.addLayout(agent_row)
 
         control_layout.addWidget(self.options_panel)
         control_layout.addStretch()
@@ -782,21 +764,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.options_panel.setVisible(self._options_expanded)
         self.btn_options_toggle.setText("▾ OPTIONS" if self._options_expanded else "▸ OPTIONS")
 
-    def _toggle_agent_mode(self, checked):
-        self._agent_mode = bool(checked)
-        self.config["agent_mode"] = self._agent_mode
-        if hasattr(self, "btn_agent_mode"):
-            self.btn_agent_mode.setText("ON" if self._agent_mode else "OFF")
-        self._set_config_dirty(True)
-
-    def _set_agent_mode(self, enabled):
-        self._agent_mode = bool(enabled)
-        self.config["agent_mode"] = self._agent_mode
-        if hasattr(self, "btn_agent_mode"):
-            self.btn_agent_mode.setChecked(self._agent_mode)
-            self.btn_agent_mode.setText("ON" if self._agent_mode else "OFF")
-        self._set_config_dirty(True)
-
     def _update_thinking_button_style(self):
         # Update the think toggle buttons in the OPTIONS panel
         if hasattr(self, 'btn_think_off'):
@@ -832,7 +799,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.sig_set_ctx_limit.emit(int(DEFAULT_CONFIG["ctx_limit"]))
         self.behavior_tags.set_tags(DEFAULT_CONFIG.get("behavior_tags", []))
         self._set_thinking_mode(False)
-        self._set_agent_mode(False)
         self._set_config_dirty(True)
 
     def pick_file(self):
@@ -999,8 +965,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
 
         thinking_mode = bool(config.get("thinking_mode", False))
         self._set_thinking_mode(thinking_mode, "Standard" if thinking_mode else "Off")
-        self._set_agent_mode(bool(config.get("agent_mode", False)))
-
         gguf_path = config.get("gguf_path")
         if gguf_path:
             self.config["gguf_path"] = gguf_path

@@ -34,6 +34,9 @@ class PageAddons(QWidget):
         btn_terminal = MonoButton("CHAT")
         btn_terminal.clicked.connect(lambda: self.sig_launch_addon.emit("terminal"))
 
+        btn_code = MonoButton("CODE")
+        btn_code.clicked.connect(lambda: self.sig_launch_addon.emit("code"))
+
         btn_databank = MonoButton("FILES")
         btn_databank.clicked.connect(lambda: self.sig_launch_addon.emit("databank"))
 
@@ -48,6 +51,7 @@ class PageAddons(QWidget):
 
         mod_layout.addWidget(lbl_info)
         mod_layout.addWidget(btn_terminal)
+        mod_layout.addWidget(btn_code)
         mod_layout.addWidget(btn_databank)
         mod_layout.addWidget(btn_injector)
         mod_layout.addWidget(btn_sd)
@@ -74,5 +78,4 @@ class PageAddons(QWidget):
         scroll_layout.addStretch()
         scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area)
-
 
