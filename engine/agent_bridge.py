@@ -77,7 +77,7 @@ class AgentBridge:
                 }
 
         requested_path = extract_tool_path(tool, arguments)
-        auth_result = self._capability_manager.authorize(branch_id=branch_id, tool=tool, path=requested_path)
+        auth_result = self._capability_manager.authorize(tool=tool, path=requested_path)
         if not auth_result.ok:
             return {
                 "ok": False,
@@ -85,4 +85,4 @@ class AgentBridge:
                 "error": auth_result.error,
             }
 
-        return {"ok": True, "tool": tool, "capability_token": auth_result.token.token_id if auth_result.token else None}
+        return {"ok": True, "tool": tool, "capability_token": None}
