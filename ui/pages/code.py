@@ -671,6 +671,8 @@ class PageCode(QWidget):
         if step.get("result") is not None:
             lines.append("result:")
             lines.append(json.dumps(step.get("result"), indent=2, ensure_ascii=False))
+        if step.get("termination_reason"):
+            lines.append(f"termination_reason: {step.get('termination_reason')}")
         if step.get("error"):
             lines.append(f"error: {step.get('error')}")
         self.step_detail.setPlainText("\n".join(lines))
@@ -725,6 +727,13 @@ class PageCode(QWidget):
             elif event_name == "PARSE_ERROR":
                 step["error"] = event.get("error")
                 step["status"] = "error"
+            elif event_name == "TERMINATION":
+                reason = str(event.get("reason") or "completed")
+                output = event.get("output")
+                step["termination_reason"] = reason
+                step["result"] = {"reason": reason, "output": output}
+                if reason not in {"completed"}:
+                    step["status"] = "error"
 
             self._refresh_step_item(row)
             if self.steps_list.currentRow() == row:
