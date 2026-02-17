@@ -23,12 +23,12 @@ class PageAddons(QWidget):
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setContentsMargins(0, 0, 0, 0)
 
-        grp_modules = MonoGroupBox("AVAILABLE MODULES")
+        grp_modules = MonoGroupBox("MODULES")
         
         mod_layout = QVBoxLayout()
         mod_layout.setSpacing(15)
         
-        lbl_info = QLabel("Select a runtime module to attach to the workspace.")
+        lbl_info = QLabel("Open a module to get started.")
         lbl_info.setObjectName("status_label")
 
         btn_terminal = MonoButton("CHAT")
@@ -57,7 +57,7 @@ class PageAddons(QWidget):
         grp_modules.add_layout(mod_layout)
         scroll_layout.addWidget(grp_modules)
         
-        grp_system = MonoGroupBox("SYSTEM")
+        grp_system = MonoGroupBox("TOOLS")
         system_layout = QVBoxLayout()
         system_layout.setSpacing(10)
 

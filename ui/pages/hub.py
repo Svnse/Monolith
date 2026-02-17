@@ -1,4 +1,4 @@
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -25,7 +25,7 @@ class _NameDialog(QDialog):
         super().__init__(parent)
         import core.style as s
 
-        self.setWindowTitle("New Operator")
+        self.setWindowTitle("New Profile")
         self.setModal(True)
         self.setStyleSheet(
             f"""
@@ -36,7 +36,7 @@ class _NameDialog(QDialog):
         """
         )
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Operator name:"))
+        layout.addWidget(QLabel("Profile name:"))
         self.input = QLineEdit()
         layout.addWidget(self.input)
         row = QHBoxLayout()
@@ -58,7 +58,7 @@ class _LineageDialog(QDialog):
         super().__init__(parent)
         import core.style as s
 
-        self.setWindowTitle(f"Lineage: {operator_name}")
+        self.setWindowTitle(f"History: {operator_name}")
         self.setModal(True)
         self.setMinimumWidth(560)
         self.setMaximumHeight(400)
@@ -236,30 +236,32 @@ class PageHub(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 20)
         header_layout.setSpacing(4)
 
-        lbl_welcome = QLabel("MONOLITH")
-        lbl_welcome.setStyleSheet(
+        self._lbl_welcome = QLabel("MONOLITH")
+        self._lbl_welcome.setStyleSheet(
             f"color: {s.ACCENT_PRIMARY}; font-size: 20px; font-weight: bold; letter-spacing: 4px; background: transparent;"
         )
-        header_layout.addWidget(lbl_welcome)
+        header_layout.addWidget(self._lbl_welcome)
 
-        lbl_sub = QLabel("Select an operator to restore your workspace, or create a new one.")
-        lbl_sub.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px; background: transparent;")
-        header_layout.addWidget(lbl_sub)
+        self._lbl_sub = QLabel("Select a profile to restore your workspace, or create a new one.")
+        self._lbl_sub.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px; background: transparent;")
+        header_layout.addWidget(self._lbl_sub)
 
         layout.addWidget(header)
 
+        self._separators = []
         sep = QFrame()
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {s.BORDER_DARK};")
+        self._separators.append(sep)
         layout.addWidget(sep)
         layout.addSpacing(16)
 
         ops_header = QHBoxLayout()
-        lbl_ops = QLabel("OPERATORS")
-        lbl_ops.setStyleSheet(
+        self._lbl_ops = QLabel("PROFILES")
+        self._lbl_ops.setStyleSheet(
             f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 2px; background: transparent;"
         )
-        ops_header.addWidget(lbl_ops)
+        ops_header.addWidget(self._lbl_ops)
         ops_header.addStretch()
         layout.addLayout(ops_header)
         layout.addSpacing(10)
@@ -271,7 +273,7 @@ class PageHub(QWidget):
         self.grid.setSpacing(10)
         layout.addWidget(self.grid_wrap, 1)
 
-        self.empty_label = QLabel("No operators saved yet.\nCreate one to snapshot your current workspace.")
+        self.empty_label = QLabel("No profiles saved yet.\nCreate one to snapshot your current workspace.")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setStyleSheet(f"color: {s.FG_INFO}; font-size: 11px; padding: 40px; background: transparent;")
         self.grid.addWidget(self.empty_label, 0, 0, 1, 3, Qt.AlignCenter)
@@ -281,6 +283,7 @@ class PageHub(QWidget):
         sep2 = QFrame()
         sep2.setFixedHeight(1)
         sep2.setStyleSheet(f"background: {s.BORDER_DARK};")
+        self._separators.append(sep2)
         layout.addWidget(sep2)
         layout.addSpacing(10)
 
@@ -312,20 +315,21 @@ class PageHub(QWidget):
         sep3 = QFrame()
         sep3.setFixedHeight(1)
         sep3.setStyleSheet(f"background: {s.BORDER_DARK};")
+        self._separators.append(sep3)
         layout.addWidget(sep3)
         layout.addSpacing(10)
 
-        lbl_appearance = QLabel("APPEARANCE")
-        lbl_appearance.setStyleSheet(
+        self._lbl_appearance = QLabel("APPEARANCE")
+        self._lbl_appearance.setStyleSheet(
             f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 2px; background: transparent;"
         )
-        layout.addWidget(lbl_appearance)
+        layout.addWidget(self._lbl_appearance)
         layout.addSpacing(6)
 
         theme_row = QHBoxLayout()
         theme_row.setSpacing(8)
-        lbl_theme = QLabel("Theme")
-        lbl_theme.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px; background: transparent;")
+        self._lbl_theme = QLabel("Theme")
+        self._lbl_theme.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px; background: transparent;")
         self.theme_combo = QComboBox()
         self.theme_combo.setFixedWidth(140)
         self.theme_combo.setFixedHeight(28)
@@ -359,10 +363,59 @@ class PageHub(QWidget):
             self.theme_combo.setCurrentIndex(idx)
         self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
 
-        theme_row.addWidget(lbl_theme)
+        theme_row.addWidget(self._lbl_theme)
         theme_row.addWidget(self.theme_combo)
         theme_row.addStretch()
         layout.addLayout(theme_row)
+
+        if self._ui_bridge:
+            self._ui_bridge.sig_theme_changed.connect(
+                lambda _: QTimer.singleShot(0, self._refresh_theme)
+            )
+
+        self.refresh_cards()
+
+    def _refresh_theme(self):
+        """Re-apply all inline styles after a theme change."""
+        import core.style as s
+
+        self.setStyleSheet(f"background: {s.BG_MAIN};")
+
+        # Walk named widgets and refresh
+        self._lbl_welcome.setStyleSheet(
+            f"color: {s.ACCENT_PRIMARY}; font-size: 20px; font-weight: bold; letter-spacing: 4px; background: transparent;"
+        )
+        self._lbl_sub.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px; background: transparent;")
+        self._lbl_ops.setStyleSheet(
+            f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 2px; background: transparent;"
+        )
+        self._lbl_appearance.setStyleSheet(
+            f"color: {s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 2px; background: transparent;"
+        )
+        self._lbl_theme.setStyleSheet(f"color: {s.FG_DIM}; font-size: 10px; background: transparent;")
+        self.empty_label.setStyleSheet(f"color: {s.FG_INFO}; font-size: 11px; padding: 40px; background: transparent;")
+
+        for sep in self._separators:
+            sep.setStyleSheet(f"background: {s.BORDER_DARK};")
+
+        self.theme_combo.setStyleSheet(
+            f"""
+            QComboBox {{
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_LIGHT}; padding: 4px 8px;
+                font-size: 10px; font-weight: bold; border-radius: 2px;
+            }}
+            QComboBox:hover {{ border: 1px solid {s.ACCENT_PRIMARY}; }}
+            QComboBox::drop-down {{ border: none; width: 20px; }}
+            QComboBox::down-arrow {{ image: none; border: none; }}
+            QComboBox QAbstractItemView {{
+                background: {s.BG_INPUT}; color: {s.FG_TEXT};
+                border: 1px solid {s.BORDER_LIGHT};
+                selection-background-color: {s.BG_BUTTON_HOVER};
+                selection-color: {s.ACCENT_PRIMARY};
+            }}
+        """
+        )
 
         self.refresh_cards()
 
@@ -430,7 +483,7 @@ class PageHub(QWidget):
 
     def _create_operator_from_current(self):
         if self._config_provider is None:
-            QMessageBox.warning(self, "Operator", "Terminal page is not mounted.")
+            QMessageBox.warning(self, "Profile", "Terminal page is not mounted.")
             return
         dialog = _NameDialog(self)
         if dialog.exec() != QDialog.Accepted:
@@ -474,7 +527,7 @@ class PageHub(QWidget):
         msg.setIcon(QMessageBox.Warning)
         msg.setWindowTitle("Presence Drift")
         msg.setText(
-            f"Your workspace has drifted significantly from the saved presence '{name}'. "
+            f"Your session has drifted significantly from the saved presence '{name}'. "
             "Save as new presence or update existing?"
         )
         msg.setStyleSheet(
@@ -495,7 +548,7 @@ class PageHub(QWidget):
 
         if msg.clickedButton() is btn_save_new:
             fork_dialog = _NameDialog(self)
-            fork_dialog.setWindowTitle("Save As New Presence")
+            fork_dialog.setWindowTitle("Save As New Profile")
             fork_dialog.input.setText(f"{name} Copy")
             if fork_dialog.exec() != QDialog.Accepted:
                 return
@@ -516,7 +569,7 @@ class PageHub(QWidget):
         if not self._selected_name:
             return
         if not self._operator_manager.delete_operator(self._selected_name):
-            QMessageBox.warning(self, "Operator", "Delete failed.")
+            QMessageBox.warning(self, "Profile", "Delete failed.")
             return
         self._selected_name = None
         self.btn_load.setEnabled(False)

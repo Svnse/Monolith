@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QFrame, QLabel, QStackedLayout
 )
 from PySide6.QtCore import Qt, QDateTime, QTimer
-from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QKeyEvent, QMouseEvent
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QKeyEvent, QMouseEvent, QCursor
 
 from core.state import SystemStatus, AppState
 from ui.bridge import UIBridge
@@ -28,10 +28,19 @@ class MonolithUI(QMainWindow):
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMouseTracking(True)
         self.resize(1100, 700)
+        self.setMinimumSize(600, 400)
+
+        # Resize grip state
+        self._resize_edge = None   # None or combination of "top","bottom","left","right"
+        self._resize_origin = None
+        self._resize_geo = None
+        self._GRIP = 4  # pixels from edge that trigger resize
 
         main_widget = QWidget()
         main_widget.setObjectName("MainFrame")
+        main_widget.setMouseTracking(True)
         self.setCentralWidget(main_widget)
 
         root_layout = QVBoxLayout(main_widget)
@@ -55,7 +64,7 @@ class MonolithUI(QMainWindow):
         self.sidebar.setFixedWidth(70)
         
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(5, 15, 5, 15)
+        sidebar_layout.setContentsMargins(0, 15, 0, 15)
         sidebar_layout.setSpacing(10)
 
         self.module_strip = ModuleStrip()
@@ -63,10 +72,10 @@ class MonolithUI(QMainWindow):
         self.module_strip.sig_module_closed.connect(self.close_module)
         self.setAcceptDrops(True)
 
-        self.btn_hub = SidebarButton("◉", "HOME")
+        self.btn_hub = SidebarButton("", "HOME")
         self.btn_hub.clicked.connect(lambda: self.set_page("hub"))
 
-        self.btn_addons = SidebarButton("＋", "MODULES")
+        self.btn_addons = SidebarButton("", "MODULES")
         self.btn_addons.clicked.connect(lambda: self.set_page("addons"))
 
         sidebar_layout.addWidget(self.module_strip)
@@ -125,18 +134,68 @@ class MonolithUI(QMainWindow):
 
     # ---------------- WINDOW BEHAVIOR ----------------
 
+    def _edge_at(self, pos):
+        """Return 'right+bottom' if pos is within the bottom-right grip zone, else None."""
+        g = self._GRIP * 4  # slightly larger corner hit area
+        r = self.rect()
+        if pos.x() >= r.width() - g and pos.y() >= r.height() - g:
+            return "right+bottom"
+        return None
+
+    _CURSOR_MAP = {
+        "right+bottom": Qt.SizeFDiagCursor,
+    }
+
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton and event.position().y() < 40:
+        if event.button() != Qt.LeftButton:
+            return
+        pos = event.position().toPoint()
+        edge = self._edge_at(pos)
+        if edge:
+            self._resize_edge = edge
+            self._resize_origin = event.globalPosition().toPoint()
+            self._resize_geo = self.geometry()
+            event.accept()
+            return
+        if pos.y() < 40:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        # Active resize
+        if self._resize_edge and event.buttons() == Qt.LeftButton:
+            delta = event.globalPosition().toPoint() - self._resize_origin
+            geo = self._resize_geo
+            new_geo = geo.__class__(geo)
+            if "right" in self._resize_edge:
+                new_geo.setRight(geo.right() + delta.x())
+            if "bottom" in self._resize_edge:
+                new_geo.setBottom(geo.bottom() + delta.y())
+            if "left" in self._resize_edge:
+                new_geo.setLeft(geo.left() + delta.x())
+            if "top" in self._resize_edge:
+                new_geo.setTop(geo.top() + delta.y())
+            if new_geo.width() >= self.minimumWidth() and new_geo.height() >= self.minimumHeight():
+                self.setGeometry(new_geo)
+            event.accept()
+            return
+        # Active drag
         if self._drag_pos and event.buttons() == Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
-            
+            return
+        # Hover cursor
+        edge = self._edge_at(event.position().toPoint())
+        if edge and edge in self._CURSOR_MAP:
+            self.setCursor(self._CURSOR_MAP[edge])
+        else:
+            self.unsetCursor()
+
     def mouseReleaseEvent(self, event: QMouseEvent):
         self._drag_pos = None
+        self._resize_edge = None
+        self._resize_origin = None
+        self._resize_geo = None
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_K and hasattr(self, "palette"):

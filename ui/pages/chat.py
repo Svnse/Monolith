@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QLineEdit, QPushButton, QLabel, QFileDialog,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
-    QMessageBox, QButtonGroup, QMenu
+    QMessageBox, QButtonGroup, QMenu, QSizePolicy
 )
 from PySide6.QtCore import Signal, Qt, QTimer, QDateTime
 from PySide6.QtGui import QActionGroup
@@ -66,15 +66,16 @@ class PageChat(QWidget):
 
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
 
         main_split = QSplitter(Qt.Horizontal)
         main_split.setChildrenCollapsible(False)
-        layout.addWidget(main_split)
+        layout.addWidget(main_split, 1)
 
         # === MODEL LOADER (lives in CONTROL tab) ===
         grp_load = MonoGroupBox("MODEL LOADER")
+        grp_load.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.path_display = QLineEdit()
         self.path_display.setReadOnly(True)
         self.path_display.setPlaceholderText("No GGUF Selected")
@@ -120,8 +121,8 @@ class PageChat(QWidget):
         save_row.addWidget(btn_reset_config)
         save_row.addWidget(self.btn_save_config)
 
-        # === OPERATIONS GROUP with 3 tabs ===
-        operations_group = MonoGroupBox("OPERATIONS")
+        # === PANEL GROUP with 3 tabs ===
+        operations_group = MonoGroupBox("PANEL")
         operations_layout = QVBoxLayout()
         operations_layout.setSpacing(10)
 
@@ -136,14 +137,14 @@ class PageChat(QWidget):
             }}
             QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
         """
-        self.btn_tab_control = MonoButton("CONTROL")
+        self.btn_tab_control = MonoButton("MODEL")
         self.btn_tab_control.setCheckable(True)
         self.btn_tab_control.setChecked(True)
         self.btn_tab_control.setStyleSheet(tab_style)
-        self.btn_tab_archive = MonoButton("ARCHIVE")
+        self.btn_tab_archive = MonoButton("HISTORY")
         self.btn_tab_archive.setCheckable(True)
         self.btn_tab_archive.setStyleSheet(tab_style)
-        self.btn_tab_settings = MonoButton("SETTINGS")
+        self.btn_tab_settings = MonoButton("CONFIG")
         self.btn_tab_settings.setCheckable(True)
         self.btn_tab_settings.setStyleSheet(tab_style)
         tab_group = QButtonGroup(self)
@@ -162,6 +163,7 @@ class PageChat(QWidget):
 
         # --- CONTROL tab: Model Loader (top-level, no collapsible) ---
         control_tab = QWidget()
+        control_tab.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         control_layout = QVBoxLayout(control_tab)
         control_layout.setSpacing(12)
         control_layout.addWidget(grp_load)
@@ -313,9 +315,10 @@ class PageChat(QWidget):
 
         self.message_list = QListWidget()
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self.message_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.message_list.setStyleSheet(f"""
             QListWidget {{
-                background: transparent; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
+                background: transparent; color: {_s.FG_TEXT}; border: none;
                 font-family: 'Consolas', monospace; font-size: 12px;
             }}
             QListWidget::item {{
@@ -370,9 +373,11 @@ class PageChat(QWidget):
         right_stack = QSplitter(Qt.Vertical)
         right_stack.setChildrenCollapsible(False)
 
-        trace_group = MonoGroupBox("REASONING TRACE")
+        trace_group = MonoGroupBox("LOG")
+        trace_group.setMaximumHeight(120)
         self.trace = QTextEdit()
         self.trace.setReadOnly(True)
+        self.trace.setMinimumHeight(40)
         self.trace.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {_s.BG_INPUT};
@@ -395,18 +400,22 @@ class PageChat(QWidget):
         trace_group.add_widget(self.trace)
         trace_group.add_widget(self.lbl_config_update)
 
+        # LOG pinned to minimum, PANEL takes remaining right-column space
         right_stack.addWidget(trace_group)
         right_stack.addWidget(operations_group)
-        right_stack.setStretchFactor(0, 1)
-        right_stack.setStretchFactor(1, 1)
-        right_stack.setSizes([200, 200])
+        right_stack.setStretchFactor(0, 0)   # LOG: don't grow
+        right_stack.setStretchFactor(1, 1)   # PANEL: take all remaining
+        right_stack.setSizes([80, 9999])
 
         main_split.addWidget(chat_group)
         main_split.addWidget(right_stack)
-        main_split.setStretchFactor(0, 3)
-        main_split.setStretchFactor(1, 2)
+        main_split.setStretchFactor(0, 3)    # Chat: wider
+        main_split.setStretchFactor(1, 1)
+        main_split.setSizes([700, 300])
         self._active_assistant_started = False
         self._active_assistant_token_count = 0
+
+        self.message_list.viewport().installEventFilter(self)
 
         self._sync_path_display()
         self._update_load_button_text()
@@ -416,6 +425,23 @@ class PageChat(QWidget):
         self._set_config_dirty(False)
         if not self._is_model_loaded:
             self._apply_default_limits()
+
+    def eventFilter(self, obj, event):
+        from PySide6.QtCore import QEvent
+        if obj is self.message_list.viewport() and event.type() == QEvent.Resize:
+            self._resize_all_message_items()
+        return super().eventFilter(obj, event)
+
+    def _resize_all_message_items(self):
+        vw = self.message_list.viewport().width()
+        if vw <= 50:
+            return
+        for row in range(self.message_list.count()):
+            item = self.message_list.item(row)
+            widget = self.message_list.itemWidget(item)
+            if widget is not None:
+                widget.setFixedWidth(vw - 2)
+                item.setSizeHint(widget.sizeHint())
 
     def send(self):
         txt = self.input.text().strip()
@@ -554,7 +580,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             widget = self.message_list.itemWidget(item)
             if widget is self._active_widget:
                 if vw > 50:
-                    widget.setFixedWidth(vw)
+                    widget.setFixedWidth(vw - 2)
                 item.setSizeHint(widget.sizeHint())
                 break
         if at_bottom:
@@ -1307,6 +1333,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             return
         for idx, _msg in enumerate(session["messages"]):
             self._append_message_widget(idx)
+        self._resize_all_message_items()
         self.message_list.scrollToBottom()
 
     def _append_message_widget(self, idx: int, role=None, text=None, timestamp=None):
@@ -1322,7 +1349,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         widget.sig_regen.connect(lambda _idx: self._regen_last_assistant())
         vw = self.message_list.viewport().width()
         if vw > 50:
-            widget.setFixedWidth(vw)
+            widget.setFixedWidth(vw - 2)
         item.setSizeHint(widget.sizeHint())
         self.message_list.addItem(item)
         self.message_list.setItemWidget(item, widget)
