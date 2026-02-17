@@ -1,17 +1,80 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import queue
 import sys
 import threading
 import time
 import uuid
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+
+@dataclass
+class LedgerEvent:
+    trace_id: str
+    sequence_id: int
+    timestamp: str
+    actor: Literal["user", "assistant", "tool", "system"]
+    event_type: Literal["input", "inference", "tool_invocation", "tool_result", "error", "yield"]
+    reasoning_hash: str | None
+    execution_hash: str | None
+    payload: dict[str, Any]
+
+
+class AppendOnlyLedger:
+    def __init__(self, trace_id: str | None = None) -> None:
+        self.trace_id = trace_id or str(uuid.uuid4())
+        self._events: list[LedgerEvent] = []
+        self._sequence = 0
+
+    def append(
+        self,
+        *,
+        actor: Literal["user", "assistant", "tool", "system"],
+        event_type: Literal["input", "inference", "tool_invocation", "tool_result", "error", "yield"],
+        payload: dict[str, Any],
+        reasoning: str | None = None,
+        execution: dict[str, Any] | None = None,
+    ) -> LedgerEvent:
+        self._sequence += 1
+        event = LedgerEvent(
+            trace_id=self.trace_id,
+            sequence_id=self._sequence,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            actor=actor,
+            event_type=event_type,
+            reasoning_hash=self.reasoning_hash(reasoning),
+            execution_hash=self.execution_hash(execution),
+            payload=payload,
+        )
+        self._events.append(event)
+        return event
+
+    def snapshot(self) -> list[LedgerEvent]:
+        return list(self._events)
+
+    @staticmethod
+    def reasoning_hash(reasoning: str | None) -> str | None:
+        if not reasoning:
+            return None
+        return hashlib.sha256(reasoning.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def execution_hash(execution: dict[str, Any] | None) -> str | None:
+        if not execution:
+            return None
+        tool_name = str(execution.get("tool_name", ""))
+        arguments = execution.get("arguments", {})
+        if not isinstance(arguments, dict):
+            arguments = {}
+        serialized_args = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(f"{tool_name}:{serialized_args}".encode("utf-8")).hexdigest()
 
 
 class EventLedger:

@@ -1,11 +1,58 @@
+import json
 from threading import Lock
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
 
 from core.llm_config import AGENT_PROMPT, MASTER_PROMPT, load_config
 from core.state import AppState, SystemStatus
-from engine.agent_runtime import AgentRuntime
+from engine.agent_runtime import AgentMessage, AgentRuntime, ToolCall
 from engine.tools import set_workspace_root
+
+
+def normalize_openai_response(raw: dict) -> AgentMessage:
+    choices = raw.get("choices", []) if isinstance(raw, dict) else []
+    message = choices[0].get("message", {}) if choices else {}
+    role = message.get("role", "assistant")
+    if role not in {"system", "user", "assistant", "tool"}:
+        role = "assistant"
+
+    content = message.get("content")
+    normalized_content: str | None
+    if isinstance(content, str):
+        normalized_content = content
+    elif isinstance(content, list):
+        normalized_content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    else:
+        normalized_content = None
+
+    tool_calls_raw = message.get("tool_calls")
+    normalized_calls: list[ToolCall] = []
+    if isinstance(tool_calls_raw, list):
+        for idx, item in enumerate(tool_calls_raw):
+            if not isinstance(item, dict):
+                continue
+            fn = item.get("function", {}) if isinstance(item.get("function"), dict) else {}
+            name = fn.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            arguments = fn.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments)
+                    arguments = parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            normalized_calls.append(ToolCall(id=str(item.get("id") or f"call_{idx}"), name=name, arguments=arguments))
+
+    return AgentMessage(
+        role=role,
+        content=normalized_content,
+        tool_calls=normalized_calls or None,
+        tool_call_id=message.get("tool_call_id") if isinstance(message.get("tool_call_id"), str) else None,
+        name=message.get("name") if isinstance(message.get("name"), str) else None,
+    )
 
 
 class ModelLoader(QThread):
@@ -80,7 +127,7 @@ class GeneratorWorker(QThread):
             return "".join(chunks)
         return ""
 
-    def _try_chat_completion(self, messages):
+    def _try_chat_completion(self, messages, tools=None):
         kwargs = {
             "messages": messages,
             "temperature": self.temp,
@@ -88,11 +135,18 @@ class GeneratorWorker(QThread):
             "max_tokens": self.max_tokens,
             "stream": False,
         }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
         return self.llm.create_chat_completion(**kwargs)
 
     def _chat_once_text(self, messages: list[dict]) -> str:
         response = self._try_chat_completion(messages)
         return self._extract_text(response)
+
+    def _chat_once_agent(self, messages: list[dict], tools: list[dict]) -> AgentMessage:
+        response = self._try_chat_completion(messages, tools=tools)
+        return normalize_openai_response(response)
 
     def _emit_runtime_event(self, payload: dict) -> None:
         self.event.emit(payload)
@@ -106,6 +160,7 @@ class GeneratorWorker(QThread):
             token = payload.get("data", "")
             if isinstance(token, str) and token:
                 self.token.emit(token)
+                self.usage.emit(len(token))
 
 
     def run(self):
@@ -118,7 +173,7 @@ class GeneratorWorker(QThread):
 
         try:
             if self.agent_mode and self.runtime is not None:
-                self.runtime._llm_call = self._chat_once_text
+                self.runtime._llm_call = self._chat_once_agent
                 self.runtime._should_stop = self.isInterruptionRequested
                 self.runtime._emit_event = self._emit_runtime_event
                 completed, assistant_text, loop_history = self.runtime.run(self.messages)
@@ -169,7 +224,7 @@ class LLMEngine(QObject):
         self._worker_seed_count: int = 0
         self._worker_agent_mode: bool = False
         self._runtime_lock = Lock()
-        self._runtime = AgentRuntime(llm_call=lambda _m: "", emit_event=self.sig_agent_event.emit)
+        self._runtime = AgentRuntime(llm_call=lambda _m, _t: AgentMessage(role="assistant", content=""), emit_event=self.sig_agent_event.emit)
 
     def set_ctx_limit(self, payload: dict) -> None:
         value = payload.get("ctx_limit") if isinstance(payload, dict) else None
