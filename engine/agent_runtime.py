@@ -18,6 +18,11 @@ FLEXIBLE_OUTPUT_PROMPT = (
     '{"tool": "<registered_tool_name>", "arguments": {...}}.'
 )
 
+PROTOCOL_BLOCK_PATTERN = re.compile(
+    r"<(REASONING|ACTION|CAPABILITY_REQUEST)>(.*?)</\\1>",
+    flags=re.DOTALL,
+)
+
 
 class AgentState(str, Enum):
     IDLE = "IDLE"
@@ -100,8 +105,95 @@ class AgentRuntime:
                 }
             )
 
-            parsed = self._extract_first_json_block(raw)
-            if parsed is None:
+            blocks = self._extract_protocol_blocks(raw)
+            protocol_actions: list[dict] = []
+            protocol_compliant = True
+            protocol_error: str | None = None
+            for block in blocks:
+                if block["type"] == "REASONING":
+                    self._emit_event(
+                        {
+                            "event": "AGENT_REASONING",
+                            "step_id": thinking_step_id,
+                            "reasoning": block["content"],
+                            "timestamp": time.time(),
+                        }
+                    )
+                    continue
+
+                if block["type"] == "CAPABILITY_REQUEST":
+                    self._emit_event(
+                        {
+                            "event": "CAPABILITY_REQUEST",
+                            "step_id": thinking_step_id,
+                            "request": block["content"],
+                            "timestamp": time.time(),
+                        }
+                    )
+                    continue
+
+                try:
+                    action_obj = json.loads(block["content"])
+                except Exception:
+                    protocol_error = "invalid <ACTION> JSON block: expected {'tool': <str>, 'arguments': <object>}"
+                    break
+
+                if (
+                    not isinstance(action_obj, dict)
+                    or "tool" not in action_obj
+                    or "arguments" not in action_obj
+                    or not isinstance(action_obj["tool"], str)
+                    or not isinstance(action_obj["arguments"], dict)
+                ):
+                    protocol_error = "invalid <ACTION> JSON block: expected {'tool': <str>, 'arguments': <object>}"
+                    break
+
+                protocol_actions.append({"tool": action_obj["tool"], "arguments": action_obj["arguments"]})
+
+            if protocol_error is not None:
+                parse_retries += 1
+                self._emit_event(
+                    {
+                        "event": "PARSE_ERROR",
+                        "step_id": thinking_step_id,
+                        "error": protocol_error,
+                        "retry": parse_retries,
+                        "timestamp": time.time(),
+                    }
+                )
+                self._emit_step_end(thinking_step_id, "error", error=protocol_error, protocol_compliant=protocol_compliant)
+                if parse_retries > MAX_PARSE_RETRIES:
+                    return self._error(protocol_error, loop_messages)
+                loop_messages.append(
+                    {
+                        "role": "system",
+                        "content": "Parse error: put executable tool calls only in <ACTION>{\"tool\":\"...\",\"arguments\":{...}}</ACTION> blocks.",
+                    }
+                )
+                continue
+
+            actions_to_execute = protocol_actions
+            if not actions_to_execute:
+                parsed = self._extract_first_json_block(raw)
+                if parsed is not None:
+                    protocol_compliant = False
+                    actions_to_execute = [
+                        {
+                            "tool": parsed["tool"],
+                            "arguments": parsed["arguments"],
+                            "synthetic": True,
+                        }
+                    ]
+                    self._emit_event(
+                        {
+                            "event": "PROTOCOL_COMPLIANCE_WARNING",
+                            "step_id": thinking_step_id,
+                            "warning": "No <ACTION> block found. Falling back to legacy first-JSON extraction.",
+                            "timestamp": time.time(),
+                        }
+                    )
+
+            if not actions_to_execute:
                 if self._contains_json_candidate(raw):
                     parse_retries += 1
                     error = "invalid tool JSON block: expected {'tool': <str>, 'arguments': <object>}"
@@ -114,7 +206,7 @@ class AgentRuntime:
                             "timestamp": time.time(),
                         }
                     )
-                    self._emit_step_end(thinking_step_id, "error", error=error)
+                    self._emit_step_end(thinking_step_id, "error", error=error, protocol_compliant=protocol_compliant)
                     if parse_retries > MAX_PARSE_RETRIES:
                         return self._error(error, loop_messages)
                     loop_messages.append(
@@ -126,7 +218,7 @@ class AgentRuntime:
                     continue
 
                 self._state = AgentState.FINAL
-                self._emit_step_end(thinking_step_id, "ok")
+                self._emit_step_end(thinking_step_id, "ok", protocol_compliant=protocol_compliant)
                 loop_messages.append({"role": "assistant", "content": raw})
                 final_step_id = self._next_step_id()
                 self._emit_step_start(final_step_id, "Final Output", "final")
@@ -135,28 +227,46 @@ class AgentRuntime:
                 return True, raw, loop_messages
 
             parse_retries = 0
-            tool = parsed["tool"]
-            arguments = parsed["arguments"]
             self._state = AgentState.TOOL_CALL
-            self._emit_step_end(thinking_step_id, "ok")
-            tool_step_id = self._next_step_id()
-            self._emit_step_start(tool_step_id, f"Tool: {tool}", "tool", tool=tool, arguments=arguments)
-            self._emit_event({"event": "TOOL_CALL_START", "step_id": tool_step_id, "tool": tool, "arguments": arguments, "timestamp": time.time()})
-            bridge_result = self._bridge.execute(tool, arguments)
-            self._state = AgentState.TOOL_RESULT
-            result_payload = bridge_result.get("result", {"ok": False, "content": "", "error": bridge_result.get("error")})
-            self._emit_event({"event": "TOOL_RESULT", "step_id": tool_step_id, "tool": tool, "result": result_payload, "timestamp": time.time()})
-            self._emit_step_end(tool_step_id, "ok" if result_payload.get("ok", False) else "error")
-
+            self._emit_step_end(thinking_step_id, "ok", protocol_compliant=protocol_compliant)
             loop_messages.append({"role": "assistant", "content": raw})
-            loop_messages.append(
-                {
-                    "role": "tool",
-                    "name": tool,
-                    "content": json.dumps(result_payload, ensure_ascii=False),
-                }
-            )
-            steps += 1
+            for action in actions_to_execute:
+                tool = action["tool"]
+                arguments = action["arguments"]
+                tool_step_id = self._next_step_id()
+                self._emit_step_start(tool_step_id, f"Tool: {tool}", "tool", tool=tool, arguments=arguments)
+                self._emit_event(
+                    {
+                        "event": "TOOL_CALL_START",
+                        "step_id": tool_step_id,
+                        "tool": tool,
+                        "arguments": arguments,
+                        "synthetic": action.get("synthetic", False),
+                        "timestamp": time.time(),
+                    }
+                )
+                bridge_result = self._bridge.execute(tool, arguments)
+                self._state = AgentState.TOOL_RESULT
+                result_payload = bridge_result.get("result", {"ok": False, "content": "", "error": bridge_result.get("error")})
+                self._emit_event(
+                    {
+                        "event": "TOOL_RESULT",
+                        "step_id": tool_step_id,
+                        "tool": tool,
+                        "result": result_payload,
+                        "timestamp": time.time(),
+                    }
+                )
+                self._emit_step_end(tool_step_id, "ok" if result_payload.get("ok", False) else "error")
+
+                loop_messages.append(
+                    {
+                        "role": "tool",
+                        "name": tool,
+                        "content": json.dumps(result_payload, ensure_ascii=False),
+                    }
+                )
+                steps += 1
 
     def _error(self, message: str, loop_messages: list[dict]) -> tuple[bool, str, list[dict]]:
         self._state = AgentState.ERROR
@@ -165,6 +275,12 @@ class AgentRuntime:
 
     def _contains_json_candidate(self, text: str) -> bool:
         return bool(re.search(r"\{.*?\}", text, flags=re.DOTALL))
+
+    def _extract_protocol_blocks(self, text: str) -> list[dict[str, str]]:
+        blocks: list[dict[str, str]] = []
+        for match in PROTOCOL_BLOCK_PATTERN.finditer(text):
+            blocks.append({"type": match.group(1), "content": match.group(2).strip()})
+        return blocks
 
     def _extract_first_json_block(self, text: str) -> dict | None:
         starts = [i for i, ch in enumerate(text) if ch == "{"]
