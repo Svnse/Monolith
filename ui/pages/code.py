@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QButtonGroup,
     QHBoxLayout,
@@ -59,6 +60,9 @@ class PageCode(QWidget):
         self._is_model_loaded = False
         self._last_status = None
         self._agent_step = 0
+        self._agent_steps: list[dict] = []
+        self._agent_step_index_by_id: dict[int, int] = {}
+        self._current_agent_step_id: int | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -147,6 +151,38 @@ class PageCode(QWidget):
 
         right_stack = QSplitter(Qt.Vertical)
         right_stack.setChildrenCollapsible(False)
+
+        steps_group = MonoGroupBox("AGENT STEPS")
+        steps_layout = QVBoxLayout()
+        steps_layout.setSpacing(8)
+        self.steps_list = QListWidget()
+        self.steps_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.steps_list.currentRowChanged.connect(self._on_step_selected)
+        self.steps_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {_s.BG_INPUT}; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
+                font-family: 'Consolas', monospace; font-size: 10px;
+            }}
+            QListWidget::item {{ padding: 5px; }}
+            QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
+        """)
+        self.step_detail = QTextEdit()
+        self.step_detail.setReadOnly(True)
+        self.step_detail.setFixedHeight(120)
+        self.step_detail.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {_s.BG_INPUT};
+                color: {_s.FG_TEXT};
+                border: 1px solid {_s.BORDER_SUBTLE};
+                font-family: 'Consolas', monospace;
+                font-size: 10px;
+            }}
+            {_s.SCROLLBAR_STYLE}
+        """)
+        steps_layout.addWidget(self.steps_list)
+        steps_layout.addWidget(self.step_detail)
+        steps_group.add_layout(steps_layout)
 
         trace_group = MonoGroupBox("REASONING TRACE")
         self.trace = QTextEdit()
@@ -279,10 +315,12 @@ class PageCode(QWidget):
 
         controls_group.add_layout(controls_layout)
 
+        right_stack.addWidget(steps_group)
         right_stack.addWidget(trace_group)
         right_stack.addWidget(controls_group)
         right_stack.setStretchFactor(0, 1)
         right_stack.setStretchFactor(1, 1)
+        right_stack.setStretchFactor(2, 1)
 
         main_split.addWidget(chat_group)
         main_split.addWidget(right_stack)
@@ -295,6 +333,118 @@ class PageCode(QWidget):
         self._update_load_button_text()
         self._set_send_button_state(False)
         self._sync_send_availability()
+
+    def _icon_for_status(self, status: str) -> str:
+        return {
+            "pending": "…",
+            "running": "▶",
+            "ok": "✓",
+            "error": "✗",
+        }.get(status, "•")
+
+    def _render_step_label(self, step: dict, row: int) -> str:
+        status_icon = self._icon_for_status(step.get("status", "pending"))
+        current = "▶ " if step.get("step_id") == self._current_agent_step_id else ""
+        return f"{current}[{row + 1}] {status_icon} {step.get('label', 'Step')}"
+
+    def _refresh_step_item(self, row: int) -> None:
+        if row < 0 or row >= len(self._agent_steps):
+            return
+        item = self.steps_list.item(row)
+        if item is None:
+            return
+        item.setText(self._render_step_label(self._agent_steps[row], row))
+
+    def _on_step_selected(self, row: int) -> None:
+        if row < 0 or row >= len(self._agent_steps):
+            self.step_detail.clear()
+            return
+        step = self._agent_steps[row]
+        lines = [
+            f"step_id: {step.get('step_id')}",
+            f"label: {step.get('label')}",
+            f"kind: {step.get('kind', '-')}",
+            f"status: {step.get('status', '-')}",
+        ]
+        if step.get("tool"):
+            lines.append(f"tool: {step.get('tool')}")
+        if step.get("started_at"):
+            lines.append(f"started: {step.get('started_at')}")
+        if step.get("ended_at"):
+            lines.append(f"ended: {step.get('ended_at')}")
+        if step.get("arguments") is not None:
+            lines.append("arguments:")
+            lines.append(json.dumps(step.get("arguments"), indent=2, ensure_ascii=False))
+        if step.get("thought"):
+            lines.append("thought:")
+            lines.append(step.get("thought"))
+        if step.get("result") is not None:
+            lines.append("result:")
+            lines.append(json.dumps(step.get("result"), indent=2, ensure_ascii=False))
+        if step.get("error"):
+            lines.append(f"error: {step.get('error')}")
+        self.step_detail.setPlainText("\n".join(lines))
+
+    def append_agent_event(self, event: dict):
+        if not isinstance(event, dict):
+            return
+        event_name = event.get("event")
+        step_id = event.get("step_id")
+        timestamp = event.get("timestamp")
+        timestamp_str = ""
+        if isinstance(timestamp, (int, float)):
+            timestamp_str = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+        if event_name == "STEP_START" and isinstance(step_id, int):
+            step = {
+                "step_id": step_id,
+                "label": event.get("label", "Step"),
+                "kind": event.get("kind", "unknown"),
+                "status": "running",
+                "tool": event.get("tool"),
+                "arguments": event.get("arguments"),
+                "started_at": timestamp_str,
+            }
+            row = len(self._agent_steps)
+            self._agent_steps.append(step)
+            self._agent_step_index_by_id[step_id] = row
+            self._current_agent_step_id = step_id
+            self.steps_list.addItem(self._render_step_label(step, row))
+            self.steps_list.setCurrentRow(row)
+        elif isinstance(step_id, int) and step_id in self._agent_step_index_by_id:
+            row = self._agent_step_index_by_id[step_id]
+            step = self._agent_steps[row]
+            if event_name == "STEP_END":
+                step["status"] = event.get("status", "ok")
+                step["ended_at"] = timestamp_str
+                if step.get("status") != "running":
+                    self._current_agent_step_id = None
+                if event.get("error"):
+                    step["error"] = event.get("error")
+            elif event_name == "AGENT_THOUGHT":
+                step["thought"] = event.get("thought")
+            elif event_name == "TOOL_RESULT":
+                step["result"] = event.get("result")
+                result = event.get("result")
+                if isinstance(result, dict) and result.get("ok") is False:
+                    step["status"] = "error"
+            elif event_name == "TOOL_CALL_START":
+                step["tool"] = event.get("tool")
+                step["arguments"] = event.get("arguments")
+            elif event_name == "PARSE_INVALID":
+                step["error"] = event.get("error")
+                step["status"] = "error"
+
+            self._refresh_step_item(row)
+            if self.steps_list.currentRow() == row:
+                self._on_step_selected(row)
+
+        if event_name == "PARSE_INVALID":
+            retry = event.get("retry")
+            if retry is not None:
+                self.lbl_step_status.setText(f"retry: {retry}/{25}")
+        else:
+            self.lbl_step_status.setText(f"step: {len(self._agent_steps)}/{25}")
 
     def _create_session(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -356,6 +506,11 @@ class PageCode(QWidget):
             return
         self._agent_step = 0
         self.lbl_step_status.setText("step: 0/25")
+        self._agent_steps.clear()
+        self._agent_step_index_by_id.clear()
+        self._current_agent_step_id = None
+        self.steps_list.clear()
+        self.step_detail.clear()
         self._set_send_button_state(True)
         self.input.clear()
         user_idx = self._add_message("user", txt)
@@ -479,6 +634,11 @@ class PageCode(QWidget):
         self._active_assistant_index = None
         self._agent_step = 0
         self.lbl_step_status.setText("step: 0/25")
+        self._agent_steps.clear()
+        self._agent_step_index_by_id.clear()
+        self._current_agent_step_id = None
+        self.steps_list.clear()
+        self.step_detail.clear()
         self.sig_sync_history.emit([])
 
     def _switch_controls_tab(self, index, checked):

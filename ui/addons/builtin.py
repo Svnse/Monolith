@@ -230,7 +230,7 @@ def code_factory(ctx: AddonContext):
         lambda ek, m: w.append_trace(f"[{ek}] {m}" if ek != engine_key else m)
     )
     ctx.guard.sig_agent_event.connect(
-        lambda ek, event: w.append_trace(f"[agent-event] {event}") if ek == engine_key else None
+        lambda ek, event: w.append_agent_event(event) if ek == engine_key else None
     )
     ctx.guard.sig_finished.connect(w.on_guard_finished)
 
