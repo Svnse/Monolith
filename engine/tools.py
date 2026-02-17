@@ -193,12 +193,14 @@ def run_cmd(args: dict) -> ToolResult:
 
     if pty_enabled:
         idle_timeout = int(os.environ.get("MONOLITH_PTY_IDLE_TIMEOUT", "300") or "300")
-        manager = get_pty_session_manager(workspace_root=WORKSPACE_ROOT, idle_timeout_seconds=idle_timeout)
-        exit_code, stdout, error = manager.run(branch_id=branch_id, command=command, timeout=timeout)
-        if error is not None:
-            return ToolResult(False, "", error)
-        payload = f"exit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n"
-        return ToolResult(exit_code == 0, payload)
+        try:
+            manager = get_pty_session_manager(workspace_root=WORKSPACE_ROOT, idle_timeout_seconds=idle_timeout)
+            exit_code, stdout, error = manager.run(branch_id=branch_id, command=command, timeout=timeout)
+            if error is None:
+                payload = f"exit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n"
+                return ToolResult(exit_code == 0, payload)
+        except RuntimeError:
+            pass
 
     try:
         completed = subprocess.run(
