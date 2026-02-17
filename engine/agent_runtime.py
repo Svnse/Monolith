@@ -48,6 +48,10 @@ class AgentRuntime:
         self._should_stop = should_stop or (lambda: False)
         self._ledger = AppendOnlyLedger()
         self._event_step_id = 0
+        self._runtime_node_id = 0
+        self._runtime_action_id = 0
+        self._runtime_branch_id = "main"
+        self._runtime_leaf_node_id: str | None = None
 
     def _emit(self, payload: dict[str, Any]) -> None:
         self._emit_event(payload)
@@ -55,6 +59,31 @@ class AgentRuntime:
     def _next_step_id(self) -> int:
         self._event_step_id += 1
         return self._event_step_id
+
+    def _next_runtime_node_id(self) -> str:
+        self._runtime_node_id += 1
+        return f"n{self._runtime_node_id}"
+
+    def _next_runtime_action_id(self) -> str:
+        self._runtime_action_id += 1
+        return f"a{self._runtime_action_id}"
+
+    def _emit_runtime_node(self, *, role: str, content: str) -> str:
+        node_id = self._next_runtime_node_id()
+        parent_node_id = self._runtime_leaf_node_id
+        self._runtime_leaf_node_id = node_id
+        self._emit(
+            {
+                "event": "NODE_CREATED",
+                "created_node_id": node_id,
+                "created_parent_node_id": parent_node_id,
+                "created_branch_id": self._runtime_branch_id,
+                "role": role,
+                "content": content,
+                "timestamp": time.time(),
+            }
+        )
+        return node_id
 
     def _emit_step_start(self, *, label: str, kind: str, tool: str | None = None, arguments: dict[str, Any] | None = None) -> int:
         step_id = self._next_step_id()
@@ -184,6 +213,9 @@ class AgentRuntime:
 
     def run(self, messages: list[dict[str, Any]]) -> tuple[bool, str, list[dict[str, Any]]]:
         self._event_step_id = 0
+        self._runtime_node_id = 0
+        self._runtime_action_id = 0
+        self._runtime_leaf_node_id = None
         history: list[AgentMessage] = []
         for msg in messages:
             role = msg.get("role")
@@ -191,6 +223,7 @@ class AgentRuntime:
                 history.append(AgentMessage(role=role, content=msg.get("content")))
                 if role == "user":
                     self._ledger.append(actor="user", event_type="input", payload={"content": msg.get("content", "")})
+                    self._emit_runtime_node(role="user", content=str(msg.get("content") or ""))
 
         tools = self._capability_manager.tool_schemas()
         self._ledger.append(
@@ -232,6 +265,7 @@ class AgentRuntime:
             if assistant.content:
                 self._emit({"event": "AGENT_THOUGHT", "step_id": llm_step, "thought": assistant.content, "timestamp": time.time()})
             self._emit({"event": "AGENT_MESSAGE", "message": self._serialize(assistant), "timestamp": time.time()})
+            self._emit_runtime_node(role="assistant", content=str(assistant.content or ""))
             self._emit_step_end(llm_step, status="ok")
 
             # ROUTER
@@ -248,6 +282,14 @@ class AgentRuntime:
             for call in assistant.tool_calls:
                 steps += 1
                 call_step = self._emit_step_start(label=f"Tool call: {call.name}", kind="tool_call", tool=call.name, arguments=call.arguments)
+                action = {
+                    "action_id": self._next_runtime_action_id(),
+                    "tool": call.name,
+                    "arguments": dict(call.arguments),
+                    "status": "pending",
+                    "step_id": call_step,
+                }
+                self._emit({"event": "ACTION_QUEUED", "action": dict(action), "timestamp": time.time()})
                 self._ledger.append(
                     actor="assistant",
                     event_type="tool_invocation",
@@ -262,6 +304,8 @@ class AgentRuntime:
                     "tool_call_id": call.id,
                     "timestamp": time.time(),
                 })
+                action["status"] = "running"
+                self._emit({"event": "ACTION_STARTED", "action": dict(action), "timestamp": time.time()})
 
                 validation = self._validate_call(call)
                 if not validation.get("ok", False):
@@ -290,6 +334,9 @@ class AgentRuntime:
                 call_error = observation_payload.get("error")
                 if not isinstance(call_error, str):
                     call_error = None
+                action["status"] = "done" if call_status == "ok" else "error"
+                action["result"] = observation_payload if observation_payload else self._serialize(observation)
+                self._emit({"event": "ACTION_FINISHED", "action": dict(action), "timestamp": time.time()})
                 self._emit_step_end(call_step, status=call_status, error=call_error)
 
                 result_step = self._emit_step_start(label=f"Tool result: {call.name}", kind="tool_result", tool=call.name)
@@ -302,6 +349,7 @@ class AgentRuntime:
                 })
                 self._emit_step_end(result_step, status=call_status, error=call_error)
                 self._emit({"event": "TOOL_OBSERVATION", "message": self._serialize(observation), "timestamp": time.time()})
+                self._emit_runtime_node(role="tool", content=observation.content or "")
 
     def runtime_command(self, command: str, payload: dict | None = None) -> dict:
         if command == "ledger":
