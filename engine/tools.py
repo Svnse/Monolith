@@ -1,0 +1,225 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from fnmatch import fnmatch
+from pathlib import Path
+import re
+import subprocess
+from typing import Callable
+
+WORKSPACE_ROOT: Path | None = None
+
+
+def set_workspace_root(path: str | Path | None) -> None:
+    global WORKSPACE_ROOT
+    WORKSPACE_ROOT = Path(path).expanduser().resolve() if path else None
+
+
+def _enforce_workspace_boundary(resolved: Path) -> Path:
+    if WORKSPACE_ROOT is not None and not resolved.is_relative_to(WORKSPACE_ROOT):
+        raise ValueError(f"path outside workspace boundary: {resolved}")
+    return resolved
+
+
+@dataclass
+class ToolResult:
+    ok: bool
+    content: str
+    error: str | None = None
+
+    def to_message(self) -> dict:
+        return {
+            "ok": self.ok,
+            "content": self.content,
+            "error": self.error,
+        }
+
+
+def _resolve_path(args: dict, default: str = ".") -> Path:
+    raw = str(args.get("path", default))
+    resolved = Path(raw).expanduser().resolve()
+    return _enforce_workspace_boundary(resolved)
+
+
+def read_file(args: dict) -> ToolResult:
+    try:
+        path = _resolve_path(args)
+    except ValueError as exc:
+        return ToolResult(False, "", str(exc))
+    if not path.exists() or not path.is_file():
+        return ToolResult(False, "", f"file not found: {path}")
+
+    offset = int(args.get("offset", 0) or 0)
+    limit = args.get("limit")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return ToolResult(False, "", f"failed to read file: {exc}")
+
+    lines = text.splitlines()
+    if offset < 0:
+        offset = 0
+    if limit is not None:
+        try:
+            limit = max(0, int(limit))
+            lines = lines[offset : offset + limit]
+        except Exception:
+            lines = lines[offset:]
+    else:
+        lines = lines[offset:]
+    return ToolResult(True, "\n".join(lines))
+
+
+def write_file(args: dict) -> ToolResult:
+    try:
+        path = _resolve_path(args)
+    except ValueError as exc:
+        return ToolResult(False, "", str(exc))
+    content = args.get("content")
+    if not isinstance(content, str):
+        return ToolResult(False, "", "content must be a string")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        return ToolResult(False, "", f"failed to write file: {exc}")
+    return ToolResult(True, f"wrote {len(content)} chars to {path}")
+
+
+def list_dir(args: dict) -> ToolResult:
+    try:
+        path = _resolve_path(args)
+    except ValueError as exc:
+        return ToolResult(False, "", str(exc))
+    pattern = args.get("pattern")
+    if not path.exists() or not path.is_dir():
+        return ToolResult(False, "", f"directory not found: {path}")
+    try:
+        entries = sorted(path.iterdir(), key=lambda p: p.name.lower())
+        out = []
+        for entry in entries:
+            name = entry.name + ("/" if entry.is_dir() else "")
+            if pattern and not fnmatch(name, str(pattern)):
+                continue
+            out.append(name)
+        return ToolResult(True, "\n".join(out))
+    except Exception as exc:
+        return ToolResult(False, "", f"failed to list directory: {exc}")
+
+
+def grep_search(args: dict) -> ToolResult:
+    pattern = args.get("pattern")
+    if not isinstance(pattern, str) or not pattern:
+        return ToolResult(False, "", "pattern is required")
+
+    try:
+        root = _resolve_path(args)
+    except ValueError as exc:
+        return ToolResult(False, "", str(exc))
+    if root.is_file():
+        files = [root]
+    elif root.is_dir():
+        files = [p for p in root.rglob("*") if p.is_file()]
+    else:
+        return ToolResult(False, "", f"path not found: {root}")
+
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        return ToolResult(False, "", f"invalid regex: {exc}")
+
+    matches = []
+    for file_path in files:
+        try:
+            for idx, line in enumerate(file_path.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1):
+                if regex.search(line):
+                    matches.append(f"{file_path}:{idx}:{line}")
+        except Exception:
+            continue
+
+    return ToolResult(True, "\n".join(matches) if matches else "")
+
+
+_BLOCKED_CMD_PATTERNS = (
+    "rm -rf /",
+    "mkfs",
+    "shutdown",
+    "reboot",
+    "poweroff",
+)
+
+
+def run_cmd(args: dict) -> ToolResult:
+    command = args.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return ToolResult(False, "", "command is required")
+
+    lowered = command.lower()
+    if any(pat in lowered for pat in _BLOCKED_CMD_PATTERNS):
+        return ToolResult(False, "", "command blocked by safety policy")
+
+    timeout = args.get("timeout", 30)
+    try:
+        timeout = max(1, int(timeout))
+    except Exception:
+        timeout = 30
+
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(WORKSPACE_ROOT) if WORKSPACE_ROOT is not None else None,
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult(False, "", f"command timed out after {timeout}s")
+    except Exception as exc:
+        return ToolResult(False, "", f"command failed to start: {exc}")
+
+    payload = (
+        f"exit_code: {completed.returncode}\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
+    )
+    return ToolResult(completed.returncode == 0, payload)
+
+
+def apply_patch(args: dict) -> ToolResult:
+    try:
+        path = _resolve_path(args)
+    except ValueError as exc:
+        return ToolResult(False, "", str(exc))
+    old = args.get("old")
+    new = args.get("new")
+    if not isinstance(old, str) or not isinstance(new, str):
+        return ToolResult(False, "", "old and new must be strings")
+    if not path.exists() or not path.is_file():
+        return ToolResult(False, "", f"file not found: {path}")
+
+    try:
+        current = path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return ToolResult(False, "", f"failed to read file: {exc}")
+
+    if old not in current:
+        return ToolResult(False, "", "old text not found in file")
+
+    updated = current.replace(old, new, 1)
+    try:
+        path.write_text(updated, encoding="utf-8")
+    except Exception as exc:
+        return ToolResult(False, "", f"failed to write patched file: {exc}")
+
+    return ToolResult(True, f"applied patch in {path}")
+
+
+TOOL_REGISTRY: dict[str, Callable[[dict], ToolResult]] = {
+    "read_file": read_file,
+    "write_file": write_file,
+    "list_dir": list_dir,
+    "grep_search": grep_search,
+    "run_cmd": run_cmd,
+    "apply_patch": apply_patch,
+}
