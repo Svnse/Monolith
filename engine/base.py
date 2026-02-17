@@ -40,6 +40,9 @@ class EnginePort(Protocol):
     def generate(self, payload: dict) -> None:
         ...
 
+    def runtime_command(self, command: str, payload: dict | None = None) -> dict:
+        ...
+
     def stop_generation(self) -> None:
         ...
 

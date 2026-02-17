@@ -1,3 +1,5 @@
+from threading import Lock
+
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
 
 from core.llm_config import AGENT_PROMPT, MASTER_PROMPT, load_config
@@ -53,6 +55,7 @@ class GeneratorWorker(QThread):
         temp,
         top_p,
         max_tokens,
+        runtime: AgentRuntime | None = None,
         agent_mode=False,
     ):
         super().__init__()
@@ -62,7 +65,7 @@ class GeneratorWorker(QThread):
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.agent_mode = bool(agent_mode)
-        self.runtime = None
+        self.runtime = runtime
 
     def _extract_text(self, response: dict) -> str:
         choices = response.get("choices", [])
@@ -104,33 +107,6 @@ class GeneratorWorker(QThread):
             if isinstance(token, str) and token:
                 self.token.emit(token)
 
-    def runtime_command(self, payload: dict) -> dict:
-        runtime = getattr(self, "runtime", None)
-        if runtime is None:
-            return {"ok": False, "error": "runtime unavailable"}
-        action = payload.get("action") if isinstance(payload, dict) else None
-        try:
-            if action == "fork":
-                return {"ok": True, "branch_id": runtime.fork(str(payload.get("node_id")))}
-            if action == "resume":
-                runtime.resume(str(payload.get("node_id")))
-                return {"ok": True}
-            if action == "prune":
-                runtime.prune(str(payload.get("branch_id")))
-                return {"ok": True}
-            if action == "compare":
-                return {"ok": True, "comparison": runtime.compare(str(payload.get("branch_a")), str(payload.get("branch_b")))}
-            if action == "action_queue":
-                return {"ok": True, "queue": runtime.action_queue_update(payload)}
-            if action == "capability_update":
-                return runtime.update_capability(payload)
-            if action == "capability_revoke":
-                return {"ok": runtime.revoke_capability(str(payload.get("token_id")), payload.get("branch_id"))}
-            if action == "ledger":
-                return {"ok": True, "ledger": runtime.capability_ledger()}
-            return {"ok": False, "error": f"unknown runtime action: {action}"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
 
     def run(self):
         self.trace.emit(
@@ -141,12 +117,10 @@ class GeneratorWorker(QThread):
         loop_history = list(self.messages)
 
         try:
-            if self.agent_mode:
-                self.runtime = AgentRuntime(
-                    llm_call=self._chat_once_text,
-                    emit_event=self._emit_runtime_event,
-                    should_stop=self.isInterruptionRequested,
-                )
+            if self.agent_mode and self.runtime is not None:
+                self.runtime._llm_call = self._chat_once_text
+                self.runtime._should_stop = self.isInterruptionRequested
+                self.runtime._emit_event = self._emit_runtime_event
                 completed, assistant_text, loop_history = self.runtime.run(self.messages)
             else:
                 assistant_text = self._chat_once_text(self.messages)
@@ -194,6 +168,8 @@ class LLMEngine(QObject):
         self.gguf_path: str | None = None
         self._worker_seed_count: int = 0
         self._worker_agent_mode: bool = False
+        self._runtime_lock = Lock()
+        self._runtime = AgentRuntime(llm_call=lambda _m: "", emit_event=self.sig_agent_event.emit)
 
     def set_ctx_limit(self, payload: dict) -> None:
         value = payload.get("ctx_limit") if isinstance(payload, dict) else None
@@ -389,6 +365,7 @@ class LLMEngine(QObject):
             temp,
             top_p,
             max_tokens,
+            runtime=self._runtime if self._worker_agent_mode else None,
             agent_mode=self._worker_agent_mode,
         )
         self.worker.token.connect(self.sig_token)
@@ -399,11 +376,11 @@ class LLMEngine(QObject):
         self.worker.start()
 
 
-    def runtime_command(self, payload: dict) -> None:
-        result = {"ok": False, "error": "no worker"}
-        if self.worker and self.worker.isRunning():
-            result = self.worker.runtime_command(payload if isinstance(payload, dict) else {})
-        self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": payload, "result": result})
+    def runtime_command(self, command: str, payload: dict | None = None) -> dict:
+        request = payload if isinstance(payload, dict) else {}
+        result = self._runtime.runtime_command(command, request)
+        self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": request, "result": result})
+        return result
 
     def stop_generation(self):
         if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():

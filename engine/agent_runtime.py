@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+from pathlib import Path
 import re
+import threading
 import time
 from enum import Enum
 from typing import Callable
@@ -17,11 +21,15 @@ MAX_AGENT_STEPS = 25
 MAX_AGENT_TIMEOUT = 120
 MAX_PARSE_RETRIES = 2
 CAPABILITY_DECISION_TIMEOUT = 300
+PROTOCOL_COMPLIANCE_THRESHOLD = float(os.getenv("MONOLITH_PROTOCOL_COMPLIANCE_THRESHOLD", "0.8"))
 
-FLEXIBLE_OUTPUT_PROMPT = (
-    "You may answer normally in freeform text. "
-    "If you want a tool, include exactly one JSON object with shape "
-    '{"tool": "<registered_tool_name>", "arguments": {...}}.'
+V4_PROTOCOL_PROMPT = (
+    "Respond only using the v4 protocol blocks. "
+    "Put private reasoning in <REASONING>...</REASONING>. "
+    "Put each tool call in <ACTION>{\"tool\":\"<registered_tool_name>\",\"arguments\":{...}}</ACTION>. "
+    "Put capability escalations in <CAPABILITY_REQUEST>{...}</CAPABILITY_REQUEST>. "
+    "Raw JSON outside these blocks is non-compliant. "
+    "If no tool is needed, return a final user-facing response and do not emit <ACTION>."
 )
 
 PROTOCOL_BLOCK_PATTERN = re.compile(
@@ -56,11 +64,20 @@ class AgentRuntime:
         self._state = AgentState.IDLE
         self._step_id = 0
         self._tree = ExecutionTree()
+        self._tree_path = Path(WORKSPACE_ROOT) / ".monolith" / "execution_tree.json"
         self._active_branch_id = "main"
         self._active_leaf_node_id: str | None = None
         self._capability_decisions: dict[str, dict] = {}
+        self._capability_waiters: dict[str, threading.Event] = {}
         self._pending_actions: list[dict] = []
         self._action_counter = 0
+        try:
+            loaded = ExecutionTree.load(self._tree_path)
+            self._tree = loaded
+            self._active_leaf_node_id = self._tree.branch_leaf(self._active_branch_id)
+        except Exception:
+            pass
+
 
     def _next_step_id(self) -> int:
         self._step_id += 1
@@ -78,8 +95,36 @@ class AgentRuntime:
         event.update(self._lineage_payload(node_id=node_id))
         self._emit_event(event)
 
+    def _save_tree(self) -> None:
+        try:
+            self._tree.save(self._tree_path)
+        except Exception:
+            return
+
+    def _workspace_snapshot(self) -> dict:
+        manifest: dict[str, str] = {}
+        files: dict[str, str] = {}
+        root = Path(WORKSPACE_ROOT)
+        if not root.exists():
+            return {"workspace_manifest": manifest, "workspace_files": files}
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            if rel.startswith(".monolith/checkpoints/"):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+            except Exception:
+                content = ""
+            manifest[rel] = hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+            files[rel] = content
+        return {"workspace_manifest": manifest, "workspace_files": files}
+
     def _append_node(self, role: str, content: str, **extra):
-        node = self._tree.append_node(self._active_branch_id, role, content, **extra)
+        payload = dict(extra)
+        payload.setdefault("metadata", self._workspace_snapshot())
+        node = self._tree.append_node(self._active_branch_id, role, content, **payload)
         self._active_leaf_node_id = node.node_id
         self._emit(
             {
@@ -93,6 +138,7 @@ class AgentRuntime:
             },
             node_id=node.node_id,
         )
+        self._save_tree()
         return node
 
     def fork(self, node_id: str) -> str:
@@ -113,6 +159,7 @@ class AgentRuntime:
             },
             node_id=node_id,
         )
+        self._save_tree()
         return branch.branch_id
 
     def resume(self, leaf_node_id: str) -> None:
@@ -127,6 +174,7 @@ class AgentRuntime:
             },
             node_id=leaf_node_id,
         )
+        self._save_tree()
 
     def prune(self, branch_id: str) -> None:
         self._tree.prune(branch_id)
@@ -145,6 +193,7 @@ class AgentRuntime:
                 "timestamp": time.time(),
             }
         )
+        self._save_tree()
 
     def compare(self, branch_a: str, branch_b: str) -> dict:
         result = self._tree.compare(branch_a, branch_b)
@@ -254,6 +303,9 @@ class AgentRuntime:
             "constraints": constraints or {},
             "reason": reason,
         }
+        waiter = self._capability_waiters.get(request_id)
+        if waiter is not None:
+            waiter.set()
 
     def revoke_capability(self, token_id: str, branch_id: str | None = None) -> bool:
         target_branch = branch_id or self._active_branch_id
@@ -267,6 +319,52 @@ class AgentRuntime:
             }
         )
         return revoked
+
+    def compliance_rate(self) -> float:
+        return self._tree.compliance_rate()
+
+    def runtime_command(self, command: str, payload: dict | None = None) -> dict:
+        req = payload or {}
+        try:
+            if command == "fork":
+                return {"ok": True, "branch_id": self.fork(str(req.get("node_id")))}
+            if command == "resume":
+                self.resume(str(req.get("node_id")))
+                return {"ok": True}
+            if command == "prune":
+                self.prune(str(req.get("branch_id")))
+                return {"ok": True}
+            if command == "compare":
+                return {"ok": True, "comparison": self.compare(str(req.get("branch_a")), str(req.get("branch_b")))}
+            if command == "diff_nodes":
+                return {"ok": True, "diff": self._tree.diff_nodes(str(req.get("node_a")), str(req.get("node_b")))}
+            if command == "action_queue":
+                return {"ok": True, "queue": self.action_queue_update(req)}
+            if command == "capability_update":
+                return self.update_capability(req)
+            if command == "capability_revoke":
+                return {"ok": self.revoke_capability(str(req.get("token_id")), req.get("branch_id"))}
+            if command == "capability_decision":
+                request_id = str(req.get("request_id") or req.get("token_id") or "")
+                if not request_id:
+                    return {"ok": False, "error": "request_id is required"}
+                self.apply_capability_decision(
+                    request_id,
+                    approved=bool(req.get("approved", False)),
+                    scope=req.get("scope") if isinstance(req.get("scope"), str) else None,
+                    path_pattern=str(req.get("path_pattern") or "**"),
+                    ttl_seconds=req.get("ttl_seconds") if isinstance(req.get("ttl_seconds"), int) else None,
+                    constraints=req.get("constraints") if isinstance(req.get("constraints"), dict) else None,
+                    reason=req.get("reason") if isinstance(req.get("reason"), str) else None,
+                )
+                return {"ok": True}
+            if command == "ledger":
+                return {"ok": True, "ledger": self.capability_ledger()}
+            if command == "compliance_rate":
+                return {"ok": True, "rate": self.compliance_rate()}
+            return {"ok": False, "error": f"unknown runtime action: {command}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def _emit_step_start(self, step_id: int, label: str, kind: str, **extra) -> None:
         payload = {
@@ -294,7 +392,7 @@ class AgentRuntime:
         if self._active_leaf_node_id is None:
             self._active_leaf_node_id = self._tree.branch_leaf(self._active_branch_id)
 
-        prompt_node = self._append_node("system", FLEXIBLE_OUTPUT_PROMPT, compliance={"prompt_injected": True})
+        prompt_node = self._append_node("system", V4_PROTOCOL_PROMPT, compliance={"prompt_injected": True})
         loop_messages = self._tree.build_messages_to_node(prompt_node.node_id)
 
         self._state = AgentState.IDLE
@@ -395,7 +493,7 @@ class AgentRuntime:
                 continue
 
             actions_to_execute = protocol_actions
-            if not actions_to_execute:
+            if not blocks and not actions_to_execute:
                 parsed = self._extract_first_json_block(raw)
                 if parsed is not None:
                     protocol_compliant = False
@@ -447,6 +545,7 @@ class AgentRuntime:
                     reasoning=raw,
                     compliance={"protocol_compliant": protocol_compliant, "terminal": True},
                 )
+                self._emit_protocol_metrics()
                 loop_messages = self._tree.build_messages_to_node(assistant_node.node_id)
                 final_step_id = self._next_step_id()
                 self._emit_step_start(final_step_id, "Final Output", "final")
@@ -463,6 +562,7 @@ class AgentRuntime:
                 reasoning=raw,
                 compliance={"protocol_compliant": protocol_compliant, "terminal": False},
             )
+            self._emit_protocol_metrics()
             loop_messages = self._tree.build_messages_to_node(assistant_node.node_id)
 
             for action in actions_to_execute:
@@ -547,15 +647,16 @@ class AgentRuntime:
             }
         )
 
-        started = time.monotonic()
-        while request_id not in self._capability_decisions:
-            if self._should_stop():
-                return {"ok": False, "error": "capability request interrupted"}
-            if time.monotonic() - started > CAPABILITY_DECISION_TIMEOUT:
-                return {"ok": False, "error": "capability decision timeout"}
-            time.sleep(0.1)
+        waiter = threading.Event()
+        self._capability_waiters[request_id] = waiter
+        if not waiter.wait(timeout=CAPABILITY_DECISION_TIMEOUT):
+            self._capability_waiters.pop(request_id, None)
+            return {"ok": False, "error": "capability decision timeout"}
 
-        decision = self._capability_decisions.pop(request_id)
+        decision = self._capability_decisions.pop(request_id, None)
+        self._capability_waiters.pop(request_id, None)
+        if decision is None:
+            return {"ok": False, "error": "capability request interrupted"}
         if not decision.get("approved", False):
             self._emit(
                 {
@@ -696,6 +797,12 @@ class AgentRuntime:
             )
         except Exception:
             return
+
+    def _emit_protocol_metrics(self) -> None:
+        rate = self.compliance_rate()
+        self._emit({"event": "PROTOCOL_COMPLIANCE_RATE", "rate": rate, "threshold": PROTOCOL_COMPLIANCE_THRESHOLD, "timestamp": time.time()})
+        if rate < PROTOCOL_COMPLIANCE_THRESHOLD:
+            self._emit({"event": "PROTOCOL_REGRESSION_WARNING", "rate": rate, "threshold": PROTOCOL_COMPLIANCE_THRESHOLD, "timestamp": time.time()})
 
     def _contains_json_candidate(self, text: str) -> bool:
         return bool(re.search(r"\{.*?\}", text, flags=re.DOTALL))

@@ -168,7 +168,11 @@ class MonoGuard(QObject):
         self.active_tasks[task.target] = task
         task.status = TaskStatus.RUNNING
 
-        if task.command in PAYLOAD_COMMANDS:
+        if task.command == "runtime_command":
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            command = str(payload.get("action") or "")
+            handler(command, payload)
+        elif task.command in PAYLOAD_COMMANDS:
             handler(task.payload)
         else:
             handler()

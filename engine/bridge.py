@@ -15,7 +15,7 @@ class EngineBridge(QObject):
 
     def __init__(self, impl: EnginePort):
         super().__init__()
-        self.impl = impl
+        self.engine = impl
         self._gen_id = 0
         self._active_gid = 0
 
@@ -56,32 +56,35 @@ class EngineBridge(QObject):
             self.sig_agent_event.emit(event)
 
     def set_history(self, payload: dict) -> None:
-        if hasattr(self.impl, "set_history"):
-            self.impl.set_history(payload)
+        if hasattr(self.engine, "set_history"):
+            self.engine.set_history(payload)
 
     def set_model_path(self, payload: dict) -> None:
-        if hasattr(self.impl, "set_model_path"):
-            self.impl.set_model_path(payload)
+        if hasattr(self.engine, "set_model_path"):
+            self.engine.set_model_path(payload)
 
     def set_ctx_limit(self, payload: dict) -> None:
-        if hasattr(self.impl, "set_ctx_limit"):
-            self.impl.set_ctx_limit(payload)
+        if hasattr(self.engine, "set_ctx_limit"):
+            self.engine.set_ctx_limit(payload)
 
     def load_model(self) -> None:
-        self.impl.load_model()
+        self.engine.load_model()
 
     def unload_model(self) -> None:
-        self.impl.unload_model()
+        self.engine.unload_model()
 
     def generate(self, payload: dict) -> None:
         self._gen_id += 1
         self._active_gid = self._gen_id
-        self.impl.generate(payload)
+        self.engine.generate(payload)
+
+    def runtime_command(self, command: str, payload: dict | None = None) -> dict:
+        return self.engine.runtime_command(command, payload)
 
     def stop_generation(self) -> None:
         self._gen_id += 1
         self._active_gid = 0
-        self.impl.stop_generation()
+        self.engine.stop_generation()
 
     def shutdown(self) -> None:
-        self.impl.shutdown()
+        self.engine.shutdown()

@@ -8,6 +8,9 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QButtonGroup,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -73,6 +76,8 @@ class PageCode(QWidget):
         self._runtime_actions: dict[str, dict] = {}
         self._runtime_tokens: dict[str, dict] = {}
         self._runtime_checkpoints: list[dict] = []
+        self._pending_capability_requests: dict[str, dict] = {}
+        self._protocol_compliance_rate: float = 1.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -154,6 +159,9 @@ class PageCode(QWidget):
         self.lbl_step_status.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
         status_row.addWidget(self.lbl_workspace_status)
         status_row.addStretch()
+        self.lbl_protocol = QLabel("protocol: 100.0%")
+        self.lbl_protocol.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
+        status_row.addWidget(self.lbl_protocol)
         status_row.addWidget(self.lbl_step_status)
         chat_layout.addLayout(status_row)
 
@@ -274,6 +282,15 @@ class PageCode(QWidget):
         compare_row.addWidget(self.compare_a); compare_row.addWidget(self.compare_b); compare_row.addWidget(btn_compare)
         compare_layout.addLayout(compare_row)
         self.compare_detail = QTextEdit(); self.compare_detail.setReadOnly(True); compare_layout.addWidget(self.compare_detail)
+
+        diff_row = QHBoxLayout()
+        self.diff_node_a = QComboBox(); self.diff_node_b = QComboBox(); btn_diff = MonoButton("DIFF NODES")
+        btn_diff.clicked.connect(self._diff_nodes)
+        diff_row.addWidget(self.diff_node_a); diff_row.addWidget(self.diff_node_b); diff_row.addWidget(btn_diff)
+        compare_layout.addLayout(diff_row)
+        self.diff_files = QListWidget(); compare_layout.addWidget(self.diff_files)
+        self.diff_preview = QTextEdit(); self.diff_preview.setReadOnly(True); compare_layout.addWidget(self.diff_preview)
+        self.diff_files.currentRowChanged.connect(self._on_diff_file_selected)
 
         self.runtime_tabs.addTab(tree_tab, "Execution Tree")
         self.runtime_tabs.addTab(action_tab, "Action Queue")
@@ -561,10 +578,25 @@ class PageCode(QWidget):
         elif event_name == "BRANCH_COMPARED":
             comparison = event.get("comparison", {})
             self.compare_detail.setPlainText(json.dumps(comparison, indent=2, ensure_ascii=False))
+        elif event_name == "CAPABILITY_REQUEST":
+            req = event.get("request") if isinstance(event.get("request"), dict) else {}
+            req_id = str(event.get("request_id") or req.get("request_id") or "")
+            if req_id:
+                self._pending_capability_requests[req_id] = req
+                self._show_capability_approval(req_id, req)
+        elif event_name == "PROTOCOL_COMPLIANCE_RATE":
+            rate = float(event.get("rate", 1.0) or 1.0)
+            self._protocol_compliance_rate = rate
+            self.lbl_protocol.setText(f"protocol: {rate * 100:.1f}%")
+        elif event_name == "PROTOCOL_REGRESSION_WARNING":
+            rate = float(event.get("rate", 0.0) or 0.0)
+            self.append_trace(f"protocol regression warning: {rate * 100:.1f}%")
         elif event_name == "RUNTIME_COMMAND_RESULT":
             result = event.get("result", {})
             if isinstance(result, dict) and isinstance(result.get("comparison"), dict):
                 self.compare_detail.setPlainText(json.dumps(result.get("comparison"), indent=2, ensure_ascii=False))
+            if isinstance(result, dict) and isinstance(result.get("diff"), dict):
+                self._render_node_diff(result.get("diff"))
 
         self._refresh_runtime_views()
 
@@ -688,6 +720,16 @@ class PageCode(QWidget):
             item.setData(Qt.UserRole, token_id)
             self.capability_list.addItem(item)
 
+        node_ids = sorted(self._runtime_nodes.keys())
+        for combo in (self.diff_node_a, self.diff_node_b):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(node_ids)
+            if current in node_ids:
+                combo.setCurrentText(current)
+            combo.blockSignals(False)
+
         branch_ids = sorted({node.get("branch_id") for node in self._runtime_nodes.values() if node.get("branch_id")})
         for combo in (self.compare_a, self.compare_b):
             current = combo.currentText()
@@ -697,6 +739,88 @@ class PageCode(QWidget):
             if current in branch_ids:
                 combo.setCurrentText(current)
             combo.blockSignals(False)
+
+    def _show_capability_approval(self, request_id: str, request: dict):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Capability Request")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        lbl_scope = QLabel(str(request.get("scope", "read")))
+        lbl_pattern = QLabel(str(request.get("path_pattern", "**")))
+        lbl_reason = QLabel(str(request.get("reason", "")))
+        scope_override = QLineEdit()
+        scope_override.setPlaceholderText("Optional override scope")
+        form.addRow("Scope:", lbl_scope)
+        form.addRow("Path:", lbl_pattern)
+        form.addRow("Reason:", lbl_reason)
+        form.addRow("Override Scope:", scope_override)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No)
+        buttons.button(QDialogButtonBox.Yes).setText("Approve")
+        buttons.button(QDialogButtonBox.No).setText("Deny")
+        layout.addWidget(buttons)
+
+        def _approve():
+            payload = {
+                "action": "capability_decision",
+                "request_id": request_id,
+                "approved": True,
+                "path_pattern": str(request.get("path_pattern", "**")),
+                "reason": "approved from UI",
+            }
+            if scope_override.text().strip():
+                payload["scope"] = scope_override.text().strip()
+            self.sig_runtime_command.emit(payload)
+            dialog.accept()
+
+        def _deny():
+            self.sig_runtime_command.emit({
+                "action": "capability_decision",
+                "request_id": request_id,
+                "approved": False,
+                "reason": "denied from UI",
+            })
+            dialog.reject()
+
+        buttons.accepted.connect(_approve)
+        buttons.rejected.connect(_deny)
+        dialog.show()
+
+    def _diff_nodes(self):
+        node_a = self.diff_node_a.currentText()
+        node_b = self.diff_node_b.currentText()
+        if not node_a or not node_b:
+            return
+        self.sig_runtime_command.emit({"action": "diff_nodes", "node_a": node_a, "node_b": node_b})
+
+    def _render_node_diff(self, diff: dict):
+        self._last_node_diff = diff
+        self.diff_files.clear()
+        for f in diff.get("added_files", []):
+            self.diff_files.addItem(QListWidgetItem(f"+ {f}"))
+        for f in diff.get("removed_files", []):
+            self.diff_files.addItem(QListWidgetItem(f"- {f}"))
+        for f in diff.get("modified_files", []):
+            self.diff_files.addItem(QListWidgetItem(f"~ {f}"))
+        if self.diff_files.count() > 0:
+            self.diff_files.setCurrentRow(0)
+        else:
+            self.diff_preview.setPlainText("No file differences")
+
+    def _on_diff_file_selected(self, row: int):
+        diff = getattr(self, "_last_node_diff", {})
+        if row < 0:
+            self.diff_preview.clear()
+            return
+        item = self.diff_files.item(row)
+        if item is None:
+            return
+        label = item.text()
+        path = label[2:] if len(label) > 2 else label
+        if label.startswith("~ "):
+            self.diff_preview.setPlainText(diff.get("modified_diffs", {}).get(path, ""))
+        else:
+            self.diff_preview.setPlainText(label)
 
     def _create_session(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -770,6 +894,9 @@ class PageCode(QWidget):
         self._runtime_checkpoints.clear()
         self.timeline_list.clear()
         self.compare_detail.clear()
+        self.diff_files.clear()
+        self.diff_preview.clear()
+        self.lbl_protocol.setText("protocol: 100.0%")
         self._refresh_runtime_views()
         self._set_send_button_state(True)
         self.input.clear()
@@ -906,6 +1033,9 @@ class PageCode(QWidget):
         self._runtime_checkpoints.clear()
         self.timeline_list.clear()
         self.compare_detail.clear()
+        self.diff_files.clear()
+        self.diff_preview.clear()
+        self.lbl_protocol.setText("protocol: 100.0%")
         self._refresh_runtime_views()
         self.sig_sync_history.emit([])
 

@@ -68,6 +68,7 @@ class CheckpointStore:
             payload = {
                 "metadata": asdict(metadata),
                 "workspace_manifest": manifest,
+                "manifest_hash": self._hash_manifest(manifest),
             }
             snapshot_path = self.snapshots_dir / f"{checkpoint_id}.json"
             snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -100,6 +101,54 @@ class CheckpointStore:
     def mark_branch_pruned(self, branch_id: str) -> dict[str, int]:
         return self.garbage_collect(pruned_branches=[branch_id])
 
+    def restore_checkpoint(self, checkpoint_id: str, workspace_root: Path) -> bool:
+        with self._lock:
+            index = self._load_index()
+            entry = index.get("checkpoints", {}).get(checkpoint_id)
+            if not isinstance(entry, dict):
+                return False
+            snapshot_path = Path(entry.get("path", ""))
+            if not snapshot_path.exists():
+                return False
+            try:
+                payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            except Exception:
+                return False
+
+            manifest = payload.get("workspace_manifest", {})
+            if not isinstance(manifest, dict):
+                return False
+
+            expected_manifest_hash = payload.get("manifest_hash")
+            actual_manifest_hash = self._hash_manifest(manifest)
+            if expected_manifest_hash and expected_manifest_hash != actual_manifest_hash:
+                return False
+
+            target_root = workspace_root.resolve()
+            target_root.mkdir(parents=True, exist_ok=True)
+
+            existing_files = [p for p in target_root.rglob("*") if p.is_file() and not self._is_inside_checkpoint_store(p)]
+            manifest_paths = {target_root / rel for rel in manifest.keys()}
+            for path in existing_files:
+                if path not in manifest_paths:
+                    path.unlink(missing_ok=True)
+
+            for rel_path, digest in manifest.items():
+                blob_path = self.blobs_dir / str(digest)
+                if not blob_path.exists():
+                    return False
+                if self._hash_file(blob_path) != str(digest):
+                    return False
+                destination = (target_root / rel_path).resolve()
+                if not str(destination).startswith(str(target_root)):
+                    return False
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(blob_path, destination)
+
+            rebuilt = self._build_manifest_for_root(target_root)
+            return self._hash_manifest(rebuilt) == actual_manifest_hash
+
+
     def _ensure_dirs(self) -> None:
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         self.blobs_dir.mkdir(parents=True, exist_ok=True)
@@ -117,6 +166,18 @@ class CheckpointStore:
             manifest[path.relative_to(self.workspace_root).as_posix()] = digest
             self._ensure_blob(path, digest)
         return manifest
+
+    def _build_manifest_for_root(self, root: Path) -> dict[str, str]:
+        manifest: dict[str, str] = {}
+        for path in root.rglob("*"):
+            if not path.is_file() or self._is_inside_checkpoint_store(path):
+                continue
+            manifest[path.relative_to(root).as_posix()] = self._hash_file(path)
+        return manifest
+
+    def _hash_manifest(self, manifest: dict[str, str]) -> str:
+        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def _is_inside_checkpoint_store(self, path: Path) -> bool:
         try:
