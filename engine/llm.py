@@ -144,7 +144,17 @@ class GeneratorWorker(QThread):
     done = Signal(bool, str, list)
     usage = Signal(int)
 
-    def __init__(self, llm, messages, temp, top_p, max_tokens, agent_mode=False):
+    def __init__(
+        self,
+        llm,
+        messages,
+        temp,
+        top_p,
+        max_tokens,
+        agent_mode=False,
+        model_path: str | None = None,
+        force_prompt_tool_mode: bool = False,
+    ):
         super().__init__()
         self.llm = llm
         self.messages = list(messages)
@@ -152,6 +162,19 @@ class GeneratorWorker(QThread):
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.agent_mode = bool(agent_mode)
+        self.model_path = model_path or ""
+        self.force_prompt_tool_mode = bool(force_prompt_tool_mode)
+
+    def _should_force_prompt_tool_mode(self) -> tuple[bool, str]:
+        if self.force_prompt_tool_mode:
+            return True, "config flag force_prompt_tool_mode=true"
+
+        path = self.model_path.lower()
+        is_qwen_coder = "qwen2.5" in path and "coder" in path
+        is_gguf = path.endswith(".gguf") or ".gguf" in path
+        if is_qwen_coder and is_gguf:
+            return True, "heuristic match: qwen2.5 coder gguf on llama.cpp"
+        return False, ""
 
     def _extract_text(self, response: dict) -> str:
         choices = response.get("choices", [])
@@ -227,10 +250,20 @@ class GeneratorWorker(QThread):
         if not self.agent_mode:
             return self._try_chat_completion(messages), False
 
+        force_prompt_mode, reason = self._should_force_prompt_tool_mode()
+        if force_prompt_mode:
+            self.trace.emit(
+                f"[WORKER] native tool calling unavailable; using prompt tool blocks (forced: {reason})"
+            )
+            return self._try_chat_completion(messages), False
+
         try:
             return self._try_chat_completion(messages, tools=TOOL_SCHEMAS), True
-        except Exception:
-            self.trace.emit("[WORKER] native tool calling unavailable; using prompt tool blocks")
+        except Exception as exc:
+            self.trace.emit(
+                "[WORKER] native tool calling unavailable; using prompt tool blocks "
+                f"(exception: {exc.__class__.__name__}: {exc})"
+            )
             return self._try_chat_completion(messages), False
 
     def _execute_tool_call(self, call: dict) -> dict:
@@ -275,9 +308,26 @@ class GeneratorWorker(QThread):
                 assistant_text = self._extract_text(response)
                 last_assistant_text = assistant_text or last_assistant_text
 
-                tool_calls = self._extract_native_tool_calls(response)
-                if not tool_calls:
-                    tool_calls = self._extract_prompt_tool_calls(assistant_text)
+                native_tool_calls = self._extract_native_tool_calls(response)
+                prompt_fallback_attempted = not native_tool_calls
+                self.trace.emit(
+                    "[WORKER] tool parse: "
+                    f"native_tool_mode={native_tool_mode}, "
+                    f"native_tool_calls={len(native_tool_calls)}, "
+                    f"prompt_fallback_attempted={prompt_fallback_attempted}"
+                )
+
+                prompt_tool_calls = []
+                if prompt_fallback_attempted:
+                    prompt_tool_calls = self._extract_prompt_tool_calls(assistant_text)
+                    self.trace.emit(
+                        f"[WORKER] prompt-block extraction {'found' if prompt_tool_calls else 'found none'}: count={len(prompt_tool_calls)}"
+                    )
+
+                if native_tool_mode and not native_tool_calls and not prompt_tool_calls:
+                    self.trace.emit("[WORKER] native mode: no tool calls returned")
+
+                tool_calls = native_tool_calls or prompt_tool_calls
 
                 if self.agent_mode and tool_calls:
                     loop_messages.append({"role": "assistant", "content": assistant_text})
@@ -531,6 +581,7 @@ class LLMEngine(QObject):
         temp = float(config.get("temp", 0.7))
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
+        force_prompt_tool_mode = bool(config.get("force_prompt_tool_mode", False))
 
         self._ephemeral_generation = bool(payload.get("ephemeral", False))
         thinking_mode = bool(payload.get("thinking_mode", False))
@@ -575,6 +626,8 @@ class LLMEngine(QObject):
             top_p,
             max_tokens,
             agent_mode=self._worker_agent_mode,
+            model_path=self.model_path or self.gguf_path,
+            force_prompt_tool_mode=force_prompt_tool_mode,
         )
         self.worker.token.connect(self.sig_token)
         self.worker.trace.connect(self.sig_trace)
