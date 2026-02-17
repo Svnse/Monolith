@@ -169,26 +169,61 @@ class CompetenceHorizon:
         return -1.0
 
 
-def calculate_score(trace: dict) -> float:
+def is_task_completed(trace: dict[str, Any]) -> bool:
+    """
+    Deterministic, ledger-observable completion heuristic.
+
+    Phase 1 rules:
+    - explicit boolean `completed` field wins
+    - successful write action indicates completion
+    - final assistant message containing a code block indicates completion
+    """
+    completed = trace.get("completed")
+    if isinstance(completed, bool):
+        return completed
+
+    deliverables = trace.get("deliverables")
+    if isinstance(deliverables, dict) and deliverables.get("wrote_file") is True:
+        return True
+    if trace.get("write_file_success") is True:
+        return True
+
+    tool_calls = trace.get("tool_calls", []) or []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        if call.get("name") in {"write_file", "apply_patch"} and call.get("ok") is True:
+            return True
+
+    final_text = (
+        str(trace.get("final_answer", ""))
+        + str(trace.get("final_message", ""))
+        + str(trace.get("assistant_final", ""))
+    )
+    return "```" in final_text
+
+
+def calculate_score(trace: dict[str, Any]) -> float:
     steps_used = max(0, int(trace.get("steps_used", 0) or 0))
     budget = max(1, int(trace.get("budget", 1) or 1))
     tool_calls = trace.get("tool_calls", []) or []
     error_flags = set(trace.get("error_flags", []) or [])
 
-    if "CRITICAL_ERROR" in error_flags or "UNRECOVERED_ERROR" in error_flags:
-        correctness = 0.0
-    else:
-        correctness = 1.0
+    if "CRITICAL_ERROR" in error_flags:
+        return 0.0
 
-    if correctness == 0:
-        velocity = 0.0
-    else:
-        velocity = max(0.0, (budget - steps_used) / budget)
+    if not is_task_completed(trace):
+        return 0.0
+
+    if "UNRECOVERED_ERROR" in error_flags:
+        return 0.0
+
+    correctness = 1.0
+    velocity = max(0.0, min(1.0, (budget - steps_used) / budget))
 
     total_calls = len(tool_calls)
     if total_calls == 0:
         precision = 1.0
-        stability = 1.0
     else:
         seen: set[str] = set()
         duplicate_calls = 0
@@ -203,15 +238,7 @@ def calculate_score(trace: dict) -> float:
                 seen.add(signature)
 
         duplicate_ratio = duplicate_calls / total_calls
-        precision = 1.0 - duplicate_ratio
-        stability = 1.0 - duplicate_ratio
+        precision = max(0.0, min(1.0, 1.0 - duplicate_ratio))
 
-    score = (
-        correctness * 0.40
-        + velocity * 0.25
-        + precision * 0.20
-        + stability * 0.15
-    ) * 100
-
-    score = max(0.0, min(100.0, score))
-    return round(score, 2)
+    score = (correctness * 0.40 + velocity * 0.25 + precision * 0.35) * 100
+    return round(max(0.0, min(100.0, score)), 2)
