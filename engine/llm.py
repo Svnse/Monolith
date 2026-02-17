@@ -589,6 +589,10 @@ class LLMEngine(QObject):
                 for msg in delta:
                     if isinstance(msg, dict):
                         self.conversation_history.append(msg)
+                if assistant_text:
+                    self.conversation_history.append(
+                        {"role": "assistant", "content": assistant_text}
+                    )
             else:
                 self.conversation_history.append({"role": "assistant", "content": assistant_text})
         self._pending_user_index = None
