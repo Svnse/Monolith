@@ -2,20 +2,22 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+from engine.capabilities import CapabilityManager, extract_tool_path
 from engine.tool_dispatcher import ToolDispatcher
 from engine.tool_schema import TOOL_ARGUMENT_SCHEMAS
 
 
 class AgentBridge:
-    def __init__(self, dispatcher: ToolDispatcher | None = None):
+    def __init__(self, dispatcher: ToolDispatcher | None = None, capability_manager: CapabilityManager | None = None):
         self._dispatcher = dispatcher or ToolDispatcher()
+        self._capability_manager = capability_manager or CapabilityManager()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-tool")
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
 
-    def execute(self, tool: str, arguments: dict) -> dict:
-        validation = self._validate(tool, arguments)
+    def execute(self, tool: str, arguments: dict, *, branch_id: str = "main") -> dict:
+        validation = self._validate(tool, arguments, branch_id=branch_id)
         if not validation["ok"]:
             return validation
 
@@ -31,7 +33,7 @@ class AgentBridge:
                 "result": {"ok": False, "content": "", "error": str(exc)},
             }
 
-    def _validate(self, tool: str, arguments: dict) -> dict:
+    def _validate(self, tool: str, arguments: dict, *, branch_id: str) -> dict:
         if not isinstance(tool, str) or not tool:
             return {"ok": False, "tool": tool, "error": "tool name must be a non-empty string"}
         if not self._dispatcher.has_tool(tool):
@@ -40,11 +42,8 @@ class AgentBridge:
             return {"ok": False, "tool": tool, "error": "tool arguments must be an object"}
 
         schema = TOOL_ARGUMENT_SCHEMAS.get(tool)
-        if not schema:
-            return {"ok": True, "tool": tool}
-
-        required = schema.get("required", {})
-        optional = schema.get("optional", {})
+        required = schema.get("required", {}) if schema else {}
+        optional = schema.get("optional", {}) if schema else {}
         allowed_keys = set(required.keys()) | set(optional.keys())
 
         for key in arguments.keys():
@@ -69,4 +68,13 @@ class AgentBridge:
                     "error": f"argument '{key}' must be {expected_type.__name__}",
                 }
 
-        return {"ok": True, "tool": tool}
+        requested_path = extract_tool_path(tool, arguments)
+        auth_result = self._capability_manager.authorize(branch_id=branch_id, tool=tool, path=requested_path)
+        if not auth_result.ok:
+            return {
+                "ok": False,
+                "tool": tool,
+                "error": auth_result.error,
+            }
+
+        return {"ok": True, "tool": tool, "capability_token": auth_result.token.token_id if auth_result.token else None}
