@@ -58,14 +58,14 @@ contract_hash: string
 parent_contract_hash: string | null
 
 # policy
-tool_policy: required | forbidden
+tool_policy: required | optional | forbidden
 allowed_tools: list[string] | null
 strict_mode: bool
 
 # budgets
 max_inferences: int
 max_tokens_consumed: int
-max_format_retries: int          # V2.1: hard cap <= 1
+max_format_retries: int          # model-profile tuned; strict profiles SHOULD set 0 or 1
 step_timeout_ms: int
 total_timeout_ms: int
 
@@ -94,6 +94,15 @@ speculative_exec: bool            # V2.1 (optional)
 # anti-cycle controls (V2.1)
 cycle_forbid: list[[string,string]]
 ```
+
+### `tool_policy` semantics
+- `required`: at least one validated+executed tool invocation is required for terminal success.
+- `optional`: tool invocation is allowed but not required; terminal prose success is valid.
+- `forbidden`: any tool invocation is a contract violation.
+
+### `cycle_forbid` semantics
+`cycle_forbid` is a list of forbidden ordered tool-name pairs `[from_tool, to_tool]`.
+If runtime observes a transition matching any forbidden pair within a run (e.g., `write_file -> write_file`, `apply_patch -> revert_patch`), it must terminate with `FAILED_CONTRACT_VIOLATION` unless an explicit exception rule is defined in contract metadata.
 
 ## 4.2 `ProtocolAdapterResult`
 ```yaml
@@ -161,6 +170,29 @@ PRECHECK
 
 No early-return path may bypass state transition accounting.
 
+## COMMIT transition predicates (authoritative)
+At `COMMIT`, runtime evaluates transitions in deterministic order:
+
+1. **Interrupt/timeout checks**
+   - interrupted -> `TERMINATE(INTERRUPTED)`
+   - `step_timeout_ms`/`total_timeout_ms` exceeded -> `TERMINATE(FAILED_TIMEOUT)`
+2. **Budget checks**
+   - `max_inferences` or `max_tokens_consumed` exceeded -> `TERMINATE(FAILED_BUDGET_EXHAUSTED)`
+3. **Contract policy violations**
+   - `tool_policy=forbidden` and any tool call executed -> `TERMINATE(FAILED_CONTRACT_VIOLATION)`
+   - `tool_policy=required` and model produced terminal no-call response -> `TERMINATE(FAILED_PROTOCOL_NO_TOOLS)`
+4. **Context threshold check**
+   - if `force_synthesis_at_ratio` exceeded -> force synthesis terminal path:
+     - if any tool executed -> `TERMINATE(COMPLETED_WITH_TOOLS)`
+     - else -> `TERMINATE(COMPLETED_CHAT_ONLY)` for `optional`, otherwise policy failure
+5. **Normal success checks**
+   - if model emits no further tool calls and policy satisfied:
+     - `required` + tools used -> `TERMINATE(COMPLETED_WITH_TOOLS)`
+     - `optional` + tools used -> `TERMINATE(COMPLETED_WITH_TOOLS)`
+     - `optional` + no tools used -> `TERMINATE(COMPLETED_CHAT_ONLY)`
+6. **Continue loop**
+   - otherwise -> `INFER`.
+
 ---
 
 ## 6) Phase Roadmap
@@ -212,6 +244,7 @@ Document current behavior and establish baseline metrics.
 2. Preflight validation in `PRECHECK`.
 3. Required/forbidden tool-policy enforcement.
 4. Retry ladder enforcement (`max_format_retries`, hard bounded).
+5. ContractFactory/IntentPolicyResolver introduced for explicit `tool_policy` assignment.
 
 ### Preflight checks
 - Contract structural validity.
@@ -220,16 +253,28 @@ Document current behavior and establish baseline metrics.
 - Context feasibility (`reserved_system + reserved_synthesis + minimum_loop_margin <= context_window`).
 - Runtime backend responsiveness.
 
+### Contract creation boundary (required)
+`ExecutionContract` must be created by a deterministic factory layer before runtime starts:
+- `ContractFactory` (or `IntentPolicyResolver`) consumes page context, user request, model profile, and capability manifest.
+- It emits immutable contract with explicit `tool_policy`, budget defaults, and allowed tool scope.
+- Runtime must reject contracts missing provenance metadata (`contract_id`, `contract_hash`, `model_profile_id`).
+
+Minimum recommended deterministic defaults:
+- chat page -> `tool_policy=forbidden`
+- code page task with explicit file/command/workspace intent -> `tool_policy=required`
+- code page conceptual/explanatory prompt -> `tool_policy=optional`
+
 ### Retry ladder (deterministic)
 - Trigger: adapter returns `rejected` for malformed structured output.
 - Retry budget decremented; retry consumes inference budget.
-- Max retries hard capped by contract (V2.1 recommendation: `<=1`).
+- Max retries bounded by contract and profile policy (recommended defaults: 0-1 strict, 1-3 legacy profiles).
 - Retry exhaustion => `FAILED_PROTOCOL_MALFORMED`.
 
 ### Exit criteria
 - `tool_policy=required` cannot end in terminal success with zero executed tool calls.
 - Contract violations emit typed failure outcomes.
 - No contract mutation after first inference.
+- ContractFactory policy decisions are traceable in transcript metadata.
 
 ---
 
