@@ -21,7 +21,7 @@ class LedgerEvent:
     sequence_id: int
     timestamp: str
     actor: Literal["user", "assistant", "tool", "system"]
-    event_type: Literal["input", "inference", "tool_invocation", "tool_result", "error", "yield"]
+    event_type: Literal["input", "inference", "tool_invocation", "tool_result", "error", "yield", "state_transition", "telemetry"]
     reasoning_hash: str | None
     execution_hash: str | None
     payload: dict[str, Any]
@@ -37,7 +37,7 @@ class AppendOnlyLedger:
         self,
         *,
         actor: Literal["user", "assistant", "tool", "system"],
-        event_type: Literal["input", "inference", "tool_invocation", "tool_result", "error", "yield"],
+        event_type: Literal["input", "inference", "tool_invocation", "tool_result", "error", "yield", "state_transition", "telemetry"],
         payload: dict[str, Any],
         reasoning: str | None = None,
         execution: dict[str, Any] | None = None,
@@ -75,6 +75,193 @@ class AppendOnlyLedger:
             arguments = {}
         serialized_args = json.dumps(arguments, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(f"{tool_name}:{serialized_args}".encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Hash-chain transcript (Phase 5)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class HashChainEntry:
+    """Single entry in the deterministic hash-chain transcript."""
+    sequence: int
+    previous_hash: str
+    contract_hash: str
+    state: str
+    action_hash: str
+    result_hash: str
+    adapter_version: str
+    model_profile_id: str
+    model_fingerprint: str
+    chain_hash: str
+    timestamp: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "sequence": self.sequence,
+            "previous_hash": self.previous_hash,
+            "contract_hash": self.contract_hash,
+            "state": self.state,
+            "action_hash": self.action_hash,
+            "result_hash": self.result_hash,
+            "adapter_version": self.adapter_version,
+            "model_profile_id": self.model_profile_id,
+            "model_fingerprint": self.model_fingerprint,
+            "chain_hash": self.chain_hash,
+            "timestamp": self.timestamp,
+        }
+
+
+class TranscriptChain:
+    """
+    Deterministic hash-chain transcript for replay and audit.
+
+    Each entry computes:
+      H_n = SHA256(H_n-1 || contract_hash || state || action_hash ||
+                   result_hash || adapter_version || model_profile_id ||
+                   model_fingerprint)
+
+    The chain is append-only and verifiable.
+    """
+
+    GENESIS_HASH: str = hashlib.sha256(b"GENESIS").hexdigest()
+
+    def __init__(
+        self,
+        contract_hash: str,
+        adapter_version: str,
+        model_profile_id: str,
+        model_fingerprint: str,
+    ) -> None:
+        self._entries: list[HashChainEntry] = []
+        self._head_hash: str = self.GENESIS_HASH
+        self._sequence: int = 0
+        self._contract_hash = contract_hash
+        self._adapter_version = adapter_version
+        self._model_profile_id = model_profile_id
+        self._model_fingerprint = model_fingerprint
+
+    @property
+    def head_hash(self) -> str:
+        return self._head_hash
+
+    @property
+    def length(self) -> int:
+        return len(self._entries)
+
+    def append(
+        self,
+        *,
+        state: str,
+        action_hash: str,
+        result_hash: str,
+    ) -> HashChainEntry:
+        """Append a new entry, computing H_n from the chain formula."""
+        self._sequence += 1
+        chain_hash = self.compute_chain_hash(
+            previous_hash=self._head_hash,
+            contract_hash=self._contract_hash,
+            state=state,
+            action_hash=action_hash,
+            result_hash=result_hash,
+            adapter_version=self._adapter_version,
+            model_profile_id=self._model_profile_id,
+            model_fingerprint=self._model_fingerprint,
+        )
+        entry = HashChainEntry(
+            sequence=self._sequence,
+            previous_hash=self._head_hash,
+            contract_hash=self._contract_hash,
+            state=state,
+            action_hash=action_hash,
+            result_hash=result_hash,
+            adapter_version=self._adapter_version,
+            model_profile_id=self._model_profile_id,
+            model_fingerprint=self._model_fingerprint,
+            chain_hash=chain_hash,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        self._entries.append(entry)
+        self._head_hash = chain_hash
+        return entry
+
+    def verify(self) -> tuple[bool, int | None]:
+        """
+        Walk the chain and verify every H_n.
+
+        Returns (True, None) if valid, or (False, first_bad_index) on
+        the first mismatch.
+        """
+        expected = self.GENESIS_HASH
+        for i, entry in enumerate(self._entries):
+            if entry.previous_hash != expected:
+                return (False, i)
+            recomputed = self.compute_chain_hash(
+                previous_hash=entry.previous_hash,
+                contract_hash=entry.contract_hash,
+                state=entry.state,
+                action_hash=entry.action_hash,
+                result_hash=entry.result_hash,
+                adapter_version=entry.adapter_version,
+                model_profile_id=entry.model_profile_id,
+                model_fingerprint=entry.model_fingerprint,
+            )
+            if recomputed != entry.chain_hash:
+                return (False, i)
+            expected = entry.chain_hash
+        return (True, None)
+
+    def divergence_point(self, other: "TranscriptChain") -> int | None:
+        """
+        Find the first index where two chains diverge.
+
+        Returns None if identical (up to the shorter chain's length).
+        """
+        min_len = min(len(self._entries), len(other._entries))
+        for i in range(min_len):
+            if self._entries[i].chain_hash != other._entries[i].chain_hash:
+                return i
+        if len(self._entries) != len(other._entries):
+            return min_len
+        return None
+
+    def snapshot(self) -> list[HashChainEntry]:
+        """Return an immutable copy of the chain entries."""
+        return list(self._entries)
+
+    @staticmethod
+    def compute_chain_hash(
+        *,
+        previous_hash: str,
+        contract_hash: str,
+        state: str,
+        action_hash: str,
+        result_hash: str,
+        adapter_version: str,
+        model_profile_id: str,
+        model_fingerprint: str,
+    ) -> str:
+        """
+        H_n = SHA256(H_n-1 || contract_hash || state || action_hash ||
+                     result_hash || adapter_version || model_profile_id ||
+                     model_fingerprint)
+
+        Uses deterministic JSON serialization for the concatenation.
+        """
+        payload = json.dumps(
+            [
+                previous_hash,
+                contract_hash,
+                state,
+                action_hash,
+                result_hash,
+                adapter_version,
+                model_profile_id,
+                model_fingerprint,
+            ],
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class EventLedger:

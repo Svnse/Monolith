@@ -789,6 +789,28 @@ class PageCode(QWidget):
         elif event_name == "PROTOCOL_REGRESSION_WARNING":
             rate = float(event.get("rate", 0.0) or 0.0)
             self.append_trace(f"protocol regression warning: {rate * 100:.1f}%")
+        elif event_name == "RUN_SUMMARY":
+            summary = event.get("summary")
+            if isinstance(summary, dict):
+                self._last_run_summary = summary
+                self.append_trace(
+                    f"[RUN_SUMMARY] outcome={summary.get('outcome')} "
+                    f"llm={summary.get('llm_calls')} tools={summary.get('tool_calls')} "
+                    f"elapsed={summary.get('elapsed_ms', 0):.0f}ms"
+                )
+        elif event_name == "STATE_DIGEST":
+            digest = event.get("digest")
+            if isinstance(digest, dict):
+                self._last_state_digest = digest
+                fsm = digest.get("fsm_state", "")
+                inf_used = digest.get("inferences_used", 0)
+                inf_rem = digest.get("inferences_remaining", 0)
+                tok = digest.get("tokens_consumed", 0)
+                tools = digest.get("tools_executed", 0)
+                ratio = digest.get("context_ratio", 0.0)
+                self.lbl_step_status.setText(
+                    f"{fsm} | inf:{inf_used}/{inf_used + inf_rem} tok:{tok} tools:{tools} ctx:{ratio:.0%}"
+                )
         elif event_name == "RUNTIME_COMMAND_RESULT":
             result = event.get("result", {})
             if isinstance(result, dict) and isinstance(result.get("comparison"), dict):
@@ -802,7 +824,7 @@ class PageCode(QWidget):
             retry = event.get("retry")
             if retry is not None:
                 self.lbl_step_status.setText(f"retry: {retry}/{25}")
-        else:
+        elif event_name != "STATE_DIGEST":
             self.lbl_step_status.setText(f"step: {len(self._agent_steps)}/{25}")
 
 

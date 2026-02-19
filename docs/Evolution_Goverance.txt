@@ -1,0 +1,190 @@
+Monolith Agent Architecture
+
+Core Principle
+The runtime stays deterministic. The policy layer adapts slowly. The governance layer protects. No mutation during execution context. No LLM in the evaluation loop.
+
+Data Artifacts (5 total)
+1. RunSummary
+Produced after every agent run. Immutable record.
+RunSummary:
+  run_id: uuid
+  task_type: str                # classified by deterministic classifier
+  tier: C | B | A | S
+  steps_taken: int
+  tools_called: list[str]
+  started_at: datetime
+  ended_at: datetime
+  outcome: completed | failed | aborted
+  error_log: list[str] | null
+2. PerfVector (6 dimensions + dominance eval)
+Computed from RunSummary. Stored independently per dimension — never compressed to scalar.
+PerfVector:
+  run_id: uuid                  # links to RunSummary
+  protocol_compliance: float    # 0.0–1.0
+  retry_count: int              # raw count
+  budget_efficiency: float      # 0.0–1.0 (steps used / steps budgeted)
+  duplicate_call_ratio: float   # 0.0–1.0 (redundant tool calls / total)
+  anomaly_ignored: int          # count of flagged anomalies not addressed
+  hard_failures: int            # unrecoverable errors
+  dominance_eval: GREEN | YELLOW | RED
+Dominance evaluation — constant ordering, not if/else:
+PriorityDimensionRED thresholdYELLOW threshold1hard_failures> 0—2retry_count> tier_max> tier_max * 0.73budget_efficiency< 0.3< 0.54protocol_compliance< 0.7< 0.855duplicate_call_ratio> 0.4> 0.26anomaly_ignored> 2> 0
+Evaluation: scan top-down. First RED wins. If no RED, first YELLOW wins. Otherwise GREEN.
+Invariant: PerfVector and PolicyDelta are written in the same transaction. No run exists without provenance.
+
+3. PolicyState (bounded, clamped parameters)
+The mutable "leash" governing agent behavior. Every parameter has a floor, ceiling, and max delta per mutation.
+PolicyState:
+  tier: C | B | A | S
+  retry_tolerance: int          # floor: 1, ceiling: 5, delta: ±1
+  step_limit_multiplier: float  # floor: 0.5, ceiling: 2.0, delta: ±0.1
+  autonomy_bias: float          # floor: 0.0, ceiling: 1.0, delta: ±0.05
+  critique_enabled: bool        # toggled by classifier, not mutation
+  verbosity_bias: float         # floor: 0.0, ceiling: 1.0, delta: ±0.05
+Tier-specific ceilings:
+ParamCBASautonomy_bias max0.40.60.81.0retry_tolerance max2345step_limit_multiplier max1.01.51.82.0
+Tier mutation rate: C mutates slowest (delta * 0.5), S mutates fastest (delta * 1.0). But S also triggers regression rollback at a lower degradation threshold.
+
+4. PolicyDelta (logged mutation, linked to run_id)
+Every policy change is recorded with full provenance.
+PolicyDelta:
+  run_id: uuid                  # which run triggered this
+  timestamp: datetime
+  trigger: dominance_eval result (GREEN/YELLOW/RED)
+  changes: dict                 # param: {old: x, new: y, reason: str}
+Mutation rules:
+
+GREEN + task at tier's upper complexity boundary: increase autonomy, reduce verbosity, increase step budget. Deltas clamped to max per parameter.
+GREEN + trivial task: no mutation. Easy wins don't buy freedom.
+YELLOW: increase critique frequency, reduce autonomy, reduce retry tolerance.
+RED: freeze all loosening mutations for N runs. Tighten critique + verification. Log for human review.
+
+Conflict resolution: dominance ordering determines which signal wins. No contradictory mutations in the same delta.
+
+5. PolicyCheckpoint (snapshot + baseline stats)
+Ring buffer of last K policy snapshots for regression detection.
+PolicyCheckpoint:
+  checkpoint_id: uuid
+  run_id: uuid
+  policy_snapshot: PolicyState   # full copy
+  perf_rolling_avg: PerfVector   # rolling average over last M runs
+  tier: C | B | A | S           # baseline is per-tier
+  created_at: datetime
+Regression detection:
+
+Every N runs, compare current rolling average against best checkpoint in buffer.
+If degrading beyond threshold (per-tier): revert to best snapshot, freeze mutations for N runs.
+S-tier trips rollback faster (lower degradation threshold) to compensate for faster mutation rate.
+
+
+Execution Pipeline
+1. Environment Snapshot (deterministic, no LLM)
+   - Validate paths
+   - Normalize workspace
+   - Confirm file existence
+   - List tool availability
+   - Inject as structured context
+
+2. Intent Compression (single LLM call)
+   - Compress user prompt against environment snapshot
+   - Classify task type (deterministic classifier)
+
+3. Critique Toggle (deterministic gate, no LLM in classifier)
+   - First-time tool use → critique ON
+   - Tool unused in last N runs → critique ON
+   - Multi-step chain → critique ON
+   - Single known tool call → critique OFF
+   - If ON: one LLM critique pass before execution
+
+4. Deterministic Execution Loop
+   - Tool calls per plan
+   - Prediction logging (must_hold / must_not_hold per step)
+   - Budget enforcement (step limit from PolicyState)
+   - Retry with semantic nudge up to retry_tolerance
+
+5. RunSummary Generation
+   - Capture all 6 vector dimensions
+   - Record outcome + error log
+   - Compute dominance eval
+
+6. Policy Mutation (single transaction)
+   - Write PerfVector
+   - Write PolicyDelta
+   - Apply clamped mutation to PolicyState
+   - Write PolicyCheckpoint if at N-run interval
+   - Run regression check if checkpoint written
+
+7. Governance Check (hard limits, non-negotiable)
+   - Tier authority bounds respected
+   - No tool access changes
+   - No prompt self-modification
+   - No identity evolution
+
+Invariants
+
+No mutation without successful PerfVector + PolicyDelta write
+No mutation during execution context
+Dominance ordering is a constant — not configurable at runtime
+PolicyState parameters are always clamped to tier-specific bounds
+Environment snapshot precedes every LLM call
+Hard failures override all other signals
+Regression rollback includes mutation freeze
+
+Thoughts:
+
+You are missing a stability guard before mutation begins.
+
+Right now, mutation occurs immediately after every run.
+
+That means early unstable behavior can cause drift.
+
+Add:
+
+Mutation Warmup Threshold
+
+Example:
+
+No mutation until 10 runs collected.
+
+Or until variance of PerfVector < threshold.
+
+Or until at least 1 RED and 1 GREEN observed.
+
+Otherwise your first 3–5 runs define the trajectory.
+
+That’s dangerous.
+
+Second Thing: Separate Learning Speed from Authority
+
+You tied mutation rate to tier (C slowest, S fastest).
+
+That’s good — but add this:
+
+S-tier should mutate faster,
+but its regression sensitivity should be stricter.
+
+You hinted at this — make it explicit:
+
+Higher authority = lower degradation tolerance.
+
+That keeps power proportional to discipline.
+
+Third: Budget Efficiency Metric
+
+Right now:
+
+budget_efficiency = steps_used / steps_budgeted
+
+That’s inverted.
+
+You want:
+
+efficiency = (budget_remaining / budget)
+
+Or at least define it clearly.
+
+Because currently < 0.3 means what?
+That it used too much?
+Or too little?
+
+Ambiguity here will corrupt mutation direction.

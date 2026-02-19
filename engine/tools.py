@@ -20,7 +20,15 @@ def set_workspace_root(_: str | Path | None = None) -> None:
 
 
 def resolve_path(user_path: str) -> Path:
-    target = (WORKSPACE_ROOT / user_path).expanduser().resolve()
+    # Strip workspace prefix if the model redundantly includes it.
+    # e.g. "workspace/star.py" → "star.py" when WORKSPACE_ROOT already ends in /workspace
+    cleaned = user_path.strip().replace("\\", "/")
+    ws_name = WORKSPACE_ROOT.name  # e.g. "workspace"
+    if cleaned.startswith(f"{ws_name}/"):
+        cleaned = cleaned[len(ws_name) + 1:]
+    elif cleaned == ws_name:
+        cleaned = "."
+    target = (WORKSPACE_ROOT / cleaned).expanduser().resolve()
     if not str(target).startswith(str(WORKSPACE_ROOT)):
         raise ValueError(f"path outside workspace boundary: {target}")
     return target

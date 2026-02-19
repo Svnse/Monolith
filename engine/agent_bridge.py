@@ -22,15 +22,25 @@ class AgentBridge:
         except Exception:
             pass
 
-    def execute(self, tool: str, arguments: dict, *, branch_id: str = "main") -> dict:
+    def execute(self, tool: str, arguments: dict, *, branch_id: str = "main", step_timeout_ms: int = 0) -> dict:
         validation = self._validate(tool, arguments, branch_id=branch_id)
         if not validation["ok"]:
             return validation
 
         future = self._executor.submit(self._dispatcher.dispatch, tool, arguments)
         try:
-            result = future.result()
+            timeout_sec = step_timeout_ms / 1000.0 if step_timeout_ms > 0 else None
+            result = future.result(timeout=timeout_sec)
             return {"ok": True, "tool": tool, "result": result}
+        except TimeoutError:
+            future.cancel()
+            return {
+                "ok": False,
+                "tool": tool,
+                "error": f"step_timeout_ms exceeded ({step_timeout_ms}ms)",
+                "timeout": True,
+                "result": {"ok": False, "content": "", "error": f"timeout after {step_timeout_ms}ms"},
+            }
         except Exception as exc:
             return {
                 "ok": False,

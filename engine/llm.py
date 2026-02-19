@@ -1,15 +1,20 @@
+import hashlib
 import json
+import os
 from threading import Lock
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
 
-from core.llm_config import AGENT_PROMPT, MASTER_PROMPT, load_config
+from core.llm_config import MASTER_PROMPT, get_agent_prompt, load_config
 from core.state import AppState, SystemStatus
-from engine.agent_runtime import AgentMessage, AgentRuntime, ToolCall
+from engine.agent_runtime import MAX_AGENT_STEPS, AgentMessage, AgentRuntime, ToolCall
+from engine.contract import AgentOutcome, ContractFactory, ToolPolicy
+from engine.protocol_adapter import ProtocolAdapter, get_profile
 from engine.tools import set_workspace_root
 
 
 def normalize_openai_response(raw: dict) -> AgentMessage:
+    """Legacy normalizer — kept for backward compatibility with non-adapter paths."""
     choices = raw.get("choices", []) if isinstance(raw, dict) else []
     message = choices[0].get("message", {}) if choices else {}
     role = message.get("role", "assistant")
@@ -127,6 +132,9 @@ class GeneratorWorker(QThread):
             return "".join(chunks)
         return ""
 
+    # Stop sequences to prevent model from emitting prompt scaffolding tags
+    _STOP_SEQUENCES = ["</response>", "</answer>", "</output>", "<|end|>", "<|im_end|>"]
+
     def _try_chat_completion(self, messages, tools=None):
         kwargs = {
             "messages": messages,
@@ -134,10 +142,26 @@ class GeneratorWorker(QThread):
             "top_p": self.top_p,
             "max_tokens": self.max_tokens,
             "stream": False,
+            "stop": self._STOP_SEQUENCES,
         }
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        # Phase 5: thread grammar spec from contract if available
+        contract = getattr(self, "_contract", None)
+        if contract is not None and getattr(contract, "grammar_profile", None):
+            try:
+                from engine.protocol_adapter import get_grammar_profile
+                gp = get_grammar_profile(
+                    contract.model_profile_id,
+                    contract.tool_policy.value if hasattr(contract.tool_policy, "value") else str(contract.tool_policy),
+                )
+                if gp is not None and gp.grammar_spec and gp.grammar_type == "bnf":
+                    kwargs["grammar"] = gp.grammar_spec
+            except Exception:
+                pass  # graceful fallback if grammar not supported
+
         return self.llm.create_chat_completion(**kwargs)
 
     def _chat_once_text(self, messages: list[dict]) -> str:
@@ -145,8 +169,14 @@ class GeneratorWorker(QThread):
         return self._extract_text(response)
 
     def _chat_once_agent(self, messages: list[dict], tools: list[dict]) -> AgentMessage:
+        """Legacy agent path — returns normalized AgentMessage (no adapter)."""
         response = self._try_chat_completion(messages, tools=tools)
         return normalize_openai_response(response)
+
+    def _chat_once_agent_raw(self, messages: list[dict], tools: list[dict]) -> dict:
+        """Adapter-aware agent path — returns raw dict for ProtocolAdapter."""
+        response = self._try_chat_completion(messages, tools=tools)
+        return response
 
     def _emit_runtime_event(self, payload: dict) -> None:
         self.event.emit(payload)
@@ -173,10 +203,41 @@ class GeneratorWorker(QThread):
 
         try:
             if self.agent_mode and self.runtime is not None:
-                self.runtime._llm_call = self._chat_once_agent
+                # --- Set up Protocol Adapter ---
+                model_profile_id = getattr(self, "_model_profile_id", "local_xml")
+                profile = get_profile(model_profile_id)
+                adapter = ProtocolAdapter(profile)
+                self.runtime._protocol_adapter = adapter
+
+                # --- Set up Execution Contract ---
+                contract = getattr(self, "_contract", None)
+                self.runtime._contract = contract
+
+                # --- Wire adapter-aware LLM call ---
+                # Uses _chat_once_agent_raw which returns raw dict
+                # The runtime's _adapt_response will run it through the adapter
+                self.runtime._llm_call = self._chat_once_agent_raw
                 self.runtime._should_stop = self.isInterruptionRequested
                 self.runtime._emit_event = self._emit_runtime_event
-                completed, assistant_text, loop_history = self.runtime.run(self.messages)
+
+                self.trace.emit(
+                    f"[WORKER] adapter: profile={profile.profile_id}, "
+                    f"format={profile.tool_call_format.value}, "
+                    f"strict={profile.strict_mode}"
+                )
+                if contract is not None:
+                    self.trace.emit(
+                        f"[WORKER] contract: policy={contract.tool_policy.value}, "
+                        f"max_inferences={contract.max_inferences}, "
+                        f"retries={contract.max_format_retries}"
+                    )
+
+                result = self.runtime.run(self.messages)
+                self._last_run_result = result
+                # Translate AgentRunResult to backward-compat tuple
+                completed = result.success
+                assistant_text = result.output
+                loop_history = result.history
             else:
                 assistant_text = self._chat_once_text(self.messages)
                 if assistant_text:
@@ -282,6 +343,17 @@ class LLMEngine(QObject):
         self.llm = llm_instance
         self.model_ctx_length = int(model_ctx_length)
         self.ctx_limit = min(self.ctx_limit, self.model_ctx_length)
+
+        # Phase 5: compute model fingerprint
+        try:
+            model_path = self.model_path or ""
+            file_size = os.path.getsize(model_path) if model_path and os.path.exists(model_path) else 0
+            self._model_fingerprint = hashlib.sha256(
+                f"{model_path}:{file_size}".encode()
+            ).hexdigest()
+        except Exception:
+            self._model_fingerprint = ""
+
         self.sig_model_capabilities.emit(
             {
                 "model_ctx_length": self.model_ctx_length,
@@ -336,8 +408,11 @@ class LLMEngine(QObject):
         self.conversation_history = [h for h in history if isinstance(h, dict)]
         self._pending_user_index = None
 
-    def _compile_system_prompt(self, config, agent_mode=False):
-        base_prompt = AGENT_PROMPT if agent_mode else MASTER_PROMPT
+    def _compile_system_prompt(self, config, agent_mode=False, model_profile_id="local_xml"):
+        if agent_mode:
+            base_prompt = get_agent_prompt(model_profile_id)
+        else:
+            base_prompt = MASTER_PROMPT
         tags = config.get("behavior_tags", [])
         cleaned = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
         if not cleaned:
@@ -373,7 +448,10 @@ class LLMEngine(QObject):
 
         request_agent_mode = bool(payload.get("agent_mode", False))
 
-        system_prompt = self._compile_system_prompt(config, agent_mode=request_agent_mode)
+        # Model profile for protocol adapter alignment
+        model_profile_id = str(payload.get("model_profile_id", "local_xml"))
+
+        system_prompt = self._compile_system_prompt(config, agent_mode=request_agent_mode, model_profile_id=model_profile_id)
         temp = float(config.get("temp", 0.7))
         top_p = float(config.get("top_p", 0.9))
         max_tokens = int(config.get("max_tokens", 2048))
@@ -414,6 +492,30 @@ class LLMEngine(QObject):
         self._worker_seed_count = len(messages)
         self._worker_agent_mode = request_agent_mode
 
+        # --- Create ExecutionContract for agent mode ---
+        contract = None
+        if request_agent_mode:
+            source_page = str(payload.get("source_page", "code"))
+            allowed_tools = self._runtime._capability_manager.allowed_tools() if self._runtime else None
+            contract_factory = ContractFactory(
+                default_profile_id=model_profile_id,
+                default_max_inferences=MAX_AGENT_STEPS if not hasattr(self, '_runtime') else 25,
+                default_ctx_limit=self.ctx_limit,
+            )
+            contract = contract_factory.create(
+                prompt=prompt,
+                source_page=source_page,
+                allowed_tools=allowed_tools,
+                model_profile_id=model_profile_id,
+                ctx_limit=self.ctx_limit,
+                model_fingerprint=getattr(self, "_model_fingerprint", ""),
+            )
+            self.sig_trace.emit(
+                f"[ENGINE] contract: id={contract.contract_id[:8]}..., "
+                f"policy={contract.tool_policy.value}, "
+                f"profile={contract.model_profile_id}"
+            )
+
         self.worker = GeneratorWorker(
             self.llm,
             messages,
@@ -423,6 +525,10 @@ class LLMEngine(QObject):
             runtime=self._runtime if self._worker_agent_mode else None,
             agent_mode=self._worker_agent_mode,
         )
+        # Pass profile and contract to worker for adapter setup
+        self.worker._model_profile_id = model_profile_id
+        self.worker._contract = contract
+
         self.worker.token.connect(self.sig_token)
         self.worker.trace.connect(self.sig_trace)
         self.worker.usage.connect(self._on_usage_update)
