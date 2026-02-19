@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QFrame, QLabel, QSlider, QHBoxLayout,
-    QPushButton, QScrollArea, QSizePolicy
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QDragEnterEvent, QPainter, QPen, QColor, QFont
@@ -24,6 +24,40 @@ class MonoGroupBox(QFrame):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.layout_main = import_vbox(self)
         self.layout_main.setContentsMargins(10, 22, 10, 8)
+        self._header_actions: list[QPushButton] = []
+
+    def add_header_action(self, text, callback):
+        btn = QPushButton(text, self)
+        btn.setFixedHeight(18)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            "QPushButton {"
+            "background: transparent; border: 1px solid #3a3a3a; color: #9a9a9a;"
+            "padding: 0 6px; font-size: 8px; font-weight: bold;"
+            "}"
+            "QPushButton:hover { border-color: #00ffaa; color: #00ffaa; }"
+        )
+        btn.clicked.connect(callback)
+        btn.raise_()
+        self._header_actions.append(btn)
+        self._position_header_actions()
+        return btn
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_header_actions()
+
+    def _position_header_actions(self):
+        if not self._header_actions:
+            return
+        x = self.width() - 10
+        for btn in reversed(self._header_actions):
+            hint = btn.sizeHint()
+            w = max(hint.width(), 42)
+            btn.setFixedWidth(w)
+            x -= w
+            btn.move(x, 1)
+            x -= 4
 
     def add_widget(self, widget):
         self.layout_main.addWidget(widget)
@@ -103,6 +137,66 @@ class MonoButton(QPushButton):
         super().__init__(text)
         self.setCursor(Qt.PointingHandCursor)
         self.setProperty("accent", "true" if accent else "false")
+
+
+class CollapsibleStepWidget(QFrame):
+    def __init__(self, step_number, label, status_icon, parent=None):
+        super().__init__(parent)
+        self._expanded = False
+        self._detail_text = ""
+        self.setObjectName("collapsible_step")
+        self.setStyleSheet(
+            "QFrame#collapsible_step {"
+            "background: #121212; border: 1px solid #2d2d2d; border-radius: 2px;"
+            "}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 6)
+        layout.setSpacing(4)
+
+        self.header_btn = QPushButton(self._header_text(step_number, label, status_icon, "▸"))
+        self.header_btn.setCursor(Qt.PointingHandCursor)
+        self.header_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; text-align: left;"
+            "color: #d4d4d4; font-family: Consolas; font-size: 10px; }"
+        )
+        self.header_btn.clicked.connect(self.toggle)
+
+        self.detail = QTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setVisible(False)
+        self.detail.setFixedHeight(96)
+        self.detail.setStyleSheet(
+            "QTextEdit { background: #0c0c0c; border: 1px solid #2d2d2d;"
+            "color: #d4d4d4; font-family: Consolas; font-size: 10px; }"
+        )
+
+        self.step_number = step_number
+        self.label = label
+        self.status_icon = status_icon
+        layout.addWidget(self.header_btn)
+        layout.addWidget(self.detail)
+
+    def _header_text(self, step_number, label, status_icon, arrow):
+        return f"{arrow} [{step_number}] {status_icon} {label}"
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        self.detail.setVisible(self._expanded)
+        arrow = "▾" if self._expanded else "▸"
+        self.header_btn.setText(self._header_text(self.step_number, self.label, self.status_icon, arrow))
+
+    def update_summary(self, step_number, label, status_icon):
+        self.step_number = step_number
+        self.label = label
+        self.status_icon = status_icon
+        arrow = "▾" if self._expanded else "▸"
+        self.header_btn.setText(self._header_text(step_number, label, status_icon, arrow))
+
+    def set_detail_text(self, text):
+        self._detail_text = text
+        self.detail.setPlainText(text)
 
 
 class MonoTriangleButton(QPushButton):

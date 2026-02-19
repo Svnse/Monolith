@@ -208,6 +208,23 @@ class MonoGuard(QObject):
                 self._stop_requested[key] = True
             engine.stop_generation()
 
+    def force_stop(self, target: str) -> None:
+        self.sig_trace.emit("system", f"GUARD: FORCE STOP target={target}")
+        engine = self.engines.get(target)
+        if not engine:
+            return
+        if hasattr(engine, "force_stop"):
+            engine.force_stop()
+        else:
+            engine.stop_generation()
+        task = self.active_tasks.get(target)
+        if task:
+            task.status = TaskStatus.CANCELLED
+        self.active_tasks[target] = None
+        self._stop_requested[target] = False
+        QTimer.singleShot(0, lambda: self.sig_engine_ready.emit(target))
+        self.sig_status.emit(target, SystemStatus.READY)
+
     def _on_engine_finished(self, engine_key: str) -> None:
         task = self.active_tasks.get(engine_key)
         if task:
