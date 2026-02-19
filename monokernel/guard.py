@@ -209,11 +209,12 @@ class MonoGuard(QObject):
             engine.stop_generation()
 
     def force_stop(self, target: str) -> None:
+        """Force terminate engine, killing threads if necessary."""
         self.sig_trace.emit("system", f"GUARD: FORCE STOP target={target}")
         engine = self.engines.get(target)
         if not engine:
             return
-        if hasattr(engine, "force_stop"):
+        if hasattr(engine, 'force_stop'):
             engine.force_stop()
         else:
             engine.stop_generation()

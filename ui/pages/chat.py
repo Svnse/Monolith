@@ -187,61 +187,15 @@ class PageChat(QWidget):
         self.btn_attach.clicked.connect(self._attach_file_placeholder)
         options_layout.addWidget(self.btn_attach)
 
-        # Think mode toggle row
-        think_row = QHBoxLayout()
-        think_row.setSpacing(4)
-        lbl_think = QLabel("THINK")
-        lbl_think.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 9px; font-weight: bold; letter-spacing: 1px;")
-        think_row.addWidget(lbl_think)
-
-        think_style = f"""
-            QPushButton {{
-                background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM};
-                padding: 4px 10px; font-size: 9px; font-weight: bold; border-radius: 2px;
-            }}
-            QPushButton:checked {{
-                background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY};
-            }}
-            QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
-        """
-        self.btn_think_off = QPushButton("OFF")
-        self.btn_think_off.setCheckable(True)
-        self.btn_think_off.setStyleSheet(think_style)
-        self.btn_think_std = QPushButton("STD")
-        self.btn_think_std.setCheckable(True)
-        self.btn_think_std.setStyleSheet(think_style)
-        self.btn_think_ext = QPushButton("EXT")
-        self.btn_think_ext.setCheckable(True)
-        self.btn_think_ext.setStyleSheet(think_style)
-
-        self._think_group = QButtonGroup(self)
-        self._think_group.setExclusive(True)
-        self._think_group.addButton(self.btn_think_off)
-        self._think_group.addButton(self.btn_think_std)
-        self._think_group.addButton(self.btn_think_ext)
-        if self._thinking_mode:
-            self.btn_think_std.setChecked(True)
-        else:
-            self.btn_think_off.setChecked(True)
-        self.btn_think_off.clicked.connect(lambda: self._set_thinking_mode(False, "Off"))
-        self.btn_think_std.clicked.connect(lambda: self._set_thinking_mode(True, "Standard"))
-        self.btn_think_ext.clicked.connect(lambda: self._set_thinking_mode(True, "Extended"))
-
-        think_row.addWidget(self.btn_think_off)
-        think_row.addWidget(self.btn_think_std)
-        think_row.addWidget(self.btn_think_ext)
-        think_row.addStretch()
-        options_layout.addLayout(think_row)
-
         control_layout.addWidget(self.options_panel)
         control_layout.addStretch()
 
         # --- HISTORY group ---
         history_group = MonoGroupBox("HISTORY")
-        history_group.add_header_action("SAVE", self._save_chat_archive)
-        history_group.add_header_action("CLEAR", lambda: self._clear_current_session(delete_archive=False))
         history_layout = QVBoxLayout()
         history_layout.setSpacing(10)
+
+        # Archive controls removed — SAVE/CLEAR in header, double-click to load, double-right-click to delete
 
         self.archive_list = QListWidget()
         self.archive_list.setStyleSheet(f"""
@@ -253,7 +207,7 @@ class PageChat(QWidget):
             QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
             {_s.SCROLLBAR_STYLE}
         """)
-        self.archive_list.itemDoubleClicked.connect(lambda _item: self._load_chat_archive())
+        self.archive_list.itemDoubleClicked.connect(lambda: self._load_chat_archive())
         history_layout.addWidget(self.archive_list)
         history_group.add_layout(history_layout)
 
@@ -289,6 +243,8 @@ class PageChat(QWidget):
         operations_group.add_layout(operations_layout)
 
         chat_group = MonoGroupBox("CHAT")
+        chat_group.add_header_action("SAVE", self._save_chat_archive)
+        chat_group.add_header_action("CLEAR", lambda: self._clear_current_session(delete_archive=False))
         chat_layout = QVBoxLayout()
         chat_layout.setSpacing(10)
 
@@ -308,13 +264,19 @@ class PageChat(QWidget):
         """)
         chat_layout.addWidget(self.message_list)
         
-        # --- Input toolbar (between separator and input box) ---
-        # --- Input row ---
+        # --- Input row with (+) button ---
         input_row = QHBoxLayout()
+
         self.btn_plus = MonoButton("+")
         self.btn_plus.setFixedSize(32, 32)
         self.btn_plus.setCursor(Qt.PointingHandCursor)
+        self.btn_plus.setStyleSheet(
+            f"QPushButton {{ background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; "
+            f"color: {_s.FG_DIM}; font-size: 14px; font-weight: bold; border-radius: 2px; }}"
+            f"QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY}; }}"
+        )
         self.btn_plus.clicked.connect(self._show_plus_menu)
+
         self.input = QLineEdit()
         self.input.setPlaceholderText("Type a message...")
         self.input.returnPressed.connect(self.handle_send_click)
@@ -350,7 +312,7 @@ class PageChat(QWidget):
         input_row.addWidget(self.input)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
-        
+
         chat_group.add_layout(chat_layout)
 
         right_stack = QSplitter(Qt.Vertical)
@@ -369,8 +331,8 @@ class PageChat(QWidget):
         main_split.addWidget(right_stack)
         main_split.setStretchFactor(0, 3)
         main_split.setStretchFactor(1, 2)
-        main_split.setSizes([900, 200])
         main_split.widget(1).setMaximumWidth(500)
+        main_split.setSizes([900, 200])
         self._active_assistant_started = False
         self._active_assistant_token_count = 0
 
@@ -588,7 +550,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._trace_html(display_msg, state, error=(state == "ERROR"))
 
     def clear_chat(self):
-        self._auto_save_chat()
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
 
     def _sync_path_display(self):
@@ -723,18 +684,38 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
 
     def _show_plus_menu(self):
         menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; "
+            f"color: {_s.FG_TEXT}; font-family: Consolas; font-size: 10px; }}"
+            f"QMenu::item {{ padding: 6px 16px; }}"
+            f"QMenu::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}"
+            f"QMenu::separator {{ height: 1px; background: {_s.BORDER_SUBTLE}; margin: 4px 8px; }}"
+        )
+
+        # THINK mode section
         think_menu = menu.addMenu("THINK")
-        a_off = think_menu.addAction("OFF")
-        a_std = think_menu.addAction("STD")
-        a_ext = think_menu.addAction("EXT")
-        attach = menu.addAction("ATTACH FILE")
-        picked = menu.exec(self.btn_plus.mapToGlobal(self.btn_plus.rect().bottomLeft()))
-        if picked == a_off:
-            self._set_thinking_mode(False, "Off")
-        elif picked in {a_std, a_ext}:
-            self._set_thinking_mode(True, "Standard" if picked == a_std else "Extended")
-        elif picked == attach:
-            self._attach_file_placeholder()
+        think_menu.setStyleSheet(menu.styleSheet())
+        ag = QActionGroup(think_menu)
+        ag.setExclusive(True)
+        act_off = think_menu.addAction("OFF")
+        act_off.setCheckable(True)
+        act_off.setChecked(not self._thinking_mode)
+        ag.addAction(act_off)
+        act_std = think_menu.addAction("STD")
+        act_std.setCheckable(True)
+        act_std.setChecked(self._thinking_mode)
+        ag.addAction(act_std)
+        act_ext = think_menu.addAction("EXT")
+        act_ext.setCheckable(True)
+        ag.addAction(act_ext)
+        act_off.triggered.connect(lambda: self._set_thinking_mode(False, "Off"))
+        act_std.triggered.connect(lambda: self._set_thinking_mode(True, "Standard"))
+        act_ext.triggered.connect(lambda: self._set_thinking_mode(True, "Extended"))
+
+        menu.addSeparator()
+        menu.addAction("ATTACH FILE", self._attach_file_placeholder)
+
+        menu.exec(self.btn_plus.mapToGlobal(self.btn_plus.rect().topRight()))
 
     def _toggle_options_panel(self):
         self._options_expanded = not self._options_expanded
@@ -742,12 +723,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.btn_options_toggle.setText("▾ ADVANCED" if self._options_expanded else "▸ ADVANCED")
 
     def _update_thinking_button_style(self):
-        # Update the think toggle buttons in the OPTIONS panel
-        if hasattr(self, 'btn_think_off'):
-            if self._thinking_mode:
-                self.btn_think_std.setChecked(True)
-            else:
-                self.btn_think_off.setChecked(True)
+        # Think mode state is tracked internally; (+) menu reflects it dynamically
+        pass
 
     def _attach_file_placeholder(self):
         """Placeholder for file attachment — backend will be implemented later."""
@@ -967,7 +944,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._title_generated = False
         self._suppress_title_regen = False
         self.trace.clear()
-        self._auto_save_chat()
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._trace_plain("--- TRACE RESET ---")
 
@@ -1019,7 +995,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             except OSError:
                 pass
         self.trace.clear()
-        self._auto_save_chat()
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._refresh_archive_list()
 
@@ -1035,10 +1010,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         if self._current_session.get("archive_path") == str(archive_path):
             self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._refresh_archive_list()
-
-    def _auto_save_chat(self):
-        if self._current_session.get("messages"):
-            self._save_chat_archive()
 
     def _save_chat_archive(self):
         session = self._current_session

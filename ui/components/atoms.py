@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
-    QWidget, QFrame, QLabel, QSlider, QHBoxLayout,
-    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QTextEdit
+    QWidget, QFrame, QLabel, QSlider, QHBoxLayout, QVBoxLayout,
+    QPushButton, QScrollArea, QSizePolicy, QTextEdit
 )
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QDragEnterEvent, QPainter, QPen, QColor, QFont
@@ -20,50 +20,50 @@ class MonoGroupBox(QFrame):
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self._title = title
+        self._header_buttons: list[QPushButton] = []
         self.setObjectName("mono_group_box")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.layout_main = import_vbox(self)
         self.layout_main.setContentsMargins(10, 22, 10, 8)
-        self._header_actions: list[QPushButton] = []
-
-    def add_header_action(self, text, callback):
-        btn = QPushButton(text, self)
-        btn.setFixedHeight(18)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            "QPushButton {"
-            "background: transparent; border: 1px solid #3a3a3a; color: #9a9a9a;"
-            "padding: 0 6px; font-size: 8px; font-weight: bold;"
-            "}"
-            "QPushButton:hover { border-color: #00ffaa; color: #00ffaa; }"
-        )
-        btn.clicked.connect(callback)
-        btn.raise_()
-        self._header_actions.append(btn)
-        self._position_header_actions()
-        return btn
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._position_header_actions()
-
-    def _position_header_actions(self):
-        if not self._header_actions:
-            return
-        x = self.width() - 10
-        for btn in reversed(self._header_actions):
-            hint = btn.sizeHint()
-            w = max(hint.width(), 42)
-            btn.setFixedWidth(w)
-            x -= w
-            btn.move(x, 1)
-            x -= 4
 
     def add_widget(self, widget):
         self.layout_main.addWidget(widget)
 
     def add_layout(self, layout):
         self.layout_main.addLayout(layout)
+
+    def add_header_action(self, text, callback):
+        """Add a small text button in the top-right of the group box title bar."""
+        import core.style as s
+        btn = QPushButton(text, self)
+        btn.setFixedHeight(16)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; "
+            f"color: {s.FG_DIM}; font-family: Consolas; font-size: 8px; "
+            f"font-weight: bold; letter-spacing: 1px; padding: 0 6px; }}"
+            f"QPushButton:hover {{ color: {s.ACCENT_PRIMARY}; }}"
+        )
+        btn.clicked.connect(callback)
+        self._header_buttons.append(btn)
+        self._position_header_buttons()
+        return btn
+
+    def _position_header_buttons(self):
+        """Position header action buttons at the top-right of the frame."""
+        x_offset = self.width() - 10
+        for btn in reversed(self._header_buttons):
+            btn.adjustSize()
+            bw = max(btn.sizeHint().width(), 40)
+            btn.setFixedWidth(bw)
+            x_offset -= bw + 2
+            btn.move(x_offset, 2)
+            btn.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._header_buttons:
+            self._position_header_buttons()
 
     def _resolve_parent_bg(self):
         """Walk up the parent chain to find the first opaque background color."""
@@ -137,66 +137,6 @@ class MonoButton(QPushButton):
         super().__init__(text)
         self.setCursor(Qt.PointingHandCursor)
         self.setProperty("accent", "true" if accent else "false")
-
-
-class CollapsibleStepWidget(QFrame):
-    def __init__(self, step_number, label, status_icon, parent=None):
-        super().__init__(parent)
-        self._expanded = False
-        self._detail_text = ""
-        self.setObjectName("collapsible_step")
-        self.setStyleSheet(
-            "QFrame#collapsible_step {"
-            "background: #121212; border: 1px solid #2d2d2d; border-radius: 2px;"
-            "}"
-        )
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 6)
-        layout.setSpacing(4)
-
-        self.header_btn = QPushButton(self._header_text(step_number, label, status_icon, "▸"))
-        self.header_btn.setCursor(Qt.PointingHandCursor)
-        self.header_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: none; text-align: left;"
-            "color: #d4d4d4; font-family: Consolas; font-size: 10px; }"
-        )
-        self.header_btn.clicked.connect(self.toggle)
-
-        self.detail = QTextEdit()
-        self.detail.setReadOnly(True)
-        self.detail.setVisible(False)
-        self.detail.setFixedHeight(96)
-        self.detail.setStyleSheet(
-            "QTextEdit { background: #0c0c0c; border: 1px solid #2d2d2d;"
-            "color: #d4d4d4; font-family: Consolas; font-size: 10px; }"
-        )
-
-        self.step_number = step_number
-        self.label = label
-        self.status_icon = status_icon
-        layout.addWidget(self.header_btn)
-        layout.addWidget(self.detail)
-
-    def _header_text(self, step_number, label, status_icon, arrow):
-        return f"{arrow} [{step_number}] {status_icon} {label}"
-
-    def toggle(self):
-        self._expanded = not self._expanded
-        self.detail.setVisible(self._expanded)
-        arrow = "▾" if self._expanded else "▸"
-        self.header_btn.setText(self._header_text(self.step_number, self.label, self.status_icon, arrow))
-
-    def update_summary(self, step_number, label, status_icon):
-        self.step_number = step_number
-        self.label = label
-        self.status_icon = status_icon
-        arrow = "▾" if self._expanded else "▸"
-        self.header_btn.setText(self._header_text(step_number, label, status_icon, arrow))
-
-    def set_detail_text(self, text):
-        self._detail_text = text
-        self.detail.setPlainText(text)
 
 
 class MonoTriangleButton(QPushButton):
@@ -335,3 +275,111 @@ class CollapsibleSection(QWidget):
         self.anim.setStartValue(0 if checked else content_height)
         self.anim.setEndValue(content_height if checked else 0)
         self.anim.start()
+
+
+class CollapsibleStepWidget(QFrame):
+    """Unified collapsible agent step block with expand/collapse arrow."""
+
+    sig_height_changed = Signal()
+
+    def __init__(self, step_number: int, label: str, status_icon: str = "…", parent=None):
+        super().__init__(parent)
+        import core.style as s
+        self._expanded = False
+        self._step_number = step_number
+        self._label = label
+        self._status_icon = status_icon
+        self._detail_text = ""
+
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"CollapsibleStepWidget {{ background: {s.BG_INPUT}; "
+            f"border: 1px solid {s.BORDER_SUBTLE}; border-radius: 2px; }}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Header row (always visible)
+        self._header = QFrame()
+        self._header.setCursor(Qt.PointingHandCursor)
+        self._header.setStyleSheet(f"border: none; background: transparent;")
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(8, 4, 8, 4)
+        header_layout.setSpacing(6)
+
+        self._arrow = QLabel("▸")
+        self._arrow.setFixedWidth(12)
+        self._arrow.setStyleSheet(
+            f"color: {s.FG_DIM}; font-size: 10px; border: none; background: transparent;"
+        )
+
+        self._lbl_number = QLabel(f"[{step_number}]")
+        self._lbl_number.setFixedWidth(28)
+        self._lbl_number.setStyleSheet(
+            f"color: {s.FG_DIM}; font-family: Consolas; font-size: 9px; "
+            f"border: none; background: transparent;"
+        )
+
+        self._lbl_icon = QLabel(status_icon)
+        self._lbl_icon.setFixedWidth(14)
+        self._lbl_icon.setStyleSheet(
+            f"color: {s.ACCENT_PRIMARY}; font-size: 10px; "
+            f"border: none; background: transparent;"
+        )
+
+        self._lbl_label = QLabel(label)
+        self._lbl_label.setStyleSheet(
+            f"color: {s.FG_TEXT}; font-family: Consolas; font-size: 10px; "
+            f"border: none; background: transparent;"
+        )
+
+        header_layout.addWidget(self._arrow)
+        header_layout.addWidget(self._lbl_number)
+        header_layout.addWidget(self._lbl_icon)
+        header_layout.addWidget(self._lbl_label)
+        header_layout.addStretch()
+        root.addWidget(self._header)
+
+        # Detail area (hidden by default)
+        self._detail = QTextEdit()
+        self._detail.setReadOnly(True)
+        self._detail.setVisible(False)
+        self._detail.setMaximumHeight(200)
+        self._detail.setStyleSheet(
+            f"QTextEdit {{ background: {s.BG_MAIN}; color: {s.FG_TEXT}; "
+            f"border: none; border-top: 1px solid {s.BORDER_SUBTLE}; "
+            f"font-family: Consolas; font-size: 9px; padding: 6px; }}"
+        )
+        root.addWidget(self._detail)
+
+        self._header.mousePressEvent = self._on_header_click
+
+    def _on_header_click(self, event):
+        self._expanded = not self._expanded
+        self._detail.setVisible(self._expanded)
+        self._arrow.setText("▾" if self._expanded else "▸")
+        self.sig_height_changed.emit()
+
+    def update_status(self, status_icon: str):
+        import core.style as s
+        self._status_icon = status_icon
+        self._lbl_icon.setText(status_icon)
+        color_map = {"✓": s.ACCENT_PRIMARY, "✗": s.FG_ERROR, "▶": s.FG_WARN, "…": s.FG_DIM}
+        self._lbl_icon.setStyleSheet(
+            f"color: {color_map.get(status_icon, s.FG_DIM)}; font-size: 10px; "
+            f"border: none; background: transparent;"
+        )
+
+    def update_label(self, label: str):
+        self._label = label
+        self._lbl_label.setText(label)
+
+    def set_detail(self, text: str):
+        self._detail_text = text
+        self._detail.setPlainText(text)
+
+    def append_detail(self, text: str):
+        self._detail_text += text
+        self._detail.setPlainText(self._detail_text)

@@ -136,7 +136,7 @@ class MonolithUI(QMainWindow):
 
     def _edge_at(self, pos):
         """Return 'right+bottom' if pos is within the bottom-right grip zone, else None."""
-        g = self._GRIP * 3
+        g = self._GRIP * 4  # slightly larger corner hit area
         r = self.rect()
         if pos.x() >= r.width() - g and pos.y() >= r.height() - g:
             return "right+bottom"
@@ -184,19 +184,20 @@ class MonolithUI(QMainWindow):
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
             return
-        # Hover cursor
-        edge = self._edge_at(event.position().toPoint())
+        # Hover cursor — only set resize cursor when in corner grip zone
+        pos = event.position().toPoint()
+        edge = self._edge_at(pos)
         if edge and edge in self._CURSOR_MAP:
             self.setCursor(self._CURSOR_MAP[edge])
-        else:
-            if self.cursor().shape() != Qt.ArrowCursor:
-                self.setCursor(Qt.ArrowCursor)
+        elif self.cursor().shape() != Qt.ArrowCursor:
+            self.unsetCursor()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         self._drag_pos = None
         self._resize_edge = None
         self._resize_origin = None
         self._resize_geo = None
+        self.unsetCursor()
 
     def leaveEvent(self, event):
         self.unsetCursor()

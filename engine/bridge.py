@@ -86,5 +86,14 @@ class EngineBridge(QObject):
         self._active_gid = 0
         self.engine.stop_generation()
 
+    def force_stop(self) -> None:
+        """Force terminate — escalated stop that kills threads."""
+        self._gen_id += 1
+        self._active_gid = 0
+        if hasattr(self.engine, 'force_stop'):
+            self.engine.force_stop()
+        else:
+            self.engine.stop_generation()
+
     def shutdown(self) -> None:
         self.engine.shutdown()

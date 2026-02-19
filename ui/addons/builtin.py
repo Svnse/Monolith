@@ -206,8 +206,13 @@ def code_factory(ctx: AddonContext):
     w.sig_stop.connect(_on_stop)
 
     def _on_force_stop():
-        _trace(f"[LLM:{short_id}] FORCE STOP")
-        ctx.guard.force_stop(engine_key)
+        try:
+            _trace(f"[LLM:{short_id}] FORCE STOP — terminating agent")
+            ctx.guard.force_stop(engine_key)
+        except Exception as e:
+            _trace(f"[LLM:{short_id}] EXCEPTION in force_stop: {e}")
+            import traceback
+            traceback.print_exc()
 
     w.sig_force_stop.connect(_on_force_stop)
 

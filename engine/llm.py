@@ -158,11 +158,8 @@ class GeneratorWorker(QThread):
                     contract.tool_policy.value if hasattr(contract.tool_policy, "value") else str(contract.tool_policy),
                 )
                 if gp is not None and gp.grammar_spec and gp.grammar_type == "bnf":
-                    try:
-                        from llama_cpp import LlamaGrammar
-                        kwargs["grammar"] = LlamaGrammar.from_string(gp.grammar_spec)
-                    except Exception:
-                        pass
+                    from llama_cpp import LlamaGrammar
+                    kwargs["grammar"] = LlamaGrammar.from_string(gp.grammar_spec)
             except Exception:
                 pass  # graceful fallback if grammar not supported
 
@@ -391,16 +388,16 @@ class LLMEngine(QObject):
             self.sig_trace.emit("ERROR: Cannot unload while generating.")
             return
 
-        if self.llm:
-            self.set_status(SystemStatus.UNLOADING)
+        self.set_status(SystemStatus.UNLOADING)
+        if self.llm is not None:
             try:
-                if hasattr(self.llm, "close"):
+                if hasattr(self.llm, 'close'):
                     self.llm.close()
             except Exception:
                 pass
             self.llm = None
-            import gc
-            gc.collect()
+        import gc
+        gc.collect()
         self.model_loaded = False
         self.model_ctx_length = None
         self.reset_conversation(MASTER_PROMPT)
@@ -430,12 +427,6 @@ class LLMEngine(QObject):
         return f"{base_prompt}\n\n[BEHAVIOR TAGS]\n" + "\n".join(cleaned)
 
     def generate(self, payload: dict):
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.requestInterruption()
-            self.worker.wait(3000)
-        if self.loader is not None and self.loader.isRunning():
-            self.loader.wait(3000)
-
         if not self.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
             self.set_status(SystemStatus.ERROR)
@@ -504,6 +495,13 @@ class LLMEngine(QObject):
                 }
             )
 
+        # Clean up any existing worker before starting a new one (Bug 2 fix)
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(3000)
+        if self.loader is not None and self.loader.isRunning():
+            self.loader.wait(3000)
+
         set_workspace_root()
         self._worker_seed_count = len(messages)
         self._worker_agent_mode = request_agent_mode
@@ -559,19 +557,6 @@ class LLMEngine(QObject):
         self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": request, "result": result})
         return result
 
-    def force_stop(self):
-        """Force terminate running generation thread."""
-        self.stop_generation()
-        if self.worker and self.worker.isRunning():
-            self.worker.requestInterruption()
-            runtime = getattr(self.worker, "runtime", None)
-            if runtime is not None:
-                runtime._force_terminate_after_next_inference = True
-            if not self.worker.wait(2000):
-                self.worker.terminate()
-                self.worker.wait(1000)
-        self.sig_status.emit(SystemStatus.READY)
-
     def stop_generation(self):
         if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
             self._load_cancel_requested = True
@@ -581,6 +566,18 @@ class LLMEngine(QObject):
         self._ephemeral_generation = False
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
+
+    def force_stop(self):
+        """Force terminate running generation thread."""
+        self.stop_generation()
+        if self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            if hasattr(self.worker, 'runtime') and self.worker.runtime:
+                self.worker.runtime._force_terminate_after_next_inference = True
+            if not self.worker.wait(2000):
+                self.worker.terminate()
+                self.worker.wait(1000)
+        self.sig_status.emit(SystemStatus.READY)
 
     def _on_usage_update(self, count):
         self.sig_usage.emit(count)
