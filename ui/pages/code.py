@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+import time
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -24,11 +26,12 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QMenu,
 )
 
 from core.state import SystemStatus
 import core.style as _s
-from ui.components.atoms import MonoButton, MonoGroupBox, MonoSlider
+from ui.components.atoms import MonoButton, MonoGroupBox, MonoSlider, CollapsibleStepWidget
 from ui.components.message_widget import MessageWidget
 from core.llm_config import DEFAULT_CONFIG, load_config, save_config
 from core.paths import CONFIG_DIR
@@ -167,6 +170,7 @@ class PageCode(QWidget):
     sig_load = Signal()
     sig_unload = Signal()
     sig_stop = Signal()
+    sig_force_stop = Signal()
     sig_sync_history = Signal(list)
     sig_set_model_path = Signal(str)
     sig_set_ctx_limit = Signal(int)
@@ -204,6 +208,8 @@ class PageCode(QWidget):
         self._runtime_checkpoints: list[dict] = []
         self._pending_capability_requests: dict[str, dict] = {}
         self._protocol_compliance_rate: float = 1.0
+        self._stop_requested_at: float | None = None
+        self._step_widgets: dict[int, CollapsibleStepWidget] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -214,22 +220,10 @@ class PageCode(QWidget):
         layout.addWidget(main_split)
 
         chat_group = MonoGroupBox("CODE")
+        chat_group.add_header_action("SAVE", self._save_code_archive)
+        chat_group.add_header_action("CLEAR", self._new_session)
         chat_layout = QVBoxLayout()
         chat_layout.setSpacing(10)
-
-        workspace_row = QHBoxLayout()
-        self.workspace_input = QLineEdit()
-        self.workspace_input.setReadOnly(True)
-        self.workspace_input.setPlaceholderText("Select a workspace folder to begin")
-        self.workspace_input.setStyleSheet(
-            f"background: {_s.BG_INPUT}; color: {_s.FG_PLACEHOLDER}; border: 1px solid {_s.BORDER_LIGHT}; padding: 5px;"
-        )
-        btn_workspace = MonoButton("...")
-        btn_workspace.setFixedWidth(30)
-        btn_workspace.clicked.connect(self.pick_workspace)
-        workspace_row.addWidget(self.workspace_input)
-        workspace_row.addWidget(btn_workspace)
-        chat_layout.addLayout(workspace_row)
 
         self.message_list = QListWidget()
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -250,6 +244,9 @@ class PageCode(QWidget):
         chat_layout.addLayout(self._cap_container)
 
         input_row = QHBoxLayout()
+        self.btn_plus = MonoButton("+")
+        self.btn_plus.setFixedSize(32, 32)
+        self.btn_plus.clicked.connect(self._show_plus_menu)
         self.input = QLineEdit()
         self.input.setPlaceholderText("Select a workspace folder to begin")
         self.input.returnPressed.connect(self.handle_send_click)
@@ -279,15 +276,21 @@ class PageCode(QWidget):
             QPushButton:pressed {{{{ background: {_s.ACCENT_PRIMARY_DARK}; }}}}
         """
         self.btn_send.clicked.connect(self.handle_send_click)
+        input_row.addWidget(self.btn_plus)
         input_row.addWidget(self.input)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
 
         status_row = QHBoxLayout()
+        self.btn_workspace_dot = MonoButton("•")
+        self.btn_workspace_dot.setFixedSize(24, 24)
+        self.btn_workspace_dot.setToolTip("Select workspace directory")
+        self.btn_workspace_dot.clicked.connect(self.pick_workspace)
         self.lbl_workspace_status = QLabel("workspace: (none)")
         self.lbl_workspace_status.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
         self.lbl_step_status = QLabel("step: 0/25")
         self.lbl_step_status.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px;")
+        status_row.addWidget(self.btn_workspace_dot)
         status_row.addWidget(self.lbl_workspace_status)
         status_row.addStretch()
         self.lbl_protocol = QLabel("protocol: 100.0%")
@@ -324,12 +327,17 @@ class PageCode(QWidget):
         self.btn_agent_trace = MonoButton("TRACE")
         self.btn_agent_trace.setCheckable(True)
         self.btn_agent_trace.setStyleSheet(agent_tab_style)
+        self.btn_agent_runtime = MonoButton("RUNTIME")
+        self.btn_agent_runtime.setCheckable(True)
+        self.btn_agent_runtime.setStyleSheet(agent_tab_style)
         agent_tab_group = QButtonGroup(self)
         agent_tab_group.setExclusive(True)
         agent_tab_group.addButton(self.btn_agent_steps)
         agent_tab_group.addButton(self.btn_agent_trace)
+        agent_tab_group.addButton(self.btn_agent_runtime)
         agent_tab_row.addWidget(self.btn_agent_steps)
         agent_tab_row.addWidget(self.btn_agent_trace)
+        agent_tab_row.addWidget(self.btn_agent_runtime)
         agent_tab_row.addStretch()
         agent_layout.addLayout(agent_tab_row)
 
@@ -338,33 +346,16 @@ class PageCode(QWidget):
         steps_inner = QVBoxLayout(steps_page)
         steps_inner.setContentsMargins(0, 6, 0, 0)
         steps_inner.setSpacing(6)
-        self.steps_list = QListWidget()
-        self.steps_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.steps_list.currentRowChanged.connect(self._on_step_selected)
-        self.steps_list.setStyleSheet(f"""
-            QListWidget {{
-                background: {_s.BG_INPUT}; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
-                font-family: 'Consolas', monospace; font-size: 10px;
-            }}
-            QListWidget::item {{ padding: 5px; }}
-            QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
-            {_s.SCROLLBAR_STYLE}
-        """)
-        self.step_detail = QTextEdit()
-        self.step_detail.setReadOnly(True)
-        self.step_detail.setFixedHeight(120)
-        self.step_detail.setStyleSheet(f"""
-            QTextEdit {{
-                background-color: {_s.BG_INPUT};
-                color: {_s.FG_TEXT};
-                border: 1px solid {_s.BORDER_SUBTLE};
-                font-family: 'Consolas', monospace;
-                font-size: 10px;
-            }}
-            {_s.SCROLLBAR_STYLE}
-        """)
-        steps_inner.addWidget(self.steps_list)
-        steps_inner.addWidget(self.step_detail)
+        self.steps_scroll = QScrollArea()
+        self.steps_scroll.setWidgetResizable(True)
+        self.steps_scroll.setStyleSheet(f"QScrollArea {{ background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_SUBTLE}; }}")
+        self.steps_container = QWidget()
+        self.steps_layout = QVBoxLayout(self.steps_container)
+        self.steps_layout.setContentsMargins(6, 6, 6, 6)
+        self.steps_layout.setSpacing(6)
+        self.steps_layout.addStretch()
+        self.steps_scroll.setWidget(self.steps_container)
+        steps_inner.addWidget(self.steps_scroll)
 
         trace_page = QWidget()
         trace_inner = QVBoxLayout(trace_page)
@@ -389,6 +380,7 @@ class PageCode(QWidget):
         self.agent_stack.addWidget(trace_page)
         self.btn_agent_steps.toggled.connect(lambda checked: self.agent_stack.setCurrentIndex(0) if checked else None)
         self.btn_agent_trace.toggled.connect(lambda checked: self.agent_stack.setCurrentIndex(1) if checked else None)
+        self.btn_agent_runtime.toggled.connect(lambda checked: self.agent_stack.setCurrentIndex(1) if checked else None)
         agent_layout.addWidget(self.agent_stack)
         agent_group.add_layout(agent_layout)
 
@@ -522,15 +514,7 @@ class PageCode(QWidget):
         tab_row.addWidget(self.btn_tab_config)
         tab_row.addStretch()
 
-        self.btn_new_session = MonoButton("NEW")
-        self.btn_new_session.clicked.connect(self._new_session)
-        self.btn_save_code_session = MonoButton("SAVE")
-        self.btn_save_code_session.clicked.connect(self._save_code_archive)
-        self.btn_load_code_session = MonoButton("LOAD")
-        self.btn_load_code_session.clicked.connect(self._load_code_archive)
-        tab_row.addWidget(self.btn_new_session)
-        tab_row.addWidget(self.btn_save_code_session)
-        tab_row.addWidget(self.btn_load_code_session)
+
 
         controls_layout.addLayout(tab_row)
 
@@ -551,6 +535,7 @@ class PageCode(QWidget):
             QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
             {_s.SCROLLBAR_STYLE}
         """)
+        self.code_archive_list.itemDoubleClicked.connect(lambda _item: self._load_code_archive())
         history_layout.addWidget(self.code_archive_list)
 
         config_tab = QWidget()
@@ -606,16 +591,15 @@ class PageCode(QWidget):
         controls_group.add_layout(controls_layout)
 
         right_stack.addWidget(agent_group)
-        right_stack.addWidget(runtime_group)
         right_stack.addWidget(controls_group)
         right_stack.setStretchFactor(0, 3)
         right_stack.setStretchFactor(1, 1)
-        right_stack.setStretchFactor(2, 1)
 
         main_split.addWidget(chat_group)
         main_split.addWidget(right_stack)
         main_split.setStretchFactor(0, 3)
         main_split.setStretchFactor(1, 2)
+        main_split.setSizes([900, 200])
 
         self._sync_path_display()
         self._sync_workspace_display()
@@ -640,16 +624,12 @@ class PageCode(QWidget):
     def _refresh_step_item(self, row: int) -> None:
         if row < 0 or row >= len(self._agent_steps):
             return
-        item = self.steps_list.item(row)
-        if item is None:
-            return
-        item.setText(self._render_step_label(self._agent_steps[row], row))
-
-    def _on_step_selected(self, row: int) -> None:
-        if row < 0 or row >= len(self._agent_steps):
-            self.step_detail.clear()
-            return
         step = self._agent_steps[row]
+        step_id = step.get("step_id")
+        widget = self._step_widgets.get(step_id) if isinstance(step_id, int) else None
+        if widget is None:
+            return
+        widget.update_summary(row + 1, step.get("label", "Step"), self._icon_for_status(step.get("status", "pending")))
         lines = [
             f"step_id: {step.get('step_id')}",
             f"label: {step.get('label')}",
@@ -675,7 +655,7 @@ class PageCode(QWidget):
             lines.append(f"termination_reason: {step.get('termination_reason')}")
         if step.get("error"):
             lines.append(f"error: {step.get('error')}")
-        self.step_detail.setPlainText("\n".join(lines))
+        widget.set_detail_text("\n".join(lines))
 
     def append_agent_event(self, event: dict):
         if not isinstance(event, dict):
@@ -702,8 +682,9 @@ class PageCode(QWidget):
             self._agent_steps.append(step)
             self._agent_step_index_by_id[step_id] = row
             self._current_agent_step_id = step_id
-            self.steps_list.addItem(self._render_step_label(step, row))
-            self.steps_list.setCurrentRow(row)
+            widget = CollapsibleStepWidget(row + 1, step.get("label", "Step"), self._icon_for_status("running"))
+            self._step_widgets[step_id] = widget
+            self.steps_layout.insertWidget(max(0, self.steps_layout.count() - 1), widget)
         elif isinstance(step_id, int) and step_id in self._agent_step_index_by_id:
             row = self._agent_step_index_by_id[step_id]
             step = self._agent_steps[row]
@@ -736,8 +717,6 @@ class PageCode(QWidget):
                     step["status"] = "error"
 
             self._refresh_step_item(row)
-            if self.steps_list.currentRow() == row:
-                self._on_step_selected(row)
 
         if event_name == "NODE_CREATED":
             node_id = event.get("created_node_id")
@@ -1065,8 +1044,12 @@ class PageCode(QWidget):
         self._agent_steps.clear()
         self._agent_step_index_by_id.clear()
         self._current_agent_step_id = None
-        self.steps_list.clear()
-        self.step_detail.clear()
+        self._step_widgets.clear()
+        while self.steps_layout.count() > 1:
+            item = self.steps_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
         self._runtime_nodes.clear()
         self._runtime_branches.clear()
         self._runtime_actions.clear()
@@ -1089,7 +1072,17 @@ class PageCode(QWidget):
 
     def handle_send_click(self):
         if self._is_running:
-            self.sig_stop.emit()
+            now = time.time()
+            if self._stop_requested_at is None:
+                self._stop_requested_at = now
+                self.btn_send.setText("STOPPING...")
+                self.sig_stop.emit()
+            elif (now - self._stop_requested_at) > 3.0:
+                self.btn_send.setText("TERMINATING...")
+                self.sig_force_stop.emit()
+            else:
+                self.btn_send.setText("TERMINATING...")
+                self.sig_force_stop.emit()
             return
         self.send()
 
@@ -1204,8 +1197,12 @@ class PageCode(QWidget):
         self._agent_steps.clear()
         self._agent_step_index_by_id.clear()
         self._current_agent_step_id = None
-        self.steps_list.clear()
-        self.step_detail.clear()
+        self._step_widgets.clear()
+        while self.steps_layout.count() > 1:
+            item = self.steps_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
         self._runtime_nodes.clear()
         self._runtime_branches.clear()
         self._runtime_actions.clear()
@@ -1219,10 +1216,9 @@ class PageCode(QWidget):
         self._refresh_runtime_views()
         self.sig_sync_history.emit([])
 
+
     def _toggle_runtime_panels(self, expanded):
         self._runtime_content.setVisible(expanded)
-        arrow = "\u25b2" if expanded else "\u25bc"
-        self._runtime_toggle.setText(f"{arrow} RUNTIME PANELS")
 
     def _switch_controls_tab(self, index, checked):
         if checked:
@@ -1267,8 +1263,12 @@ class PageCode(QWidget):
 
     def toggle_load(self):
         if self._is_model_loaded:
+            self.btn_load.setText("UNLOADING...")
+            self.btn_load.setEnabled(False)
             self.sig_unload.emit()
         else:
+            self.btn_load.setText("LOADING...")
+            self.btn_load.setEnabled(False)
             self.sig_load.emit()
 
     def _update_load_button_text(self):
@@ -1295,9 +1295,22 @@ class PageCode(QWidget):
         self.path_display.setText(str(model_path) if model_path else "")
 
     def _sync_workspace_display(self):
-        text = str(self._workspace_root) if self._workspace_root else ""
-        self.workspace_input.setText(text)
-        self.lbl_workspace_status.setText(f"workspace: {text or '(none)'}")
+        name = Path(self._workspace_root).name if self._workspace_root else "(none)"
+        self.lbl_workspace_status.setText(f"workspace: {name}")
+
+
+    def _on_model_capabilities(self, caps: dict):
+        model_ctx = caps.get("model_ctx_length") if isinstance(caps, dict) else None
+        if isinstance(model_ctx, int) and model_ctx > 0:
+            self.s_ctx.slider.setMaximum(model_ctx)
+            self.s_tok.slider.setMaximum(min(model_ctx, 32768))
+
+    def _show_plus_menu(self):
+        menu = QMenu(self)
+        attach = menu.addAction("ATTACH FILE")
+        action = menu.exec(self.btn_plus.mapToGlobal(self.btn_plus.rect().bottomLeft()))
+        if action == attach:
+            self._attach_file()
 
     def _on_ctx_limit_changed(self, value):
         self._update_config_value("ctx_limit", int(value))

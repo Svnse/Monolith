@@ -146,6 +146,7 @@ def code_factory(ctx: AddonContext):
     w._mod_id = instance_id
     w._engine_key = engine_key
     ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
+    llm_engine.sig_model_capabilities.connect(w._on_model_capabilities)
 
     w.sig_set_model_path.connect(
         lambda path: ctx.bridge.submit(
@@ -203,6 +204,12 @@ def code_factory(ctx: AddonContext):
             traceback.print_exc()
 
     w.sig_stop.connect(_on_stop)
+
+    def _on_force_stop():
+        _trace(f"[LLM:{short_id}] FORCE STOP")
+        ctx.guard.force_stop(engine_key)
+
+    w.sig_force_stop.connect(_on_force_stop)
 
     def _on_sync_history(history):
         try:

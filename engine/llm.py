@@ -158,7 +158,11 @@ class GeneratorWorker(QThread):
                     contract.tool_policy.value if hasattr(contract.tool_policy, "value") else str(contract.tool_policy),
                 )
                 if gp is not None and gp.grammar_spec and gp.grammar_type == "bnf":
-                    kwargs["grammar"] = gp.grammar_spec
+                    try:
+                        from llama_cpp import LlamaGrammar
+                        kwargs["grammar"] = LlamaGrammar.from_string(gp.grammar_spec)
+                    except Exception:
+                        pass
             except Exception:
                 pass  # graceful fallback if grammar not supported
 
@@ -389,8 +393,14 @@ class LLMEngine(QObject):
 
         if self.llm:
             self.set_status(SystemStatus.UNLOADING)
-            del self.llm
+            try:
+                if hasattr(self.llm, "close"):
+                    self.llm.close()
+            except Exception:
+                pass
             self.llm = None
+            import gc
+            gc.collect()
         self.model_loaded = False
         self.model_ctx_length = None
         self.reset_conversation(MASTER_PROMPT)
@@ -420,6 +430,12 @@ class LLMEngine(QObject):
         return f"{base_prompt}\n\n[BEHAVIOR TAGS]\n" + "\n".join(cleaned)
 
     def generate(self, payload: dict):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(3000)
+        if self.loader is not None and self.loader.isRunning():
+            self.loader.wait(3000)
+
         if not self.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
             self.set_status(SystemStatus.ERROR)
@@ -542,6 +558,19 @@ class LLMEngine(QObject):
         result = self._runtime.runtime_command(command, request)
         self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": request, "result": result})
         return result
+
+    def force_stop(self):
+        """Force terminate running generation thread."""
+        self.stop_generation()
+        if self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            runtime = getattr(self.worker, "runtime", None)
+            if runtime is not None:
+                runtime._force_terminate_after_next_inference = True
+            if not self.worker.wait(2000):
+                self.worker.terminate()
+                self.worker.wait(1000)
+        self.sig_status.emit(SystemStatus.READY)
 
     def stop_generation(self):
         if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
