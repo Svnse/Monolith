@@ -1215,6 +1215,7 @@ class AgentRuntime:
 
             # Continue loop
             self._transition_to(RuntimeState.INFER)
+            continue
 
     # ------------------------------------------------------------------
     # Runtime commands

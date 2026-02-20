@@ -234,8 +234,12 @@ class PageCode(QWidget):
                 font-family: 'Consolas', monospace; font-size: 12px;
             }}
             QListWidget::item {{ border: none; background: transparent; padding: 0px; }}
+            QListWidget::item:selected {{ background: transparent; border: none; }}
+            QListWidget::item:focus {{ background: transparent; border: none; outline: none; }}
             {_s.SCROLLBAR_STYLE}
         """)
+        self.message_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self.message_list.setFocusPolicy(Qt.NoFocus)
         chat_layout.addWidget(self.message_list)
 
         self._cap_container = QVBoxLayout()
@@ -256,16 +260,19 @@ class PageCode(QWidget):
         )
         self.btn_plus.clicked.connect(self._show_plus_menu)
 
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("Select a workspace folder to begin")
-        self.input.returnPressed.connect(self.handle_send_click)
-        self.input.textChanged.connect(self._on_input_changed)
-        self.input.setStyleSheet(f"""
-            QLineEdit {{
+        self.text_input = QTextEdit()
+        self.text_input.setPlaceholderText("Select a workspace folder to begin")
+        self.text_input.setFixedHeight(40)
+        self.text_input.setAcceptRichText(False)
+        self.text_input.textChanged.connect(lambda: self._on_input_changed(self.text_input.toPlainText()))
+        self.text_input.installEventFilter(self)
+        self.text_input.setStyleSheet(f"""
+            QTextEdit {{
                 background: {_s.BG_INPUT}; color: white; border: 1px solid {_s.BORDER_LIGHT};
                 padding: 8px; font-family: 'Verdana'; font-size: 11px;
             }}
-            QLineEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            QTextEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
         """)
 
         self.btn_send = QPushButton("SEND")
@@ -286,7 +293,7 @@ class PageCode(QWidget):
         """
         self.btn_send.clicked.connect(self.handle_send_click)
         input_row.addWidget(self.btn_plus)
-        input_row.addWidget(self.input)
+        input_row.addWidget(self.text_input)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
 
@@ -1039,7 +1046,7 @@ class PageCode(QWidget):
         return None
 
     def send(self):
-        txt = self.input.text().strip()
+        txt = self.text_input.toPlainText().strip()
         if not txt:
             return
         if not self._workspace_root:
@@ -1065,7 +1072,7 @@ class PageCode(QWidget):
         self.lbl_protocol.setText("protocol: 100.0%")
         self._refresh_runtime_views()
         self._set_send_button_state(True)
-        self.input.clear()
+        self.text_input.clear()
         user_idx = self._add_message("user", txt)
         self._append_message_widget(user_idx)
         self._active_assistant_index = self._add_message("assistant", "")
@@ -1113,11 +1120,11 @@ class PageCode(QWidget):
     def _sync_send_availability(self):
         ready = bool(self._workspace_root)
         self.btn_send.setEnabled(ready)
-        self.input.setEnabled(ready)
+        self.text_input.setEnabled(ready)
         if ready:
-            self.input.setPlaceholderText("Enter coding request...")
+            self.text_input.setPlaceholderText("Enter coding request...")
         else:
-            self.input.setPlaceholderText("Select a workspace folder to begin")
+            self.text_input.setPlaceholderText("Select a workspace folder to begin")
 
     def _show_plus_menu(self):
         menu = QMenu(self)
@@ -1133,8 +1140,8 @@ class PageCode(QWidget):
     def _attach_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Attach File", "", "All Files (*)")
         if path:
-            current = self.input.text()
-            self.input.setText(f"{current} [attached: {Path(path).name}]" if current else f"[attached: {Path(path).name}]")
+            current = self.text_input.toPlainText()
+            self.text_input.setPlainText(f"{current} [attached: {Path(path).name}]" if current else f"[attached: {Path(path).name}]")
 
     def _on_model_capabilities(self, caps: dict):
         """Update slider ranges when model reports its context length."""
@@ -1197,12 +1204,14 @@ class PageCode(QWidget):
                 pass
 
     def update_status(self, status):
-        is_processing = status in (SystemStatus.LOADING, SystemStatus.RUNNING, SystemStatus.UNLOADING)
-        
-        # Update load button immediately for visual feedback during load/unload
-        self.btn_load.setEnabled(not is_processing)
-        if is_processing:
-            self.btn_load.setText("PROCESSING...")
+        is_model_op = status in (SystemStatus.LOADING, SystemStatus.UNLOADING)
+
+        # Update load button only for model operations, not generation
+        if is_model_op:
+            self.btn_load.setEnabled(False)
+            self.btn_load.setText("LOADING..." if status == SystemStatus.LOADING else "UNLOADING...")
+        elif status == SystemStatus.RUNNING:
+            self.btn_load.setEnabled(False)
         else:
             self._update_load_button_text()
         
@@ -1423,6 +1432,10 @@ class PageCode(QWidget):
         self._sync_message_list_item_sizes()
 
     def eventFilter(self, source, event):
+        if hasattr(self, 'text_input') and source is self.text_input and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
+                self.handle_send_click()
+                return True
         if source is self.message_list.viewport() and event.type() == QEvent.Resize:
             self._sync_message_list_item_sizes(visible_only=True)
         return super().eventFilter(source, event)

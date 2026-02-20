@@ -39,10 +39,11 @@ class MonoGroupBox(QFrame):
         btn.setFixedHeight(16)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none; "
+            f"QPushButton {{ background: transparent; "
+            f"border: 1px solid {s.BORDER_SUBTLE}; border-radius: 8px; "
             f"color: {s.FG_DIM}; font-family: Consolas; font-size: 8px; "
             f"font-weight: bold; letter-spacing: 1px; padding: 0 6px; }}"
-            f"QPushButton:hover {{ color: {s.ACCENT_PRIMARY}; }}"
+            f"QPushButton:hover {{ color: {s.ACCENT_PRIMARY}; border: 1px solid {s.ACCENT_PRIMARY}; }}"
         )
         btn.clicked.connect(callback)
         self._header_buttons.append(btn)
@@ -312,7 +313,7 @@ class CollapsibleStepWidget(QFrame):
         self._arrow = QLabel("▸")
         self._arrow.setFixedWidth(12)
         self._arrow.setStyleSheet(
-            f"color: {s.FG_DIM}; font-size: 10px; border: none; background: transparent;"
+            f"color: {s.ACCENT_PRIMARY}; font-size: 10px; border: none; background: transparent;"
         )
 
         self._lbl_number = QLabel(f"[{step_number}]")

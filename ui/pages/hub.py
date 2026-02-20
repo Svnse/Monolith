@@ -370,7 +370,7 @@ class PageHub(QWidget):
 
         if self._ui_bridge:
             self._ui_bridge.sig_theme_changed.connect(
-                lambda _: QTimer.singleShot(0, self._refresh_theme)
+                lambda _: self._refresh_theme()
             )
 
         self.refresh_cards()

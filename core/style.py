@@ -68,15 +68,14 @@ def _build_scrollbar_style():
     return f"""
 QScrollBar:vertical {{
     background: {t.bg_input};
-    width: 10px;
+    width: 8px;
     margin: 0px;
-    border: 1px solid {t.border_dark};
+    border: none;
 }}
 QScrollBar::handle:vertical {{
     background: {t.scrollbar_handle};
     min-height: 24px;
-    border: 1px solid {t.accent_primary};
-    border-radius: 2px;
+    border-radius: 4px;
 }}
 QScrollBar::handle:vertical:hover {{
     background: {t.scrollbar_handle_hover};
@@ -86,17 +85,20 @@ QScrollBar::sub-line:vertical {{
     height: 0px;
     width: 0px;
 }}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {{
+    background: none;
+}}
 QScrollBar:horizontal {{
     background: {t.bg_input};
-    height: 10px;
+    height: 8px;
     margin: 0px;
-    border: 1px solid {t.border_dark};
+    border: none;
 }}
 QScrollBar::handle:horizontal {{
     background: {t.scrollbar_handle};
     min-width: 24px;
-    border: 1px solid {t.accent_primary};
-    border-radius: 2px;
+    border-radius: 4px;
 }}
 QScrollBar::handle:horizontal:hover {{
     background: {t.scrollbar_handle_hover};
@@ -105,6 +107,10 @@ QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal {{
     height: 0px;
     width: 0px;
+}}
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {{
+    background: none;
 }}
 """
 

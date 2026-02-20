@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
     QMessageBox, QButtonGroup, QMenu
 )
-from PySide6.QtCore import Signal, Qt, QTimer, QDateTime
+from PySide6.QtCore import Signal, Qt, QTimer, QDateTime, QEvent
 from PySide6.QtGui import QActionGroup
 
 from core.state import SystemStatus
@@ -260,8 +260,12 @@ class PageChat(QWidget):
                 background: transparent;
                 padding: 0px;
             }}
+            QListWidget::item:selected {{ background: transparent; border: none; }}
+            QListWidget::item:focus {{ background: transparent; border: none; outline: none; }}
             {_s.SCROLLBAR_STYLE}
         """)
+        self.message_list.setSelectionMode(QListWidget.NoSelection)
+        self.message_list.setFocusPolicy(Qt.NoFocus)
         chat_layout.addWidget(self.message_list)
         
         # --- Input row with (+) button ---
@@ -277,16 +281,19 @@ class PageChat(QWidget):
         )
         self.btn_plus.clicked.connect(self._show_plus_menu)
 
-        self.input = QLineEdit()
-        self.input.setPlaceholderText("Type a message...")
-        self.input.returnPressed.connect(self.handle_send_click)
-        self.input.textChanged.connect(self._on_input_changed)
-        self.input.setStyleSheet(f"""
-            QLineEdit {{
+        self.text_input = QTextEdit()
+        self.text_input.setPlaceholderText("Type a message...")
+        self.text_input.setFixedHeight(40)
+        self.text_input.setAcceptRichText(False)
+        self.text_input.textChanged.connect(lambda: self._on_input_changed(self.text_input.toPlainText()))
+        self.text_input.installEventFilter(self)
+        self.text_input.setStyleSheet(f"""
+            QTextEdit {{
                 background: {_s.BG_INPUT}; color: white; border: 1px solid {_s.BORDER_LIGHT};
                 padding: 8px; font-family: 'Verdana'; font-size: 11px;
             }}
-            QLineEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            QTextEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
         """)
         
         self.btn_send = QPushButton("SEND")
@@ -309,7 +316,7 @@ class PageChat(QWidget):
         self.btn_send.clicked.connect(self.handle_send_click)
 
         input_row.addWidget(self.btn_plus)
-        input_row.addWidget(self.input)
+        input_row.addWidget(self.text_input)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
 
@@ -346,12 +353,12 @@ class PageChat(QWidget):
             self._apply_default_limits()
 
     def send(self):
-        txt = self.input.text().strip()
+        txt = self.text_input.toPlainText().strip()
         if not txt:
             return
         self.sig_debug.emit(f"[CHAT] send: text={repr(txt[:60])}, msgs={len(self._current_session['messages'])}")
         self._set_send_button_state(is_running=True)
-        self.input.clear()
+        self.text_input.clear()
         user_idx = self._add_message("user", txt)
         self._append_message_widget(user_idx)
         self._start_assistant_stream()
@@ -361,7 +368,7 @@ class PageChat(QWidget):
         self.sig_debug.emit(f"[CHAT] sig_generate emitted")
 
     def handle_send_click(self):
-        txt = self.input.text().strip()
+        txt = self.text_input.toPlainText().strip()
 
         if not self._is_running:
             self.send()
@@ -381,7 +388,7 @@ class PageChat(QWidget):
     def _set_send_button_state(self, is_running: bool, stopping: bool = False):
         self._is_running = is_running
         if is_running:
-            has_input = bool(self.input.text().strip())
+            has_input = bool(self.text_input.toPlainText().strip())
             if has_input:
                 self.btn_send.setText("UPDATE")
                 color = _s.ACCENT_PRIMARY
@@ -405,13 +412,20 @@ class PageChat(QWidget):
             )
             self.btn_send.setEnabled(True)
 
+    def eventFilter(self, source, event):
+        if hasattr(self, 'text_input') and source is self.text_input and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
+                self.handle_send_click()
+                return True
+        return super().eventFilter(source, event)
+
     def _on_input_changed(self, text):
         if not self._is_running:
             return
         self._set_send_button_state(is_running=True)
 
     def _send_message(self, text):
-        self.input.setText(text)
+        self.text_input.setPlainText(text)
         self.send()
 
     def _submit_update(self, update_text):
@@ -444,7 +458,7 @@ User update:
 Continue from the interruption point. Do not repeat earlier content. Prioritize the user update.
 """
 
-        self.input.clear()
+        self.text_input.clear()
         self._start_update_streaming()
         self.sig_generate.emit(injected, self._thinking_mode)
 
@@ -1216,7 +1230,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             self.sig_sync_history.emit(
                 self._build_engine_history_from_session()
             )
-            self.input.setText(text)
+            self.text_input.setPlainText(text)
 
         self._request_mutation(_do_edit)
 

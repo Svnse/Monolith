@@ -102,7 +102,11 @@ class MessageWidget(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setProperty("class", "MessageWidget")
         self.setProperty("role", role)
-        self.setStyleSheet(f"border-left: 2px solid {_s.BORDER_SUBTLE};")
+        self.setStyleSheet(
+            f"MessageWidget {{ border-left: 2px solid {_s.BORDER_SUBTLE}; }}"
+            f"MessageWidget QLabel {{ border: none; }}"
+            f"MessageWidget QWidget {{ border: none; }}"
+        )
 
         is_assistant = role == "assistant"
         is_system = role == "system"

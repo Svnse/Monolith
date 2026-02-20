@@ -239,6 +239,11 @@ class GeneratorWorker(QThread):
                 completed = result.success
                 assistant_text = result.output
                 loop_history = result.history
+
+                # Emit the final assistant text so the UI displays it
+                if assistant_text:
+                    self.token.emit(assistant_text)
+                    self.usage.emit(len(assistant_text))
             else:
                 assistant_text = self._chat_once_text(self.messages)
                 if assistant_text:
