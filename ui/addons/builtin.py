@@ -15,7 +15,6 @@ from ui.pages.hub import PageHub
 from core.operators import OperatorManager
 from engine.bridge import EngineBridge
 from engine.llm import LLMEngine
-from engine.agent_llm import AgentLLMEngine
 
 
 def terminal_factory(ctx: AddonContext):
@@ -280,7 +279,7 @@ def agent_factory(ctx: AddonContext):
     def _trace(msg):
         ctx.guard.sig_trace.emit("system", msg)
 
-    agent_engine = AgentLLMEngine(ctx.state)
+    agent_engine = LLMEngine(ctx.state)
     engine_bridge = EngineBridge(agent_engine)
     ctx.guard.register_engine(engine_key, engine_bridge)
 
@@ -305,11 +304,12 @@ def agent_factory(ctx: AddonContext):
         w.sig_set_model_path.emit(str(w.config.get("gguf_path")))
     w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
 
-    def _on_generate(prompt, _thinking_mode):
+    def _on_generate(prompt, thinking_mode):
         try:
             model = w.config.get("gguf_path", "unknown")
             model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
-            _trace(f"[AGENT:{short_id}] generating — mode=AGENT, model={model_name}, prompt={repr(prompt[:50])}")
+            think_label = "think=ON" if thinking_mode else "think=OFF"
+            _trace(f"[AGENT:{short_id}] generating — {think_label}, model={model_name}, prompt={repr(prompt[:50])}")
             task = ctx.bridge.wrap(
                 "agent",
                 "generate",
@@ -317,8 +317,7 @@ def agent_factory(ctx: AddonContext):
                 payload={
                     "prompt": prompt,
                     "config": w.config,
-                    "agent_mode": True,
-                    "source_page": "agent",
+                    "thinking_mode": thinking_mode,
                     "ctx_limit": int(w.config.get("ctx_limit", 8192)),
                 },
             )
@@ -372,9 +371,7 @@ def agent_factory(ctx: AddonContext):
     ctx.guard.sig_trace.connect(
         lambda ek, m: w.append_trace(m) if ek == engine_key else None
     )
-    ctx.guard.sig_finished.connect(
-        lambda ek, _task_id: w.on_guard_finished() if ek == engine_key else None
-    )
+    ctx.guard.sig_finished.connect(w.on_guard_finished)
 
     def _cleanup_agent(*_args):
         ctx.guard.unregister_engine(engine_key)
