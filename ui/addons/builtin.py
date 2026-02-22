@@ -243,9 +243,7 @@ def code_factory(ctx: AddonContext):
             ctx.bridge.wrap("code", "runtime_command", engine_key, payload=payload if isinstance(payload, dict) else {})
         )
     )
-    ctx.guard.sig_status.connect(
-        lambda ek, status: w.update_status(status) if ek == engine_key else None
-    )
+    ctx.guard.sig_status.connect(w.update_status)
     # Ensure button updates when engine truthfully ready (handles race conditions in load state)
     ctx.guard.sig_engine_ready.connect(
         lambda ek: w._update_load_button_text() if ek == engine_key else None
@@ -366,9 +364,7 @@ def agent_factory(ctx: AddonContext):
             traceback.print_exc()
 
     w.sig_sync_history.connect(_on_sync_history)
-    ctx.guard.sig_status.connect(
-        lambda ek, status: w.update_status(status) if ek == engine_key else None
-    )
+    ctx.guard.sig_status.connect(w.update_status)
     w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     ctx.guard.sig_token.connect(
         lambda ek, t: w.append_token(t) if ek == engine_key else None
