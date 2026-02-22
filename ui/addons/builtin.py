@@ -15,6 +15,7 @@ from ui.pages.hub import PageHub
 from core.operators import OperatorManager
 from engine.bridge import EngineBridge
 from engine.llm import LLMEngine
+from engine.agent_llm import AgentLLMEngine
 
 
 def terminal_factory(ctx: AddonContext):
@@ -271,6 +272,123 @@ def code_factory(ctx: AddonContext):
     return w
 
 
+
+def agent_factory(ctx: AddonContext):
+    instance_id = str(uuid.uuid4())
+    engine_key = f"agent_{instance_id}"
+
+    short_id = instance_id[:8]
+
+    def _trace(msg):
+        ctx.guard.sig_trace.emit("system", msg)
+
+    agent_engine = AgentLLMEngine(ctx.state)
+    engine_bridge = EngineBridge(agent_engine)
+    ctx.guard.register_engine(engine_key, engine_bridge)
+
+    w = PageChat(ctx.state, ctx.ui_bridge)
+    w._mod_id = instance_id
+    w._engine_key = engine_key
+    ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
+    agent_engine.sig_model_capabilities.connect(w._on_model_capabilities)
+
+    w.sig_set_model_path.connect(
+        lambda path: ctx.bridge.submit(
+            ctx.bridge.wrap("agent", "set_path", engine_key, payload={"path": path})
+        )
+    )
+    w.sig_set_ctx_limit.connect(
+        lambda limit: None if limit is None else ctx.bridge.submit(
+            ctx.bridge.wrap("agent", "set_ctx_limit", engine_key, payload={"ctx_limit": int(limit)})
+        )
+    )
+
+    if w.config.get("gguf_path"):
+        w.sig_set_model_path.emit(str(w.config.get("gguf_path")))
+    w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
+
+    def _on_generate(prompt, _thinking_mode):
+        try:
+            model = w.config.get("gguf_path", "unknown")
+            model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
+            _trace(f"[AGENT:{short_id}] generating — mode=AGENT, model={model_name}, prompt={repr(prompt[:50])}")
+            task = ctx.bridge.wrap(
+                "agent",
+                "generate",
+                engine_key,
+                payload={
+                    "prompt": prompt,
+                    "config": w.config,
+                    "agent_mode": True,
+                    "source_page": "agent",
+                    "ctx_limit": int(w.config.get("ctx_limit", 8192)),
+                },
+            )
+            ctx.bridge.submit(task)
+        except Exception as e:
+            _trace(f"[AGENT:{short_id}] EXCEPTION in generate: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_generate.connect(_on_generate)
+    w.sig_load.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("agent", "load", engine_key))
+    )
+    w.sig_unload.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("agent", "unload", engine_key))
+    )
+
+    def _on_stop():
+        try:
+            _trace(f"[AGENT:{short_id}] stopped — generation halted")
+            ctx.bridge.stop(engine_key)
+        except Exception as e:
+            _trace(f"[AGENT:{short_id}] EXCEPTION in stop: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_stop.connect(_on_stop)
+
+    def _on_sync_history(history):
+        try:
+            _trace(f"[AGENT:{short_id}] syncing history — {len(history)} messages")
+            ctx.bridge.submit(
+                ctx.bridge.wrap(
+                    "agent",
+                    "set_history",
+                    engine_key,
+                    payload={"history": history},
+                )
+            )
+        except Exception as e:
+            _trace(f"[AGENT:{short_id}] EXCEPTION in sync_history: {e}")
+            import traceback
+            traceback.print_exc()
+
+    w.sig_sync_history.connect(_on_sync_history)
+    ctx.guard.sig_status.connect(
+        lambda ek, status: w.update_status(status) if ek == engine_key else None
+    )
+    w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
+    ctx.guard.sig_token.connect(
+        lambda ek, t: w.append_token(t) if ek == engine_key else None
+    )
+    ctx.guard.sig_trace.connect(
+        lambda ek, m: w.append_trace(m) if ek == engine_key else None
+    )
+    ctx.guard.sig_finished.connect(
+        lambda ek, _task_id: w.on_guard_finished() if ek == engine_key else None
+    )
+
+    def _cleanup_agent(*_args):
+        ctx.guard.unregister_engine(engine_key)
+        engine_bridge.shutdown()
+        import time
+        time.sleep(0.1)
+
+    w.destroyed.connect(_cleanup_agent)
+    return w
+
 def addons_page_factory(ctx: AddonContext):
     w = PageAddons(ctx.state)
     # route launcher directly to host (host must exist)
@@ -357,8 +475,8 @@ def hub_factory(ctx: AddonContext):
                     ctx.guard.sig_trace.emit("system", f"[OPERATOR] failed to launch {addon_id}")
                     continue
 
-                # For terminals with saved state, apply config + messages
-                if addon_id == "terminal" and "config" in entry:
+                # For chat-like modules with saved state, apply config + messages
+                if addon_id in ("terminal", "agent") and "config" in entry:
                     for i in range(ctx.ui.stack.count()):
                         widget = ctx.ui.stack.widget(i)
                         if getattr(widget, '_mod_id', None) == new_mod_id and isinstance(widget, PageChat):
@@ -367,7 +485,7 @@ def hub_factory(ctx: AddonContext):
                     if not first_terminal_mod_id:
                         first_terminal_mod_id = new_mod_id
 
-            # Switch to first terminal
+            # Switch to first restored chat-like module
             if first_terminal_mod_id:
                 ctx.ui.switch_to_module(first_terminal_mod_id)
 
@@ -437,6 +555,20 @@ def build_builtin_registry() -> AddonRegistry:
                 verbs=("generate_text", "chat", "load_model", "unload_model", "stream_tokens"),
                 appetites=("text_prompt", "gguf_file", "conversation_history", "system_prompt"),
                 emissions=("text_stream", "token_usage", "model_status"),
+            ),
+        )
+    )
+    registry.register(
+        AddonSpec(
+            id="agent",
+            kind="module",
+            title="AGENT",
+            icon="◉",
+            factory=agent_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("generate_text", "agent", "tool_use", "load_model", "unload_model"),
+                appetites=("text_prompt", "gguf_file", "conversation_history", "workspace_path"),
+                emissions=("text_stream", "tool_result", "model_status"),
             ),
         )
     )
