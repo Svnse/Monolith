@@ -265,7 +265,7 @@ class MonolithUI(QMainWindow):
                 self.module_strip.select_module(mod_id)
                 self.lbl_monolith.setVisible(True)
                 # Only show chat title for terminal modules
-                if getattr(w, '_addon_id', None) == "terminal":
+                if getattr(w, '_addon_id', None) in ("terminal", "agent"):
                     self.update_terminal_header(mod_id, *self._terminal_titles.get(mod_id, ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm"))))
                 else:
                     self.lbl_chat_title.hide()
@@ -328,7 +328,7 @@ class MonolithUI(QMainWindow):
     def _update_time_display(self):
         current = self.stack.currentWidget()
         current_mod = getattr(current, "_mod_id", None) if current is not None else None
-        if current_mod and getattr(current, "_addon_id", None) == "terminal":
+        if current_mod and getattr(current, "_addon_id", None) in ("terminal", "agent"):
             now = QDateTime.currentDateTime().toString("ddd • HH:mm")
             self.lbl_chat_time.setText(now)
             if current_mod in self._terminal_titles:

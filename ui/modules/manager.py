@@ -34,6 +34,9 @@ class PageAddons(QWidget):
         btn_terminal = MonoButton("CHAT")
         btn_terminal.clicked.connect(lambda: self.sig_launch_addon.emit("terminal"))
 
+        btn_agent = MonoButton("AGENT")
+        btn_agent.clicked.connect(lambda: self.sig_launch_addon.emit("agent"))
+
         btn_code = MonoButton("CODE")
         btn_code.clicked.connect(lambda: self.sig_launch_addon.emit("code"))
 
@@ -51,6 +54,7 @@ class PageAddons(QWidget):
 
         mod_layout.addWidget(lbl_info)
         mod_layout.addWidget(btn_terminal)
+        mod_layout.addWidget(btn_agent)
         mod_layout.addWidget(btn_code)
         mod_layout.addWidget(btn_databank)
         mod_layout.addWidget(btn_injector)

@@ -650,6 +650,17 @@ class LLMEngine(QObject):
             return base_prompt
         return f"{base_prompt}\n\n[BEHAVIOR TAGS]\n" + "\n".join(cleaned)
 
+    def _create_generator_worker(self, messages, temp, top_p, max_tokens):
+        return GeneratorWorker(
+            self.llm,
+            messages,
+            temp,
+            top_p,
+            max_tokens,
+            runtime=self._runtime if self._worker_agent_mode else None,
+            agent_mode=self._worker_agent_mode,
+        )
+
     def generate(self, payload: dict):
         # Clean up any previous worker that has finished
         if self.worker is not None:
@@ -769,15 +780,7 @@ class LLMEngine(QObject):
                 f"profile={contract.model_profile_id}"
             )
 
-        self.worker = GeneratorWorker(
-            self.llm,
-            messages,
-            temp,
-            top_p,
-            max_tokens,
-            runtime=self._runtime if self._worker_agent_mode else None,
-            agent_mode=self._worker_agent_mode,
-        )
+        self.worker = self._create_generator_worker(messages, temp, top_p, max_tokens)
         # Pass profile and contract to worker for adapter setup
         self.worker._model_profile_id = model_profile_id
         self.worker._contract = contract
