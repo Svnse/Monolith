@@ -62,7 +62,7 @@ def normalize_openai_response(raw: dict) -> AgentMessage:
 
 class ModelLoader(QThread):
     trace = Signal(str)
-    finished = Signal(object, int)
+    loaded = Signal(object, int)   # renamed from 'finished' to avoid shadowing QThread.finished
     error = Signal(str)
 
     def __init__(self, path, n_ctx=8192, n_gpu_layers=-1):
@@ -71,6 +71,8 @@ class ModelLoader(QThread):
         self.n_ctx = n_ctx
         self.n_gpu_layers = n_gpu_layers
 
+    # Minimum context size before giving up on fallback retries
+    _MIN_CTX = 512
 
     def run(self):
         try:
@@ -80,15 +82,39 @@ class ModelLoader(QThread):
                 raise RuntimeError(
                     "llama-cpp-python is not installed. Install it to use the local LLM engine."
                 ) from exc
-            self.trace.emit(f"→ init backend: {self.path}")
-            llm_instance = Llama(
-                model_path=self.path,
-                n_ctx=self.n_ctx,
-                n_gpu_layers=self.n_gpu_layers,
-                verbose=False,
-            )
+
+            n_ctx = self.n_ctx
+            llm_instance = None
+
+            while n_ctx >= self._MIN_CTX:
+                self.trace.emit(f"→ init backend: {self.path} (n_ctx={n_ctx})")
+                try:
+                    llm_instance = Llama(
+                        model_path=self.path,
+                        n_ctx=n_ctx,
+                        n_gpu_layers=self.n_gpu_layers,
+                        verbose=False,
+                    )
+                    break  # success
+                except Exception as ctx_err:
+                    err_lower = str(ctx_err).lower()
+                    # Only retry on context-allocation failures
+                    if "llama_context" in err_lower or "kv cache" in err_lower or "memory" in err_lower:
+                        prev = n_ctx
+                        n_ctx = max(n_ctx // 2, self._MIN_CTX) if n_ctx > self._MIN_CTX else 0
+                        if n_ctx > 0:
+                            self.trace.emit(f"→ ctx alloc failed at n_ctx={prev}, retrying with n_ctx={n_ctx}")
+                            continue
+                    raise  # non-recoverable or all retries exhausted
+
+            if llm_instance is None:
+                raise RuntimeError(
+                    f"Failed to create llama_context: n_ctx={self.n_ctx} is too large. "
+                    f"Tried down to {self._MIN_CTX}. Reduce ctx_limit or free VRAM."
+                )
+
             model_ctx_length = llm_instance._model.n_ctx_train()
-            self.finished.emit(llm_instance, model_ctx_length)
+            self.loaded.emit(llm_instance, model_ctx_length)
         except Exception as e:
             self.error.emit(f"Load Failed: {str(e)}")
 
@@ -215,8 +241,6 @@ class GeneratorWorker(QThread):
                 self.runtime._contract = contract
 
                 # --- Wire adapter-aware LLM call ---
-                # Uses _chat_once_agent_raw which returns raw dict
-                # The runtime's _adapt_response will run it through the adapter
                 self.runtime._llm_call = self._chat_once_agent_raw
                 self.runtime._should_stop = self.isInterruptionRequested
                 self.runtime._emit_event = self._emit_runtime_event
@@ -233,17 +257,75 @@ class GeneratorWorker(QThread):
                         f"retries={contract.max_format_retries}"
                     )
 
-                result = self.runtime.run(self.messages)
-                self._last_run_result = result
-                # Translate AgentRunResult to backward-compat tuple
-                completed = result.success
-                assistant_text = result.output
-                loop_history = result.history
+                # --- STEP-WISE EXECUTION (Option B) ---
+                # Use StepwiseAgentRuntime to yield between steps
+                # This allows Qt signals to flush to UI in real-time
+                from engine.agent_runtime_stepper import StepwiseAgentRuntime
+                
+                stepper = StepwiseAgentRuntime(
+                    runtime=self.runtime,
+                    messages=self.messages,
+                    emit_event=self._emit_runtime_event,
+                )
+                
+                # Initialize
+                init_events = stepper.initialize()
+                for ev in init_events:
+                    self._emit_runtime_event(ev)
+                
+                # Store stepper on self so it can be resumed from WAIT_ACK
+                self._stepper = stepper
 
-                # Emit the final assistant text so the UI displays it
-                if assistant_text:
-                    self.token.emit(assistant_text)
-                    self.usage.emit(len(assistant_text))
+                # Execute steps — worker thread yields between steps
+                step_count = 0
+                awaiting_ack = False
+                self.trace.emit(f"[WORKER] starting step loop, should_continue={stepper.should_continue()}")
+                
+                while stepper.should_continue():
+                    step_count += 1
+                    self.trace.emit(f"[WORKER] beginning step {step_count}, state={stepper._current_state.value if stepper._current_state else 'None'}")
+
+                    # Check for interruption
+                    if self.isInterruptionRequested():
+                        self.trace.emit("[WORKER] interruption requested, stopping")
+                        break
+
+                    # Execute one step
+                    self.trace.emit(f"[WORKER] calling stepper.step() for step {step_count}")
+                    step_result = stepper.step()
+                    self.trace.emit(f"[WORKER] stepper.step() returned for step {step_count}")
+
+                    # Emit trace for state transition visibility
+                    self.trace.emit(
+                        f"[WORKER] step {step_count}: state={step_result.state.value}, "
+                        f"continue={step_result.should_continue}"
+                    )
+
+                    if not step_result.should_continue:
+                        if step_result.awaiting_ack:
+                            # WAIT_ACK: worker thread dies cleanly.
+                            # Stepper stays in memory. MonoGuard will spawn
+                            # a new worker via resume_agent() after user action.
+                            self.trace.emit("[WORKER] entering WAIT_ACK — thread will terminate")
+                            awaiting_ack = True
+                        break
+
+                if awaiting_ack:
+                    # Don't emit done — the stepper is parked in WAIT_ACK.
+                    # The resume path will create a new worker to finish.
+                    # Note: Worker will be cleaned up by LLMEngine when replaced
+                    return
+
+                # Get final result
+                result = stepper.get_result()
+                if result is not None:
+                    self._last_run_result = result
+                    completed = result.success
+                    assistant_text = result.output
+                    loop_history = result.history
+                else:
+                    completed = False
+                    
             else:
                 assistant_text = self._chat_once_text(self.messages)
                 if assistant_text:
@@ -255,10 +337,98 @@ class GeneratorWorker(QThread):
                 self.trace.emit("→ inference complete")
         except Exception as e:
             self.trace.emit(f"[WORKER] EXCEPTION: {e}")
-            self.trace.emit(f"<span style='color:red'>ERROR: {e}</span>")
+            import traceback
+            self.trace.emit(f"<span style='color:red'>ERROR: {e}\n{traceback.format_exc()}</span>")
         finally:
             self.trace.emit(f"[WORKER] finished: completed={completed}, text_len={len(assistant_text)}")
             self.done.emit(completed, assistant_text, loop_history)
+            # Note: Worker cleanup handled by LLMEngine _on_gen_finish
+
+
+class _ResumeWorker(QThread):
+    """
+    Worker thread that resumes a StepwiseAgentRuntime from WAIT_ACK.
+
+    Created by LLMEngine.resume_agent() after user approves/denies.
+    """
+    token = Signal(str)
+    trace = Signal(str)
+    done = Signal(bool, str, list)
+    usage = Signal(int)
+    event = Signal(dict)
+
+    def __init__(self, stepper, action: str):
+        super().__init__()
+        self._stepper = stepper
+        self._action = action
+
+    def _emit_runtime_event(self, payload: dict) -> None:
+        self.event.emit(payload)
+        event_name = payload.get("event")
+        if event_name in ("LLM_TOKEN", "FINAL_OUTPUT"):
+            token_data = payload.get("data", "")
+            if isinstance(token_data, str) and token_data:
+                self.token.emit(token_data)
+                self.usage.emit(len(token_data))
+
+    def run(self):
+        completed = False
+        assistant_text = ""
+        loop_history = []
+
+        try:
+            stepper = self._stepper
+
+            # Rewire the event emitter to this worker's signals
+            stepper._emit_event = self._emit_runtime_event
+            stepper._runtime._emit_event = self._emit_runtime_event
+            stepper._runtime._should_stop = self.isInterruptionRequested
+
+            # Resume from ACK
+            self.trace.emit(f"[RESUME] action={self._action}")
+            stepper.resume_from_ack(self._action)
+
+            # Continue stepping
+            step_count = 0
+            awaiting_ack = False
+            while stepper.should_continue():
+                step_count += 1
+
+                if self.isInterruptionRequested():
+                    self.trace.emit("[RESUME] interruption requested, stopping")
+                    break
+
+                step_result = stepper.step()
+                self.trace.emit(
+                    f"[RESUME] step {step_count}: state={step_result.state.value}, "
+                    f"continue={step_result.should_continue}"
+                )
+
+                if not step_result.should_continue:
+                    if step_result.awaiting_ack:
+                        self.trace.emit("[RESUME] re-entering WAIT_ACK — thread will terminate")
+                        awaiting_ack = True
+                    break
+
+            if awaiting_ack:
+                return
+
+            result = stepper.get_result()
+            if result is not None:
+                completed = result.success
+                assistant_text = result.output
+                loop_history = result.history
+            else:
+                completed = False
+
+        except Exception as e:
+            self.trace.emit(f"[RESUME] EXCEPTION: {e}")
+            import traceback
+            self.trace.emit(f"<span style='color:red'>RESUME ERROR: {e}\n{traceback.format_exc()}</span>")
+        finally:
+            self.trace.emit(f"[RESUME] finished: completed={completed}, text_len={len(assistant_text)}")
+            self.done.emit(completed, assistant_text, loop_history)
+            # Note: Worker cleanup handled by LLMEngine _on_gen_finish
 
 
 class LLMEngine(QObject):
@@ -320,15 +490,24 @@ class LLMEngine(QObject):
             self.set_status(SystemStatus.ERROR)
             return
 
+        # Clean up any lingering loader from a previous load cycle
+        if self.loader is not None:
+            if self.loader.isRunning():
+                self.loader.wait(2000)
+            self._disconnect_loader(self.loader)
+            self.loader = None
+
         self.set_status(SystemStatus.LOADING)
         self._load_cancel_requested = False
         n_ctx = min(self.ctx_limit, self.model_ctx_length) if self.model_ctx_length else self.ctx_limit
         self.loader = ModelLoader(model_path, n_ctx)
         self.loader.trace.connect(self.sig_trace)
         self.loader.error.connect(self._on_load_error)
-        self.loader.finished.connect(self._on_load_success)
+        self.loader.loaded.connect(self._on_load_success)
+        # Connect cleanup to QThread's built-in finished signal — fires AFTER run() returns.
+        # This prevents "QThread: Destroyed while thread is still running" by ensuring
+        # self.loader = None only happens after the thread has fully stopped.
         self.loader.finished.connect(self._cleanup_loader)
-        self.loader.error.connect(self._cleanup_loader)
         self.loader.start()
 
     def _on_load_success(self, llm_instance, model_ctx_length):
@@ -343,12 +522,17 @@ class LLMEngine(QObject):
             self.model_loaded = False
             self.set_status(SystemStatus.READY)
             self.sig_trace.emit("→ load cancelled")
-            self.loader = None
+            # Note: self.loader cleanup deferred to _cleanup_loader via QThread.finished
             return
 
         self.llm = llm_instance
         self.model_ctx_length = int(model_ctx_length)
-        self.ctx_limit = min(self.ctx_limit, self.model_ctx_length)
+        # Clamp to the actual allocated context size (may be smaller after fallback)
+        try:
+            actual_ctx = int(llm_instance.n_ctx())
+        except Exception:
+            actual_ctx = self.model_ctx_length
+        self.ctx_limit = min(self.ctx_limit, self.model_ctx_length, actual_ctx)
 
         # Phase 5: compute model fingerprint
         try:
@@ -364,13 +548,26 @@ class LLMEngine(QObject):
             {
                 "model_ctx_length": self.model_ctx_length,
                 "ctx_limit": self.ctx_limit,
+                "actual_ctx": actual_ctx,
             }
         )
         self.model_loaded = True
         self.set_status(SystemStatus.READY)
         self.reset_conversation(MASTER_PROMPT)
+
+        # Eager-load agent runtime dependencies to avoid first-call delay
+        # These modules have regex patterns that compile on first use
+        try:
+            from engine import contract, protocol_adapter
+            # Touch intent classification to pre-compile regexes if needed
+            _ = contract.classify_intent("warmup", "code")
+            _ = protocol_adapter.get_profile("local_xml")
+            self.sig_trace.emit("→ agent runtime warmed up")
+        except Exception as e:
+            self.sig_trace.emit(f"[WARN] agent runtime warmup failed: {e}")
+
         self.sig_trace.emit("→ system online")
-        self.loader = None
+        # Note: self.loader cleanup deferred to _cleanup_loader via QThread.finished
 
     def _on_load_error(self, err_msg):
         self.sig_trace.emit(f"<span style='color:red'>{err_msg}</span>")
@@ -378,10 +575,32 @@ class LLMEngine(QObject):
             self.set_status(SystemStatus.READY)
         else:
             self.set_status(SystemStatus.ERROR)
-        self.loader = None
+        # Note: self.loader cleanup deferred to _cleanup_loader via QThread.finished
 
-    def _cleanup_loader(self, *args, **kwargs):
-        self.loader = None
+    def _cleanup_loader(self):
+        """Clean up loader thread reference.
+
+        Connected to QThread.finished (not our custom loaded/error signals),
+        so this fires AFTER run() has fully returned. We still defer via
+        QTimer.singleShot(0) to ensure we're back on the main event loop
+        before destroying the QThread object.
+        """
+        def _deferred_cleanup():
+            loader = self.loader
+            if loader is not None:
+                self._disconnect_loader(loader)
+                self.loader = None
+        QTimer.singleShot(0, _deferred_cleanup)
+
+    def _disconnect_loader(self, loader: ModelLoader) -> None:
+        """Safely disconnect all signals from a loader instance."""
+        for sig_name in ("trace", "loaded", "error", "finished"):
+            sig = getattr(loader, sig_name, None)
+            if sig is not None:
+                try:
+                    sig.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
 
     def unload_model(self):
         if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
@@ -432,6 +651,21 @@ class LLMEngine(QObject):
         return f"{base_prompt}\n\n[BEHAVIOR TAGS]\n" + "\n".join(cleaned)
 
     def generate(self, payload: dict):
+        # Clean up any previous worker that has finished
+        if self.worker is not None:
+            if not self.worker.isRunning():
+                # Worker finished but not cleaned up - safe to delete reference
+                self.worker = None
+            else:
+                # Worker still running - this shouldn't happen, but handle it
+                self.sig_trace.emit("[ENGINE] WARNING: previous worker still running, stopping it")
+                self.worker.requestInterruption()
+                self.worker.wait(1000)
+                if self.worker.isRunning():
+                    self.worker.terminate()
+                    self.worker.wait(500)
+                self.worker = None
+        
         if not self.model_loaded:
             self.sig_trace.emit("ERROR: Model offline.")
             self.set_status(SystemStatus.ERROR)
@@ -556,8 +790,88 @@ class LLMEngine(QObject):
         self.worker.start()
 
 
+    def resume_agent(self, action: str = "approve") -> bool:
+        """
+        Resume an agent parked in WAIT_ACK state.
+
+        Creates a new GeneratorWorker that picks up the stepper from memory.
+        action: "approve" | "deny" | "timeout"
+
+        Returns True if resume was initiated, False if no stepper to resume.
+        """
+        # Find the parked stepper from the last worker
+        stepper = None
+        if self.worker and hasattr(self.worker, "_stepper"):
+            stepper = self.worker._stepper
+
+        if stepper is None:
+            self.sig_trace.emit("[ENGINE] resume_agent: no parked stepper found")
+            return False
+
+        from engine.contract import RuntimeState as RS
+        if stepper._current_state != RS.WAIT_ACK:
+            self.sig_trace.emit(f"[ENGINE] resume_agent: stepper not in WAIT_ACK (state={stepper._current_state})")
+            return False
+
+        self.sig_trace.emit(f"[ENGINE] resume_agent: action={action}")
+        self.set_status(SystemStatus.RUNNING)
+
+        # Clean up old worker if it exists but is finished
+        old_worker = self.worker
+        if old_worker is not None:
+            # Only cleanup if finished - if still running, something is wrong
+            if not old_worker.isRunning():
+                # Worker finished - safe to disconnect and replace
+                try:
+                    old_worker.token.disconnect()
+                    old_worker.trace.disconnect()
+                    old_worker.usage.disconnect()
+                    old_worker.event.disconnect()
+                    old_worker.done.disconnect()
+                except Exception:
+                    pass
+                self.worker = None
+            else:
+                # Worker still running - this shouldn't happen in WAIT_ACK flow
+                self.sig_trace.emit("[ENGINE] WARNING: worker still running during resume, waiting...")
+                old_worker.requestInterruption()
+                if not old_worker.wait(1000):
+                    old_worker.terminate()
+                    old_worker.wait(500)
+                try:
+                    old_worker.token.disconnect()
+                    old_worker.trace.disconnect()
+                    old_worker.usage.disconnect()
+                    old_worker.event.disconnect()
+                    old_worker.done.disconnect()
+                except Exception:
+                    pass
+                self.worker = None
+
+        # Create a resume worker that runs the stepper from WAIT_ACK
+        resume_worker = _ResumeWorker(stepper, action)
+        resume_worker.token.connect(self.sig_token)
+        resume_worker.trace.connect(self.sig_trace)
+        resume_worker.usage.connect(self._on_usage_update)
+        resume_worker.event.connect(self.sig_agent_event)
+        resume_worker.done.connect(self._on_gen_finish)
+
+        self.worker = resume_worker
+        self._worker_agent_mode = True
+        resume_worker.start()
+        return True
+
     def runtime_command(self, command: str, payload: dict | None = None) -> dict:
         request = payload if isinstance(payload, dict) else {}
+        
+        # OFAC v0.2: Handle ack_decision to resume from WAIT_ACK
+        if command == "ack_decision":
+            decision = request.get("decision", "deny")
+            success = self.resume_agent(action=decision)
+            result = {"ok": success, "action": decision}
+            self.sig_agent_event.emit({"event": "ACK_DECISION_HANDLED", "decision": decision, "success": success})
+            return result
+        
         result = self._runtime.runtime_command(command, request)
         self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": request, "result": result})
         return result
@@ -617,9 +931,25 @@ class LLMEngine(QObject):
 
         if self.worker:
             self.worker.requestInterruption()
-            self.worker.wait(1500)
+            if not self.worker.wait(3000):  # Wait up to 3 seconds
+                self.worker.terminate()
+                self.worker.wait(1000)
+            # Explicitly disconnect signals before deleting reference
+            try:
+                self.worker.token.disconnect()
+                self.worker.trace.disconnect()
+                self.worker.usage.disconnect()
+                self.worker.event.disconnect()
+                self.worker.done.disconnect()
+            except Exception:
+                pass
             self.worker = None
 
-        if self.loader and self.loader.isRunning():
-            self._load_cancel_requested = True
-            self.loader.wait(150)
+        if self.loader:
+            if self.loader.isRunning():
+                self._load_cancel_requested = True
+                if not self.loader.wait(1000):
+                    self.loader.terminate()
+                    self.loader.wait(500)
+            self._disconnect_loader(self.loader)
+            self.loader = None

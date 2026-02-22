@@ -7,7 +7,7 @@ from core.state import AppState, SystemStatus
 
 class PipelineLoader(QThread):
     trace = Signal(str)
-    finished = Signal(object)
+    loaded = Signal(object)   # renamed from 'finished' to avoid shadowing QThread.finished
     error = Signal(str)
 
     def __init__(self, model_path: str):
@@ -47,7 +47,7 @@ class PipelineLoader(QThread):
                 )
 
             pipe = pipe.to(device)
-            self.finished.emit(pipe)
+            self.loaded.emit(pipe)
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -159,9 +159,9 @@ class VisionEngine(QObject):
         self.loader = PipelineLoader(self.model_path)
         self.loader.trace.connect(self._emit_trace)
         self.loader.error.connect(self._on_load_error)
-        self.loader.finished.connect(self._on_load_success)
+        self.loader.loaded.connect(self._on_load_success)
+        # Connect cleanup to QThread.finished (fires AFTER run() returns)
         self.loader.finished.connect(self._cleanup_loader)
-        self.loader.error.connect(self._cleanup_loader)
         self.loader.start()
 
     def _emit_trace(self, message: str) -> None:
@@ -179,22 +179,31 @@ class VisionEngine(QObject):
             self._loaded_path = None
             self.sig_status.emit(SystemStatus.READY)
             self.sig_trace.emit("VISION: load cancelled")
-            self.loader = None
             return
 
         self.pipe = pipe
         self._loaded_path = self.model_path
         self.sig_trace.emit("VISION: pipeline ready")
         self.sig_status.emit(SystemStatus.READY)
-        self.loader = None
 
     def _on_load_error(self, err_msg: str) -> None:
         self.sig_trace.emit(f"VISION: ERROR: {err_msg}")
         self.sig_status.emit(SystemStatus.ERROR)
-        self.loader = None
 
-    def _cleanup_loader(self, *args, **kwargs) -> None:
-        self.loader = None
+    def _cleanup_loader(self) -> None:
+        """Deferred loader cleanup — connected to QThread.finished."""
+        def _deferred():
+            loader = self.loader
+            if loader is not None:
+                try:
+                    loader.trace.disconnect()
+                    loader.loaded.disconnect()
+                    loader.error.disconnect()
+                    loader.finished.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                self.loader = None
+        QTimer.singleShot(0, _deferred)
 
     def unload_model(self) -> None:
         if self.loader and self.loader.isRunning():

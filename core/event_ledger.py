@@ -15,6 +15,25 @@ from pathlib import Path
 from typing import Any, Literal
 
 
+# ---------------------------------------------------------------------------
+# Canonical JSON — OFAC v0.2 Universal Invariant
+# ---------------------------------------------------------------------------
+
+def canonical_json(obj: Any) -> str:
+    """
+    Deterministic JSON serialization for all hashed payloads.
+
+    OFAC Universal Invariant: sort_keys=True, compact separators,
+    ensure_ascii=False. No floats or timestamps inside the hash boundary.
+    """
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def canonical_hash(obj: Any) -> str:
+    """SHA-256 of canonical_json(obj)."""
+    return hashlib.sha256(canonical_json(obj).encode("utf-8")).hexdigest()
+
+
 @dataclass
 class LedgerEvent:
     trace_id: str
@@ -451,14 +470,22 @@ class EventLedger:
             print(f"[EventLedger] write failed: {exc}", file=sys.stderr)
 
     def _safe_payload(self, payload: Any) -> str:
+        """Serialize payload to canonical JSON. No repr() fallback — deterministic only."""
         try:
-            return json.dumps(self._serialize(payload), ensure_ascii=False)
-        except Exception:
-            fallback = {"_error": "serialization_failed", "repr": repr(payload)[:500]}
-            try:
-                return json.dumps(fallback, ensure_ascii=False)
-            except Exception:
-                return '{"_error":"serialization_failed"}'
+            return json.dumps(
+                self._serialize(payload),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            # Hard-crash path: log to stderr but never use repr() as it
+            # destroys hash chain determinism.
+            print(
+                f"[EventLedger] FATAL: payload serialization failed: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            return '{"_error":"serialization_failed"}'
 
     def _serialize(self, value: Any) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):

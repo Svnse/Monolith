@@ -19,8 +19,8 @@ class CapabilityScope(str, Enum):
 
 
 CAPABILITY_MANIFEST: dict[str, list[str]] = {
-    "code": ["read_file", "write_file", "list_dir", "grep_search", "run_cmd", "apply_patch"],
-    "analysis": ["read_file", "list_dir", "grep_search"],
+    "code": ["read_file", "write_file", "list_dir", "grep_search", "run_cmd", "apply_patch", "run_python"],
+    "analysis": ["read_file", "list_dir", "grep_search", "run_python"],
     "secure": ["read_file"],
 }
 
@@ -32,6 +32,7 @@ TOOL_SCOPE_MAP: dict[str, CapabilityScope] = {
     "write_file": CapabilityScope.WRITE,
     "apply_patch": CapabilityScope.WRITE,
     "run_cmd": CapabilityScope.EXEC,
+    "run_python": CapabilityScope.EXEC,
 }
 
 

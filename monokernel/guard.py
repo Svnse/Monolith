@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, Signal, QTimer
 from core.state import AppState, SystemStatus
 from core.task import Task, TaskStatus
 from engine.base import EnginePort
+from engine.process_controller import ProcessGroupController
 
 ENGINE_DISPATCH = {
     "set_path": "set_model_path",
@@ -44,6 +45,9 @@ class MonoGuard(QObject):
         }
         self._stop_requested: dict[str, bool] = {key: False for key in engines.keys()}
         self._viztracer = None
+
+        # OFAC v0.2: Global process controller for STOP dominance
+        self._process_controller: ProcessGroupController | None = None
 
         self._engine_connections: dict[str, dict[str, object]] = {}
         for key, engine in engines.items():
@@ -192,7 +196,47 @@ class MonoGuard(QObject):
             handler()
         return True
 
+    def resume_agent(self, engine_key: str, action: str = "approve") -> bool:
+        """
+        Resume an agent parked in WAIT_ACK state.
+
+        action: "approve" | "deny" | "timeout"
+        Returns True if resume was initiated.
+        """
+        engine = self.engines.get(engine_key)
+        if engine is None:
+            self.sig_trace.emit("system", f"[GUARD] resume_agent: unknown engine {engine_key}")
+            return False
+
+        if not hasattr(engine, "resume_agent"):
+            self.sig_trace.emit("system", f"[GUARD] resume_agent: engine {engine_key} lacks resume_agent")
+            return False
+
+        self.sig_trace.emit("system", f"[GUARD] resume_agent: engine={engine_key}, action={action}")
+        return engine.resume_agent(action)
+
+    def set_process_controller(self, controller: ProcessGroupController) -> None:
+        """Register the global ProcessGroupController for STOP dominance."""
+        self._process_controller = controller
+
+    def _get_process_controller(self) -> ProcessGroupController | None:
+        """Lazily resolve the global ProcessGroupController from engine.tools."""
+        if self._process_controller is None:
+            try:
+                from engine.tools import get_process_controller
+                self._process_controller = get_process_controller()
+            except Exception:
+                pass
+        return self._process_controller
+
     def stop(self, target: str = "all") -> None:
+        """
+        OFAC v0.2 STOP Dominance:
+        1. Set global stop flag on all targeted engines.
+        2. Immediately terminate active processes via ProcessGroupController.
+        3. Start 2-second force_kill timer.
+        4. FSM aborts directly to TERMINATE.
+        """
         self.sig_trace.emit("system", f"GUARD: STOP target={target}")
         if target == "all":
             keys = list(self.engines.keys())
@@ -208,12 +252,35 @@ class MonoGuard(QObject):
                 self._stop_requested[key] = True
             engine.stop_generation()
 
+        # OFAC: Immediately terminate all active processes via controller
+        ctrl = self._get_process_controller()
+        if ctrl is not None:
+            active = ctrl.active_handles
+            if active:
+                self.sig_trace.emit("system", f"GUARD: STOP terminating {len(active)} active process(es)")
+                ctrl.terminate_all()
+
+                # Start 2-second force_kill timer
+                def _force_kill_remaining():
+                    still_active = ctrl.active_handles
+                    if still_active:
+                        self.sig_trace.emit("system", f"GUARD: force_kill {len(still_active)} lingering process(es)")
+                        ctrl.force_kill_all()
+
+                QTimer.singleShot(2000, _force_kill_remaining)
+
     def force_stop(self, target: str) -> None:
-        """Force terminate engine, killing threads if necessary."""
+        """Force terminate engine, killing threads and processes immediately."""
         self.sig_trace.emit("system", f"GUARD: FORCE STOP target={target}")
         engine = self.engines.get(target)
         if not engine:
             return
+
+        # Force kill all managed processes immediately
+        ctrl = self._get_process_controller()
+        if ctrl is not None:
+            ctrl.force_kill_all()
+
         if hasattr(engine, 'force_stop'):
             engine.force_stop()
         else:

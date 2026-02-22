@@ -19,6 +19,24 @@ CHECKPOINT_ROOT = Path(os.getenv("MONOLITH_CHECKPOINT_ROOT", DEFAULT_WORKSPACE_R
 CHECKPOINT_STORAGE_CEILING_BYTES = int(os.getenv("MONOLITH_CHECKPOINT_STORAGE_CEILING_MB", "512")) * 1024 * 1024
 WORKSPACE_MANAGED_MARKER = ".monolith_workspace"
 
+# Default ignore patterns (always excluded from manifests)
+_ALWAYS_IGNORE = {
+    ".git",
+    ".monolith",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".env",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+    ".eggs",
+    "*.egg-info",
+}
+
 
 @dataclass
 class CheckpointMetadata:
@@ -32,6 +50,60 @@ class CheckpointMetadata:
     pty_state_ref: str | None
 
 
+@dataclass
+class FileEntry:
+    """Stat-heuristic manifest entry: hash only recomputed when mtime/size change."""
+    mtime: float
+    size: int
+    sha256: str
+
+
+def _parse_ignore_file(path: Path) -> list[str]:
+    """Parse a .gitignore / .monolithignore file into pattern list."""
+    patterns: list[str] = []
+    if not path.exists():
+        return patterns
+    try:
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            patterns.append(line)
+    except Exception:
+        pass
+    return patterns
+
+
+def _should_ignore(rel_path: str, ignore_patterns: list[str]) -> bool:
+    """Check if a relative path matches any ignore pattern."""
+    from fnmatch import fnmatch
+
+    parts = rel_path.replace("\\", "/").split("/")
+
+    # Check each path component against always-ignore set
+    for part in parts:
+        if part in _ALWAYS_IGNORE:
+            return True
+        for pattern in _ALWAYS_IGNORE:
+            if "*" in pattern and fnmatch(part, pattern):
+                return True
+
+    # Check against user-defined ignore patterns
+    for pattern in ignore_patterns:
+        # Directory pattern (ends with /)
+        if pattern.endswith("/"):
+            dir_pat = pattern.rstrip("/")
+            for part in parts[:-1]:
+                if fnmatch(part, dir_pat):
+                    return True
+        else:
+            # File pattern — match against full relative path or basename
+            if fnmatch(parts[-1], pattern) or fnmatch(rel_path, pattern):
+                return True
+
+    return False
+
+
 class CheckpointStore:
     def __init__(self, workspace_root: Path = DEFAULT_WORKSPACE_ROOT, root: Path = CHECKPOINT_ROOT):
         self.workspace_root = workspace_root.resolve()
@@ -41,6 +113,19 @@ class CheckpointStore:
         self.index_path = self.root / "index.json"
         self._lock = threading.RLock()
         self._ensure_dirs()
+
+        # Stat-cache for fast-stat heuristics: path -> FileEntry
+        self._stat_cache: dict[str, FileEntry] = {}
+
+        # Parsed ignore patterns (loaded once)
+        self._ignore_patterns = self._load_ignore_patterns()
+
+    def _load_ignore_patterns(self) -> list[str]:
+        """Load .gitignore and .monolithignore from workspace root."""
+        patterns: list[str] = []
+        for name in (".gitignore", ".monolithignore"):
+            patterns.extend(_parse_ignore_file(self.workspace_root / name))
+        return patterns
 
     def create_checkpoint(
         self,
@@ -66,10 +151,13 @@ class CheckpointStore:
                 pty_state_ref=pty_state_ref,
             )
 
+            # Convert manifest to storable form (path -> sha256 only)
+            storable_manifest = {p: entry.sha256 for p, entry in manifest.items()}
+
             payload = {
                 "metadata": asdict(metadata),
-                "workspace_manifest": manifest,
-                "manifest_hash": self._hash_manifest(manifest),
+                "workspace_manifest": storable_manifest,
+                "manifest_hash": self._hash_manifest(storable_manifest),
             }
             snapshot_path = self.snapshots_dir / f"{checkpoint_id}.json"
             snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -159,8 +247,6 @@ class CheckpointStore:
                 return {"ok": True, "warning": "workspace not marked as managed; skipped deleting extraneous files"}
             return True
 
-
-
     def load_checkpoint_snapshot(self, checkpoint_id: str) -> dict[str, Any] | None:
         snapshot_path = self.snapshots_dir / f"{checkpoint_id}.json"
         if not snapshot_path.exists():
@@ -204,16 +290,48 @@ class CheckpointStore:
         if not self.index_path.exists():
             self._save_index({"checkpoints": {}, "branch_checkpoints": {}})
 
-    def _build_workspace_manifest(self) -> dict[str, str]:
-        manifest: dict[str, str] = {}
+    def _build_workspace_manifest(self) -> dict[str, FileEntry]:
+        """
+        Build workspace manifest using fast-stat heuristics.
+
+        Only computes SHA-256 when mtime or size has changed since last snapshot.
+        Respects .gitignore and .monolithignore patterns.
+        """
+        manifest: dict[str, FileEntry] = {}
+
         for path in self.workspace_root.rglob("*"):
             if not path.is_file():
                 continue
             if self._is_inside_checkpoint_store(path):
                 continue
-            digest = self._hash_file(path)
-            manifest[path.relative_to(self.workspace_root).as_posix()] = digest
+
+            rel = path.relative_to(self.workspace_root).as_posix()
+
+            # Ignore check
+            if _should_ignore(rel, self._ignore_patterns):
+                continue
+
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+
+            cur_mtime = st.st_mtime
+            cur_size = st.st_size
+
+            # Fast-stat heuristic: reuse cached hash if mtime+size unchanged
+            cached = self._stat_cache.get(rel)
+            if cached is not None and cached.mtime == cur_mtime and cached.size == cur_size:
+                digest = cached.sha256
+            else:
+                digest = self._hash_file(path)
+
+            entry = FileEntry(mtime=cur_mtime, size=cur_size, sha256=digest)
+            manifest[rel] = entry
+            self._stat_cache[rel] = entry
+
             self._ensure_blob(path, digest)
+
         return manifest
 
     def _build_manifest_for_root(self, root: Path) -> dict[str, str]:
@@ -221,7 +339,10 @@ class CheckpointStore:
         for path in root.rglob("*"):
             if not path.is_file() or self._is_inside_checkpoint_store(path):
                 continue
-            manifest[path.relative_to(root).as_posix()] = self._hash_file(path)
+            rel = path.relative_to(root).as_posix()
+            if _should_ignore(rel, self._ignore_patterns):
+                continue
+            manifest[rel] = self._hash_file(path)
         return manifest
 
     def _hash_manifest(self, manifest: dict[str, str]) -> str:

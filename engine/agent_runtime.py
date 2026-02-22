@@ -15,9 +15,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from core.event_ledger import AppendOnlyLedger
+from core.event_ledger import AppendOnlyLedger, TranscriptChain, canonical_json, canonical_hash
 from engine.agent_bridge import AgentBridge
-from engine.capabilities import CapabilityManager, extract_tool_path
+from engine.capabilities import CapabilityManager, CapabilityScope, TOOL_SCOPE_MAP, extract_tool_path
+from engine.contract import (
+    AgentOutcome, AgentRunResult, EnvSnapshot, FitContract, FSM_TRANSITIONS,
+    PlanSnapshot, PlanStep, RuntimeState, RunSummary, StateDigest, ToolPolicy,
+)
+from engine.migration import check_compatibility
 from engine.tool_schema import TOOL_ARGUMENT_SCHEMAS
 
 Role = Literal["system", "user", "assistant", "tool"]
@@ -85,6 +90,13 @@ class AgentRuntime:
         self._last_outcome: Any | None = None  # AgentOutcome
         self._estimated_context_ratio: float = 0.0
 
+        # OFAC v0.2: Manifest Oracle for mutation tracking
+        self._manifest_oracle: Any | None = None  # Lazily initialized
+        self._last_manifest_snapshot: Any | None = None
+
+        # OFAC v0.2: Cached env snapshot (computed once at first run)
+        self._env_snapshot: EnvSnapshot | None = None
+
     # ------------------------------------------------------------------
     # Event emission helpers
     # ------------------------------------------------------------------
@@ -149,6 +161,141 @@ class AgentRuntime:
         self._emit(payload)
 
     # ------------------------------------------------------------------
+    # OFAC v0.2 — Structured payload emission
+    # ------------------------------------------------------------------
+
+    def _build_env_snapshot(self) -> EnvSnapshot:
+        """Build ENV_SNAPSHOT fingerprint — cached once at startup."""
+        if self._env_snapshot is not None:
+            return self._env_snapshot
+
+        import os
+        import platform
+        import sys
+        import subprocess
+
+        workspace = os.environ.get("MONOLITH_WORKSPACE", os.getcwd())
+        python_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        plat = platform.system().lower()
+
+        # Git dirty check
+        git_dirty = False
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, timeout=5,
+                cwd=workspace,
+            )
+            git_dirty = bool(result.stdout.strip())
+        except Exception:
+            pass
+
+        # Env fingerprint (hash of key environment variables)
+        env_data = canonical_json({
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+            "VIRTUAL_ENV": os.environ.get("VIRTUAL_ENV", ""),
+        })
+        env_fp = hashlib.sha256(env_data.encode("utf-8")).hexdigest()
+
+        self._env_snapshot = EnvSnapshot(
+            workspace_root=workspace,
+            python_version=python_ver,
+            platform=plat,
+            env_fingerprint=env_fp,
+            git_dirty=git_dirty,
+        )
+        return self._env_snapshot
+
+    def _emit_env_snapshot(self) -> None:
+        """Emit ENV_SNAPSHOT to ledger."""
+        snap = self._build_env_snapshot()
+        self._ledger.append(
+            actor="system",
+            event_type="env_snapshot",
+            payload=snap.to_dict(),
+        )
+        self._emit({
+            "event": "ENV_SNAPSHOT",
+            "snapshot": snap.to_dict(),
+        })
+
+    def _emit_fit_contract(self, goal: str, risk_flags: list[str] | None = None) -> FitContract:
+        """Build and emit a FIT_CONTRACT for the current run."""
+        fit_data = {
+            "goal": goal,
+            "success_criteria": [],
+            "risk_flags": sorted(risk_flags or []),
+            "stop_conditions": [],
+        }
+        fit_hash = canonical_hash(fit_data)
+
+        contract = FitContract(
+            goal=goal,
+            success_criteria=(),
+            risk_flags=tuple(sorted(risk_flags or [])),
+            stop_conditions=(),
+            fit_hash=fit_hash,
+        )
+
+        self._ledger.append(
+            actor="system",
+            event_type="fit_contract",
+            payload=contract.to_dict(),
+        )
+        self._emit({
+            "event": "FIT_CONTRACT",
+            "contract": contract.to_dict(),
+        })
+        return contract
+
+    def _emit_mutation_record(self, mutation_record_dict: dict[str, Any]) -> None:
+        """Emit a MUTATION_RECORD to ledger after EXECUTE phase."""
+        self._ledger.append(
+            actor="system",
+            event_type="mutation_record",
+            payload=mutation_record_dict,
+        )
+        self._emit({
+            "event": "MUTATION_RECORD",
+            "record": mutation_record_dict,
+        })
+
+    def _init_manifest_oracle(self) -> None:
+        """Lazily initialize ManifestOracle for workspace mutation tracking."""
+        if self._manifest_oracle is not None:
+            return
+        try:
+            from engine.manifest_oracle import ManifestOracle
+            from engine.tools import WORKSPACE_ROOT
+            self._manifest_oracle = ManifestOracle(WORKSPACE_ROOT)
+        except Exception:
+            self._manifest_oracle = None
+
+    def _snapshot_workspace_before(self) -> None:
+        """Take a pre-EXECUTE manifest snapshot."""
+        self._init_manifest_oracle()
+        if self._manifest_oracle is not None:
+            try:
+                self._last_manifest_snapshot = self._manifest_oracle.snapshot()
+            except Exception:
+                self._last_manifest_snapshot = None
+
+    def _snapshot_workspace_after_and_emit(self) -> None:
+        """Take a post-EXECUTE manifest snapshot and emit MUTATION_RECORD."""
+        if self._manifest_oracle is None or self._last_manifest_snapshot is None:
+            return
+        try:
+            after = self._manifest_oracle.snapshot()
+            diff = self._manifest_oracle.diff(self._last_manifest_snapshot, after)
+            if diff.has_mutations:
+                self._emit_mutation_record(diff.to_dict())
+        except Exception:
+            pass
+        finally:
+            self._last_manifest_snapshot = None
+
+    # ------------------------------------------------------------------
     # FSM state transitions (Phase 3)
     # ------------------------------------------------------------------
 
@@ -157,7 +304,6 @@ class AgentRuntime:
         Enforce authoritative FSM transition. Raises RuntimeError on illegal
         transitions. Appends ledger entry and emits state digest.
         """
-        from engine.contract import FSM_TRANSITIONS, RuntimeState
 
         if self._fsm_state is None:
             # First transition: entering PRECHECK
@@ -195,7 +341,6 @@ class AgentRuntime:
 
     def _emit_state_digest(self) -> None:
         """Build and emit a StateDigest snapshot for UI consumption."""
-        from engine.contract import StateDigest
 
         contract = self._contract
         max_inf = contract.max_inferences if contract else MAX_AGENT_STEPS
@@ -513,7 +658,6 @@ class AgentRuntime:
           7. Normal success checks
           8. Continue loop
         """
-        from engine.contract import AgentOutcome, ToolPolicy
 
         contract = self._contract
         max_inferences = contract.max_inferences if contract else MAX_AGENT_STEPS
@@ -586,7 +730,6 @@ class AgentRuntime:
         Returns None if all checks pass, or a dict with
         {"outcome": AgentOutcome, "reason": str} on failure.
         """
-        from engine.contract import AgentOutcome, ToolPolicy
         from engine.protocol_adapter import get_profile
 
         contract = self._contract
@@ -629,13 +772,12 @@ class AgentRuntime:
 
         # Phase 5: version compatibility check
         try:
-            from engine.migration import check_compatibility
             adapter_ver = self._protocol_adapter.VERSION if self._protocol_adapter else "2a.1"
             contract_ver = getattr(contract, "contract_format_version", "3.0")
             compat, reason = check_compatibility(contract_ver, adapter_ver)
             if not compat:
                 return {"outcome": AgentOutcome.FAILED_PREFLIGHT, "reason": reason}
-        except ImportError:
+        except Exception:
             pass
 
         return None
@@ -644,15 +786,12 @@ class AgentRuntime:
     # Main loop
     # ------------------------------------------------------------------
 
-    def run(self, messages: list[dict[str, Any]]) -> "AgentRunResult":
+    def run(self, messages: list[dict[str, Any]]) -> AgentRunResult:
         """
         Main agent execution loop.
 
         Returns AgentRunResult with typed outcome.
         """
-        from engine.contract import (
-            AgentOutcome, AgentRunResult, RuntimeState, RunSummary, ToolPolicy,
-        )
 
         self._event_step_id = 0
         self._runtime_node_id = 0
@@ -724,7 +863,6 @@ class AgentRuntime:
             })
 
         # ---- TRANSCRIPT CHAIN (Phase 5) ----
-        from core.event_ledger import TranscriptChain
         if contract is not None:
             self._transcript_chain = TranscriptChain(
                 contract_hash=contract.contract_hash,
@@ -756,6 +894,11 @@ class AgentRuntime:
             if outcome.is_success:
                 self._emit_step_end(term_step, status="ok")
                 if output:
+                    # Emit termination output as chunked tokens for streaming UI effect
+                    chunk_size = max(1, len(output) // 20)  # ~20 chunks
+                    for i in range(0, len(output), chunk_size):
+                        chunk = output[i:i+chunk_size]
+                        self._emit({"event": "LLM_TOKEN", "data": chunk})
                     self._emit({"event": "FINAL_OUTPUT", "data": output})
             else:
                 self._emit_step_end(term_step, status="error", error=reason)
@@ -863,6 +1006,9 @@ class AgentRuntime:
             history.append(assistant)
 
             if assistant.content:
+                # Note: We do NOT emit LLM_TOKEN here because intermediate assistant
+                # messages during agent loop are not the final user-facing output.
+                # Only the termination output (emitted via FINAL_OUTPUT) should be shown.
                 self._emit({"event": "AGENT_THOUGHT", "step_id": llm_step, "thought": assistant.content, "timestamp": time.time()})
             self._emit({"event": "AGENT_MESSAGE", "message": self._serialize(assistant), "timestamp": time.time()})
             self._emit_runtime_node(role="assistant", content=str(assistant.content or ""))
@@ -1191,7 +1337,9 @@ class AgentRuntime:
             )
             if commit["action"] == "terminate":
                 self._transition_to(RuntimeState.TERMINATE)
-                return _terminate(commit["outcome"], commit["reason"])
+                # Pass the assistant's content as the output for UI display
+                output = assistant.content if assistant and assistant.content else ""
+                return _terminate(commit["outcome"], commit["reason"], output)
 
             if commit["action"] == "force_synthesis":
                 synthesis_prompt = AgentMessage(

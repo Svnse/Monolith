@@ -767,6 +767,10 @@ class PageCode(QWidget):
         elif event_name == "BRANCH_COMPARED":
             comparison = event.get("comparison", {})
             self.compare_detail.setPlainText(json.dumps(comparison, indent=2, ensure_ascii=False))
+        elif event_name == "WAIT_ACK_ENTER":
+            # OFAC v0.2: Show approval modal for destructive tool calls
+            tools = event.get("tools", [])
+            self._show_ack_modal(tools)
         elif event_name == "CAPABILITY_REQUEST":
             req = event.get("request") if isinstance(event.get("request"), dict) else {}
             req_id = str(event.get("request_id") or req.get("request_id") or "")
@@ -956,6 +960,64 @@ class PageCode(QWidget):
         widget = _CapabilityApprovalWidget(request_id, request)
         widget.sig_decision.connect(self.sig_runtime_command.emit)
         self._cap_container.addWidget(widget)
+
+    def _show_ack_modal(self, tools: list[dict]):
+        """
+        OFAC v0.2: Show modal for tool execution approval (WAIT_ACK state).
+        
+        Called when agent enters WAIT_ACK. Blocks execution until user
+        approves, denies, or timeout occurs.
+        """
+        from PySide6.QtWidgets import QMessageBox, QApplication
+        
+        if not tools:
+            # No tools to approve, auto-approve
+            self.sig_runtime_command.emit({"action": "ack_decision", "decision": "approve"})
+            return
+        
+        # Build tool list for display
+        tool_list = "\n".join(f"  • {t.get('tool', 'unknown')} - {t.get('scope', 'read')}" for t in tools)
+        
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Tool Execution Approval")
+        msg.setText(f"The agent wants to execute {len(tools)} tool(s):\n\n{tool_list}\n\nApprove execution?")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        msg.setStyleSheet(f"""
+            QMessageBox {{
+                background: {_s.BG_INPUT};
+                color: {_s.FG_TEXT};
+            }}
+            QLabel {{
+                color: {_s.FG_TEXT};
+                font-family: Consolas;
+                font-size: 11px;
+            }}
+            QPushButton {{
+                background: {_s.BG_BUTTON};
+                border: 1px solid {_s.BORDER_LIGHT};
+                color: {_s.FG_TEXT};
+                padding: 8px 16px;
+                font-size: 10px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                border: 1px solid {_s.ACCENT_PRIMARY};
+                color: {_s.ACCENT_PRIMARY};
+            }}
+        """)
+        
+        # Process events to ensure modal shows
+        QApplication.processEvents()
+        
+        reply = msg.exec()
+        
+        if reply == QMessageBox.Yes:
+            self.append_trace("[ACK] User approved tool execution")
+            self.sig_runtime_command.emit({"action": "ack_decision", "decision": "approve"})
+        else:
+            self.append_trace("[ACK] User denied tool execution")
+            self.sig_runtime_command.emit({"action": "ack_decision", "decision": "deny"})
 
     def _diff_nodes(self):
         node_a = self.diff_node_a.currentText()
@@ -1218,10 +1280,13 @@ class PageCode(QWidget):
         if status == SystemStatus.RUNNING:
             self._set_send_button_state(True)
         elif status == SystemStatus.READY:
+            # Determine loaded state from transition context
             if self._last_status == SystemStatus.LOADING:
                 self._is_model_loaded = True
             elif self._last_status == SystemStatus.UNLOADING:
                 self._is_model_loaded = False
+            # Note: if _last_status is None (initial state), keep current _is_model_loaded value
+            # The model starts unloaded (_is_model_loaded = False in __init__)
             self._set_send_button_state(False)
             if self._active_widget is not None:
                 self._active_widget.finalize()

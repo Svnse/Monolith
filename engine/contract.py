@@ -61,10 +61,16 @@ class ToolPolicy(str, Enum):
 # ---------------------------------------------------------------------------
 
 class RuntimeState(str, Enum):
-    """Authoritative FSM states for the agent execution loop."""
+    """
+    Authoritative FSM states for the agent execution loop.
+
+    OFAC v0.2 Final Form — 8 states:
+      PRECHECK → INFER → VALIDATE_CALLS → WAIT_ACK → EXECUTE → OBSERVE → COMMIT → TERMINATE
+    """
     PRECHECK = "PRECHECK"
     INFER = "INFER"
     VALIDATE_CALLS = "VALIDATE_CALLS"
+    WAIT_ACK = "WAIT_ACK"
     EXECUTE = "EXECUTE"
     OBSERVE = "OBSERVE"
     COMMIT = "COMMIT"
@@ -74,7 +80,8 @@ class RuntimeState(str, Enum):
 FSM_TRANSITIONS: dict[RuntimeState, frozenset[RuntimeState]] = {
     RuntimeState.PRECHECK: frozenset({RuntimeState.INFER, RuntimeState.TERMINATE}),
     RuntimeState.INFER: frozenset({RuntimeState.VALIDATE_CALLS, RuntimeState.COMMIT, RuntimeState.TERMINATE}),
-    RuntimeState.VALIDATE_CALLS: frozenset({RuntimeState.EXECUTE, RuntimeState.TERMINATE}),
+    RuntimeState.VALIDATE_CALLS: frozenset({RuntimeState.WAIT_ACK, RuntimeState.EXECUTE, RuntimeState.TERMINATE}),
+    RuntimeState.WAIT_ACK: frozenset({RuntimeState.EXECUTE, RuntimeState.TERMINATE}),
     RuntimeState.EXECUTE: frozenset({RuntimeState.OBSERVE, RuntimeState.TERMINATE}),
     RuntimeState.OBSERVE: frozenset({RuntimeState.COMMIT}),
     RuntimeState.COMMIT: frozenset({RuntimeState.INFER, RuntimeState.TERMINATE}),
@@ -374,22 +381,37 @@ class StateDigest:
 # Intent classification heuristics (for ContractFactory)
 # ---------------------------------------------------------------------------
 
-# Patterns that strongly suggest tool use is required
-_TOOL_REQUIRED_PATTERNS = [
-    re.compile(r"\b(?:create|write|make|build|generate|implement)\b.*\b(?:file|code|script|program|app|game|project|website|server|api|function|class|module|component)\b", re.IGNORECASE),
-    re.compile(r"\b(?:edit|modify|change|update|fix|patch|refactor)\b.*\b(?:file|code|line|function|class|bug|error)\b", re.IGNORECASE),
-    re.compile(r"\b(?:run|execute|test|compile|build|install)\b", re.IGNORECASE),
-    re.compile(r"\b(?:read|show|cat|open|view|display)\b.*\b(?:file|contents?|source)\b", re.IGNORECASE),
-    re.compile(r"\b(?:find|search|grep|locate|list)\b.*\b(?:file|dir|folder|pattern|function|class)\b", re.IGNORECASE),
-    re.compile(r"\b(?:delete|remove|rename|move|copy)\b.*\b(?:file|dir|folder)\b", re.IGNORECASE),
-]
+# Lazy-compiled regex patterns for intent classification
+# Compiled on first use to avoid cost for chat-only sessions
+_TOOL_REQUIRED_PATTERNS: list[re.Pattern] | None = None
+_CHAT_ONLY_PATTERNS: list[re.Pattern] | None = None
 
-# Patterns that suggest chat-only / explanatory response
-_CHAT_ONLY_PATTERNS = [
-    re.compile(r"\b(?:explain|what is|what are|how does|why does|describe|tell me about|difference between)\b", re.IGNORECASE),
-    re.compile(r"\b(?:help me understand|can you explain|what do you think)\b", re.IGNORECASE),
-    re.compile(r"^\s*(?:hi|hello|hey|thanks|thank you)\b", re.IGNORECASE),
-]
+
+def _get_tool_required_patterns() -> list[re.Pattern]:
+    """Return compiled patterns that suggest tool use is required."""
+    global _TOOL_REQUIRED_PATTERNS
+    if _TOOL_REQUIRED_PATTERNS is None:
+        _TOOL_REQUIRED_PATTERNS = [
+            re.compile(r"\b(?:create|write|make|build|generate|implement)\b.*\b(?:file|code|script|program|app|game|project|website|server|api|function|class|module|component)\b", re.IGNORECASE),
+            re.compile(r"\b(?:edit|modify|change|update|fix|patch|refactor)\b.*\b(?:file|code|line|function|class|bug|error)\b", re.IGNORECASE),
+            re.compile(r"\b(?:run|execute|test|compile|build|install)\b", re.IGNORECASE),
+            re.compile(r"\b(?:read|show|cat|open|view|display)\b.*\b(?:file|contents?|source)\b", re.IGNORECASE),
+            re.compile(r"\b(?:find|search|grep|locate|list)\b.*\b(?:file|dir|folder|pattern|function|class)\b", re.IGNORECASE),
+            re.compile(r"\b(?:delete|remove|rename|move|copy)\b.*\b(?:file|dir|folder)\b", re.IGNORECASE),
+        ]
+    return _TOOL_REQUIRED_PATTERNS
+
+
+def _get_chat_only_patterns() -> list[re.Pattern]:
+    """Return compiled patterns that suggest chat-only / explanatory response."""
+    global _CHAT_ONLY_PATTERNS
+    if _CHAT_ONLY_PATTERNS is None:
+        _CHAT_ONLY_PATTERNS = [
+            re.compile(r"\b(?:explain|what is|what are|how does|why does|describe|tell me about|difference between)\b", re.IGNORECASE),
+            re.compile(r"\b(?:help me understand|can you explain|what do you think)\b", re.IGNORECASE),
+            re.compile(r"^\s*(?:hi|hello|hey|thanks|thank you)\b", re.IGNORECASE),
+        ]
+    return _CHAT_ONLY_PATTERNS
 
 
 def classify_intent(prompt: str, source_page: str) -> ToolPolicy:
@@ -408,13 +430,13 @@ def classify_intent(prompt: str, source_page: str) -> ToolPolicy:
     # Code page: analyze prompt
     prompt_lower = prompt.strip()
 
-    # Check for strong chat-only signals
-    for pattern in _CHAT_ONLY_PATTERNS:
+    # Check for strong chat-only signals (lazy-compiled on first use)
+    for pattern in _get_chat_only_patterns():
         if pattern.search(prompt_lower):
             return ToolPolicy.OPTIONAL
 
-    # Check for tool-required signals
-    for pattern in _TOOL_REQUIRED_PATTERNS:
+    # Check for tool-required signals (lazy-compiled on first use)
+    for pattern in _get_tool_required_patterns():
         if pattern.search(prompt_lower):
             return ToolPolicy.REQUIRED
 
@@ -533,3 +555,87 @@ class ContractFactory:
             source_page=source_page,
             creation_timestamp=creation_ts,
         )
+
+
+# ---------------------------------------------------------------------------
+# OFAC v0.2 Contract Schemas (Hashed)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EnvSnapshot:
+    """
+    Environment fingerprint — cached once at startup.
+
+    All fields are strings/booleans (no floats/timestamps inside hash boundary).
+    """
+    workspace_root: str = ""
+    python_version: str = ""
+    platform: str = ""
+    env_fingerprint: str = ""
+    git_dirty: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "workspace_root": self.workspace_root,
+            "python_version": self.python_version,
+            "platform": self.platform,
+            "env_fingerprint": self.env_fingerprint,
+            "git_dirty": self.git_dirty,
+        }
+
+
+@dataclass(frozen=True)
+class FitContract:
+    """
+    FIT (Feasibility + Intent + Trust) contract — OFAC v0.2 Section 6.
+
+    Frozen after creation. No floats or timestamps inside hash boundary.
+    """
+    goal: str = ""
+    success_criteria: tuple[str, ...] = ()
+    risk_flags: tuple[str, ...] = ()
+    stop_conditions: tuple[str, ...] = ()
+    fit_hash: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "goal": self.goal,
+            "success_criteria": list(self.success_criteria),
+            "risk_flags": list(self.risk_flags),
+            "stop_conditions": list(self.stop_conditions),
+            "fit_hash": self.fit_hash,
+        }
+
+
+@dataclass(frozen=True)
+class PlanStep:
+    """Single step in a PLAN_SNAPSHOT."""
+    id: str = ""
+    tool: str = ""
+    requires_ack: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "tool": self.tool,
+            "requires_ack": self.requires_ack,
+        }
+
+
+@dataclass(frozen=True)
+class PlanSnapshot:
+    """
+    PLAN_SNAPSHOT — OFAC v0.2 Section 6.
+
+    Immutable after creation. Integer version, no floats.
+    """
+    version: int = 1
+    steps: tuple[PlanStep, ...] = ()
+    plan_hash: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "steps": [s.to_dict() for s in self.steps],
+            "plan_hash": self.plan_hash,
+        }

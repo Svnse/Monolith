@@ -124,6 +124,10 @@ def terminal_factory(ctx: AddonContext):
     def _cleanup_terminal(*_args):
         ctx.guard.unregister_engine(engine_key)
         engine_bridge.shutdown()
+        # Give threads time to fully terminate before returning
+        # This prevents "QThread destroyed while running" warnings
+        import time
+        time.sleep(0.1)
 
     w.destroyed.connect(_cleanup_terminal)
     return w
@@ -240,6 +244,10 @@ def code_factory(ctx: AddonContext):
     )
     ctx.guard.sig_status.connect(
         lambda ek, status: w.update_status(status) if ek == engine_key else None
+    )
+    # Ensure button updates when engine truthfully ready (handles race conditions in load state)
+    ctx.guard.sig_engine_ready.connect(
+        lambda ek: w._update_load_button_text() if ek == engine_key else None
     )
     w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
     ctx.guard.sig_token.connect(
