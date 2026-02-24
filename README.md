@@ -4,7 +4,7 @@
 
 <p align="center">
 <b>Stop chatting with AI. Start commanding it.</b><br/>
-A local-first AI workstation for running LLMs, Stable Diffusion, and audio generation through a modular kernel.
+A local-native AI workstation that puts modular tools at your fingertips—no cloud, no chat, no compromises.
 </p>
 
 ---
