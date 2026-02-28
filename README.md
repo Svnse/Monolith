@@ -1,73 +1,107 @@
-# React + TypeScript + Vite
+# Monolith v0.28a
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Stop chatting with AI. Start commanding it.**
 
-Currently, two official plugins are available:
+Monolith is a local-first AI workstation built for real execution, not just conversation. It combines a modular UI, a kernel-style routing layer, and multi-engine runtime support for coding, LLM chat, vision, audio, and relay workflows.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## What Is New in v0.28a
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Refined CODE agent loop with stronger runtime walls and clearer event traces
+- Improved approval flow and redirect behavior while runs are active
+- Better tool execution safety with boundary-aware path controls
+- Expanded runtime observability via effect journaling and structured events
+- Cleaner module orchestration through the MonoKernel task routing path
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Core Capabilities
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- **CODE Agent Runtime**
+  - Goal-driven execution loop with tool use, policy checks, and stop controls
+  - Inline approvals for sensitive tool scopes
+  - Timeline-first UI with cycle grouping and event visibility
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- **Local LLM Chat**
+  - GGUF model loading via `llama-cpp-python`
+  - Streaming generation and persistent session behavior
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- **Vision Generation**
+  - Stable Diffusion module integration for image generation workflows
+
+- **Audio Generation**
+  - Audio generation module support for local creative pipelines
+
+- **Relay Module**
+  - Multi-agent style message relay and room coordination primitives
+
+---
+
+## Architecture (High Level)
+
+Monolith follows a layered signal architecture:
+
+1. **UI / Addons**
+2. **MonoKernel (Guard + Dock + Bridge)**
+3. **Engines (LLM / Loop / Vision / Audio / Relay)**
+
+All execution commands are routed through the kernel path, not direct UI-to-engine calls.
+
+---
+
+## Quick Start
+
+### Windows
+
+1. Clone the repository
+2. Run `install.bat`
+3. Run `start.bat`
+
+### Linux / macOS
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python main.py
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+---
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Requirements
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- Python 3.10+
+- NVIDIA GPU recommended for Vision and Audio modules
+- Sufficient VRAM for selected local models
+
+---
+
+## Project Layout
+
+```text
+monokernel/   # Guard, queue, and execution arbitration
+engine/       # Loop runtime, LLM engine, tools, process control
+ui/           # Main window, pages, modules, addon registry
+core/         # Shared state, config, paths, style, theme logic
+docs/         # Specs, architecture notes, prompts, contracts
 ```
+
+---
+
+## Docs Pointers
+
+- `docs/architecture.md`
+- `docs/AGENT_SYSTEM_SPEC_V1.md`
+- `docs/MONOLITH_LOOP_REFACTOR_SPEC.md`
+- `docs/RUNTIME_AWARENESS_SPEC.md`
+
+---
+
+## Status
+
+**Version:** `0.28a`  
+**Stage:** Active experimental development
+
+Monolith is built for rapid iteration. Interfaces and internals can evolve quickly between versions.
+
