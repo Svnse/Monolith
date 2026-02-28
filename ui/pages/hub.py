@@ -584,4 +584,5 @@ class PageHub(QWidget):
             self._ui_bridge.sig_theme_changed.emit(key)
         else:
             apply_theme(key)
+        self._refresh_theme()
 

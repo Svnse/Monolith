@@ -35,6 +35,8 @@ class MonoGuard(QObject):
     sig_image = Signal(object)
     sig_finished = Signal(str, str)
     sig_agent_event = Signal(str, dict)
+    # Raw engine event bus — (engine_key, event_dict).  Consumed by AddonEventBus.
+    sig_engine_event = Signal(str, dict)
 
     def __init__(self, state: AppState, engines: dict[str, EnginePort]):
         super().__init__()
@@ -79,6 +81,12 @@ class MonoGuard(QObject):
             agent_event_slot = lambda event, ek=key: self.sig_agent_event.emit(ek, event)
             engine.sig_agent_event.connect(agent_event_slot)
 
+        # Raw event bus (EngineProcess subclasses only)
+        engine_event_slot = None
+        if hasattr(engine, "sig_event"):
+            engine_event_slot = lambda event, ek=key: self.sig_engine_event.emit(ek, event)
+            engine.sig_event.connect(engine_event_slot)
+
         has_finished = hasattr(engine, "sig_finished")
         if has_finished:
             engine.sig_finished.connect(finished_slot)
@@ -91,6 +99,7 @@ class MonoGuard(QObject):
             "image": image_slot,
             "finished": finished_slot if has_finished else None,
             "agent_event": agent_event_slot,
+            "event": engine_event_slot,
         }
 
     def _disconnect_engine_signals(self, key: str, engine: EnginePort) -> None:
@@ -196,25 +205,6 @@ class MonoGuard(QObject):
             handler()
         return True
 
-    def resume_agent(self, engine_key: str, action: str = "approve") -> bool:
-        """
-        Resume an agent parked in WAIT_ACK state.
-
-        action: "approve" | "deny" | "timeout"
-        Returns True if resume was initiated.
-        """
-        engine = self.engines.get(engine_key)
-        if engine is None:
-            self.sig_trace.emit("system", f"[GUARD] resume_agent: unknown engine {engine_key}")
-            return False
-
-        if not hasattr(engine, "resume_agent"):
-            self.sig_trace.emit("system", f"[GUARD] resume_agent: engine {engine_key} lacks resume_agent")
-            return False
-
-        self.sig_trace.emit("system", f"[GUARD] resume_agent: engine={engine_key}, action={action}")
-        return engine.resume_agent(action)
-
     def set_process_controller(self, controller: ProcessGroupController) -> None:
         """Register the global ProcessGroupController for STOP dominance."""
         self._process_controller = controller
@@ -228,6 +218,25 @@ class MonoGuard(QObject):
             except Exception:
                 pass
         return self._process_controller
+
+    def _finalize_stuck_stop(self, engine_key: str) -> None:
+        """
+        Fallback cleanup for STOP flows where engine READY was never emitted.
+        Prevents active task slots from remaining blocked indefinitely.
+        """
+        task = self.active_tasks.get(engine_key)
+        if task is None or not self._stop_requested.get(engine_key, False):
+            return
+
+        self.sig_trace.emit(
+            "system",
+            f"GUARD: STOP fallback clearing stale task engine={engine_key} task={task.id}"
+        )
+        task.status = TaskStatus.CANCELLED
+        self.active_tasks[engine_key] = None
+        self._stop_requested[engine_key] = False
+        self.sig_status.emit(engine_key, SystemStatus.READY)
+        QTimer.singleShot(0, lambda ek=engine_key: self.sig_engine_ready.emit(ek))
 
     def stop(self, target: str = "all") -> None:
         """
@@ -250,6 +259,7 @@ class MonoGuard(QObject):
             task = self.active_tasks.get(key)
             if task is not None:
                 self._stop_requested[key] = True
+                QTimer.singleShot(2600, lambda ek=key: self._finalize_stuck_stop(ek))
             engine.stop_generation()
 
         # OFAC: Immediately terminate all active processes via controller

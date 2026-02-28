@@ -34,9 +34,6 @@ class PageAddons(QWidget):
         btn_terminal = MonoButton("CHAT")
         btn_terminal.clicked.connect(lambda: self.sig_launch_addon.emit("terminal"))
 
-        btn_agent = MonoButton("AGENT")
-        btn_agent.clicked.connect(lambda: self.sig_launch_addon.emit("agent"))
-
         btn_code = MonoButton("CODE")
         btn_code.clicked.connect(lambda: self.sig_launch_addon.emit("code"))
 
@@ -52,14 +49,17 @@ class PageAddons(QWidget):
         btn_audiogen = MonoButton("AUDIO")
         btn_audiogen.clicked.connect(lambda: self.sig_launch_addon.emit("audiogen"))
 
+        btn_relay = MonoButton("RELAY")
+        btn_relay.clicked.connect(lambda: self.sig_launch_addon.emit("relay"))
+
         mod_layout.addWidget(lbl_info)
         mod_layout.addWidget(btn_terminal)
-        mod_layout.addWidget(btn_agent)
         mod_layout.addWidget(btn_code)
         mod_layout.addWidget(btn_databank)
         mod_layout.addWidget(btn_injector)
         mod_layout.addWidget(btn_sd)
         mod_layout.addWidget(btn_audiogen)
+        mod_layout.addWidget(btn_relay)
         mod_layout.addStretch()
         
         grp_modules.add_layout(mod_layout)
@@ -69,12 +69,16 @@ class PageAddons(QWidget):
         system_layout = QVBoxLayout()
         system_layout.setSpacing(10)
 
+        btn_theme = MonoButton("THEME")
+        btn_theme.clicked.connect(lambda: self.sig_launch_addon.emit("theme"))
+
         btn_vitals = MonoButton("VITALS")
         btn_vitals.clicked.connect(self.sig_open_vitals.emit)
 
         btn_overseer = MonoButton("MONITOR")
         btn_overseer.clicked.connect(self.sig_open_overseer.emit)
 
+        system_layout.addWidget(btn_theme)
         system_layout.addWidget(btn_vitals)
         system_layout.addWidget(btn_overseer)
         grp_system.add_layout(system_layout)
@@ -82,4 +86,3 @@ class PageAddons(QWidget):
         scroll_layout.addStretch()
         scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area)
-

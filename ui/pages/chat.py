@@ -1,25 +1,122 @@
 import json
 import re
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from zipfile import ZipFile, BadZipFile
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QLineEdit, QPushButton, QLabel, QFileDialog,
     QSplitter, QListWidget, QListWidgetItem, QStackedWidget,
-    QMessageBox, QButtonGroup, QMenu
+    QMessageBox, QButtonGroup, QMenu, QFrame, QScrollArea,
 )
-from PySide6.QtCore import Signal, Qt, QTimer, QDateTime, QEvent
-from PySide6.QtGui import QActionGroup
+from PySide6.QtCore import Signal, Qt, QTimer, QDateTime, QEvent, QPoint
+from PySide6.QtGui import QActionGroup, QKeyEvent
 
 from core.state import SystemStatus
 import core.style as _s  # dynamic theme bridge
 from ui.components.atoms import MonoGroupBox, MonoButton, MonoSlider
 from ui.components.complex import BehaviorTagInput
 from ui.components.message_widget import MessageWidget
-from core.llm_config import DEFAULT_CONFIG, MASTER_PROMPT, load_config, save_config
+from core.llm_config import DEFAULT_CONFIG, build_system_prompt, load_config, save_config
 from core.paths import ARCHIVE_DIR
 
+# ---------------------------------------------------------------------------
+# Slash-command registry
+# ---------------------------------------------------------------------------
+_SLASH_COMMANDS: list[tuple[str, str]] = [
+    ("/think",  "Toggle thinking mode (off / standard)"),
+    ("/attach", "Attach a file to your message"),
+    ("/clear",  "Clear the current chat"),
+    ("/vision", "Open the Vision (image gen) module"),
+    ("/audio",  "Open the Audio module"),
+]
+
+_ASSISTANT_CMD_RE = re.compile(
+    r"<monolith_cmd>\s*(\{.*?\})\s*</monolith_cmd>",
+    re.IGNORECASE | re.DOTALL,
+)
+_ASSISTANT_ALLOWED_ADDONS = {"sd", "audiogen", "databank", "terminal"}
+
+# File extensions accepted for drag-and-drop / attach
+_TEXT_EXTENSIONS = {
+    ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".json",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".csv", ".html",
+    ".htm", ".xml", ".rst", ".log", ".sh", ".bat", ".css", ".c",
+    ".cpp", ".h", ".java", ".go", ".rs", ".rb", ".php", ".sql",
+    ".env", ".gitignore", ".dockerfile", ".tf",
+}
+
+
+# ---------------------------------------------------------------------------
+# _CommandPopup — floats above the text input, lists matching slash-commands
+# ---------------------------------------------------------------------------
+class _CommandPopup(QFrame):
+    command_selected = Signal(str)
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("cmd_popup")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.hide()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(0)
+
+        self._list = QListWidget()
+        self._list.setFocusPolicy(Qt.NoFocus)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.itemClicked.connect(self._on_item_clicked)
+        layout.addWidget(self._list)
+
+        self._commands: list[tuple[str, str]] = []
+
+    def populate(self, cmds: list[tuple[str, str]]) -> None:
+        self._commands = cmds
+        self._list.clear()
+        for cmd, desc in cmds:
+            self._list.addItem(f"{cmd}  —  {desc}")
+        if self._list.count():
+            self._list.setCurrentRow(0)
+        rows = min(8, self._list.count())
+        self.setFixedHeight(rows * 26 + 10)
+
+    def move_selection(self, delta: int) -> None:
+        row = max(0, min(self._list.count() - 1, self._list.currentRow() + delta))
+        self._list.setCurrentRow(row)
+
+    def accept_current(self) -> None:
+        row = self._list.currentRow()
+        if 0 <= row < len(self._commands):
+            self.command_selected.emit(self._commands[row][0])
+        self.hide()
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        row = self._list.row(item)
+        if 0 <= row < len(self._commands):
+            self.command_selected.emit(self._commands[row][0])
+        self.hide()
+
+    def apply_theme(self) -> None:
+        self.setStyleSheet(
+            f"QFrame#cmd_popup {{ background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; "
+            f"border-radius: 4px; }}"
+        )
+        self._list.setStyleSheet(
+            f"QListWidget {{ background: transparent; border: none; color: {_s.FG_TEXT}; "
+            f"font-family: Consolas; font-size: 10px; }}"
+            f"QListWidget::item {{ padding: 3px 8px; border-radius: 2px; }}"
+            f"QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; "
+            f"color: {_s.ACCENT_PRIMARY}; }}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PageChat
+# ---------------------------------------------------------------------------
 class PageChat(QWidget):
     sig_generate = Signal(str, bool)
     sig_load = Signal()
@@ -30,15 +127,16 @@ class PageChat(QWidget):
     sig_set_ctx_limit = Signal(int)
     sig_operator_loaded = Signal(str)
     sig_debug = Signal(str)
+    sig_launch_addon = Signal(str)  # emitted by slash commands e.g. /vision → "sd"
 
     def __init__(self, state, ui_bridge):
         super().__init__()
         self.state = state
         self.ui_bridge = ui_bridge
         self.config = load_config()
-        self._token_buf: list[str] = []
+        self._token_buf: deque[str] = deque()
         self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(25)
+        self._flush_timer.setInterval(8)
         self._flush_timer.timeout.connect(self._flush_tokens)
         self._archive_dir = self._get_archive_dir()
         self._archive_dir.mkdir(parents=True, exist_ok=True)
@@ -60,10 +158,13 @@ class PageChat(QWidget):
         self._update_progress_index = 0
         self._config_dirty = False
         self._thinking_mode = bool(self.config.get("thinking_mode", False))
-        # When user clicks Edit/Regen/Delete while a generation is running, we STOP first,
-        # then apply the mutation on the next READY.
         self._pending_mutation = None  # type: ignore[assignment]
 
+        # File attachment state
+        self._attached_files: list[dict] = []  # each: {name, content, icon}
+
+        # Right-click double-click tracking for archive list
+        self._archive_last_right_click: float = 0.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -155,13 +256,12 @@ class PageChat(QWidget):
         self.ops_stack = QStackedWidget()
         operations_layout.addWidget(self.ops_stack)
 
-        # --- MODEL tab: Model Loader (top-level, no collapsible) ---
+        # --- MODEL tab ---
         control_tab = QWidget()
         control_layout = QVBoxLayout(control_tab)
         control_layout.setSpacing(12)
         control_layout.addWidget(grp_load)
 
-        # --- Collapsible ADVANCED panel ---
         self._options_expanded = False
         self.btn_options_toggle = QPushButton("▸ ADVANCED")
         self.btn_options_toggle.setCursor(Qt.PointingHandCursor)
@@ -181,21 +281,13 @@ class PageChat(QWidget):
         options_layout = QVBoxLayout(self.options_panel)
         options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.setSpacing(8)
-
-        # Attach file button
-        self.btn_attach = MonoButton("📎  ATTACH FILE")
-        self.btn_attach.clicked.connect(self._attach_file_placeholder)
-        options_layout.addWidget(self.btn_attach)
-
         control_layout.addWidget(self.options_panel)
         control_layout.addStretch()
 
         # --- HISTORY group ---
         history_group = MonoGroupBox("HISTORY")
         history_layout = QVBoxLayout()
-        history_layout.setSpacing(10)
-
-        # Archive controls removed — SAVE/CLEAR in header, double-click to load, double-right-click to delete
+        history_layout.setSpacing(8)
 
         self.archive_list = QListWidget()
         self.archive_list.setStyleSheet(f"""
@@ -207,9 +299,23 @@ class PageChat(QWidget):
             QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
             {_s.SCROLLBAR_STYLE}
         """)
-        self.archive_list.itemDoubleClicked.connect(lambda: self._load_chat_archive())
+        # Use event filter for distinguishing left vs right double-click
+        self.archive_list.viewport().installEventFilter(self)
+
+        history_btn_row = QHBoxLayout()
+        history_btn_row.setSpacing(6)
+        btn_clear_history = MonoButton("CLEAR CHAT")
+        btn_clear_history.setFixedHeight(24)
+        btn_clear_history.clicked.connect(lambda: self._clear_current_session(delete_archive=False))
+        btn_delete_history = MonoButton("DELETE")
+        btn_delete_history.setFixedHeight(24)
+        btn_delete_history.clicked.connect(self._delete_selected_archive)
+        history_btn_row.addWidget(btn_clear_history)
+        history_btn_row.addWidget(btn_delete_history)
+        history_btn_row.addStretch()
+
         history_layout.addWidget(self.archive_list)
-        history_group.add_layout(history_layout)
+        history_layout.addLayout(history_btn_row)
 
         self.lbl_behavior = QLabel("BEHAVIOR TAGS")
         self.lbl_behavior.setStyleSheet(
@@ -222,7 +328,7 @@ class PageChat(QWidget):
         )
         self.behavior_tags.setMaximumHeight(36)
 
-        # --- CONFIG tab: AI Configuration + Save/Reset ---
+        # --- CONFIG tab ---
         settings_tab = QWidget()
         settings_layout = QVBoxLayout(settings_tab)
         settings_layout.setSpacing(10)
@@ -241,12 +347,15 @@ class PageChat(QWidget):
         self.btn_tab_settings.toggled.connect(lambda checked: self._switch_ops_tab(1, checked))
 
         operations_group.add_layout(operations_layout)
+        history_group.add_layout(history_layout)
 
+        # ----------------------------------------------------------------
+        # CHAT panel (left side)
+        # ----------------------------------------------------------------
         chat_group = MonoGroupBox("CHAT")
-        chat_group.add_header_action("SAVE", self._save_chat_archive)
         chat_group.add_header_action("CLEAR", lambda: self._clear_current_session(delete_archive=False))
         chat_layout = QVBoxLayout()
-        chat_layout.setSpacing(10)
+        chat_layout.setSpacing(8)
 
         self.message_list = QListWidget()
         self.message_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -266,26 +375,27 @@ class PageChat(QWidget):
         """)
         self.message_list.setSelectionMode(QListWidget.NoSelection)
         self.message_list.setFocusPolicy(Qt.NoFocus)
-        chat_layout.addWidget(self.message_list)
-        
-        # --- Input row with (+) button ---
-        input_row = QHBoxLayout()
+        chat_layout.addWidget(self.message_list, 1)
 
-        self.btn_plus = MonoButton("+")
-        self.btn_plus.setFixedSize(32, 32)
-        self.btn_plus.setCursor(Qt.PointingHandCursor)
-        self.btn_plus.setStyleSheet(
-            f"QPushButton {{ background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; "
-            f"color: {_s.FG_DIM}; font-size: 14px; font-weight: bold; border-radius: 2px; }}"
-            f"QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY}; }}"
-        )
-        self.btn_plus.clicked.connect(self._show_plus_menu)
+        # --- File attachment chips (shown when files are pending) ---
+        self._chips_container = QWidget()
+        self._chips_container.hide()
+        self._chips_layout = QHBoxLayout(self._chips_container)
+        self._chips_layout.setContentsMargins(0, 0, 0, 0)
+        self._chips_layout.setSpacing(6)
+        self._chips_layout.addStretch()
+        chat_layout.addWidget(self._chips_container)
+
+        # --- Input row ---
+        input_row = QHBoxLayout()
+        input_row.setSpacing(6)
 
         self.text_input = QTextEdit()
-        self.text_input.setPlaceholderText("Type a message...")
-        self.text_input.setFixedHeight(40)
+        self.text_input.setPlaceholderText("Message… or / for commands")
+        self.text_input.setFixedHeight(38)   # starts at ~1 line; grows as you type
         self.text_input.setAcceptRichText(False)
-        self.text_input.textChanged.connect(lambda: self._on_input_changed(self.text_input.toPlainText()))
+        self.text_input.setAcceptDrops(True)
+        self.text_input.textChanged.connect(self._on_text_input_changed)
         self.text_input.installEventFilter(self)
         self.text_input.setStyleSheet(f"""
             QTextEdit {{
@@ -295,7 +405,7 @@ class PageChat(QWidget):
             QTextEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
             {_s.SCROLLBAR_STYLE}
         """)
-        
+
         self.btn_send = QPushButton("SEND")
         self.btn_send.setCursor(Qt.PointingHandCursor)
         self.btn_send.setFixedWidth(80)
@@ -315,7 +425,6 @@ class PageChat(QWidget):
         self._set_send_button_state(is_running=False)
         self.btn_send.clicked.connect(self.handle_send_click)
 
-        input_row.addWidget(self.btn_plus)
         input_row.addWidget(self.text_input)
         input_row.addWidget(self.btn_send)
         chat_layout.addLayout(input_row)
@@ -343,6 +452,13 @@ class PageChat(QWidget):
         self._active_assistant_started = False
         self._active_assistant_token_count = 0
 
+        # --- Command popup (child of this widget, positioned dynamically) ---
+        self._cmd_popup = _CommandPopup(self)
+        self._cmd_popup.command_selected.connect(self._handle_command)
+        self._cmd_popup.apply_theme()
+
+        self.setAcceptDrops(True)
+
         self._sync_path_display()
         self._update_load_button_text()
         self._refresh_archive_list()
@@ -352,15 +468,307 @@ class PageChat(QWidget):
         if not self._is_model_loaded:
             self._apply_default_limits()
 
+        if self.ui_bridge is not None:
+            self.ui_bridge.sig_theme_changed.connect(lambda _: self._refresh_widget_styles())
+
+    # -----------------------------------------------------------------------
+    # Theme refresh
+    # -----------------------------------------------------------------------
+    def _refresh_widget_styles(self) -> None:
+        """Re-apply all inline widget styles after a theme change."""
+        self.path_display.setStyleSheet(
+            f"background: {_s.BG_INPUT}; color: {_s.FG_PLACEHOLDER}; border: 1px solid {_s.BORDER_LIGHT}; padding: 5px;"
+        )
+        self.lbl_config_state.setStyleSheet(f"color: {_s.FG_DIM}; font-size: 10px; font-weight: bold;")
+        tab_style = f"""
+            QPushButton {{
+                background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; color: {_s.FG_DIM};
+                padding: 6px 12px; font-size: 10px; font-weight: bold; border-radius: 2px;
+            }}
+            QPushButton:checked {{
+                background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; border: 1px solid {_s.ACCENT_PRIMARY};
+            }}
+            QPushButton:hover {{ color: {_s.FG_TEXT}; border: 1px solid {_s.FG_TEXT}; }}
+        """
+        self.btn_tab_control.setStyleSheet(tab_style)
+        self.btn_tab_settings.setStyleSheet(tab_style)
+        self.btn_options_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none;
+                color: {_s.FG_DIM}; font-size: 9px; font-weight: bold;
+                letter-spacing: 1px; text-align: left; padding: 4px 0;
+            }}
+            QPushButton:hover {{ color: {_s.ACCENT_PRIMARY}; }}
+        """)
+        self.archive_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {_s.BG_INPUT}; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
+                font-family: 'Consolas', monospace; font-size: 10px;
+            }}
+            QListWidget::item {{ padding: 6px; }}
+            QListWidget::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
+        """)
+        self.lbl_behavior.setStyleSheet(
+            f"color: {_s.FG_INFO}; font-size: 8px; font-weight: bold; letter-spacing: 1px;"
+        )
+        self.behavior_tags.setStyleSheet(
+            f"background: {_s.BG_SIDEBAR}; border: 1px solid {_s.BORDER_SUBTLE}; border-radius: 2px;"
+        )
+        self.message_list.setStyleSheet(f"""
+            QListWidget {{
+                background: transparent; color: {_s.FG_TEXT}; border: 1px solid {_s.BORDER_SUBTLE};
+                font-family: 'Consolas', monospace; font-size: 12px;
+            }}
+            QListWidget::item {{
+                border: none;
+                background: transparent;
+                padding: 0px;
+            }}
+            QListWidget::item:selected {{ background: transparent; border: none; }}
+            QListWidget::item:focus {{ background: transparent; border: none; outline: none; }}
+            {_s.SCROLLBAR_STYLE}
+        """)
+        self.text_input.setStyleSheet(f"""
+            QTextEdit {{
+                background: {_s.BG_INPUT}; color: white; border: 1px solid {_s.BORDER_LIGHT};
+                padding: 8px; font-family: 'Verdana'; font-size: 11px;
+            }}
+            QTextEdit:focus {{ border: 1px solid {_s.ACCENT_PRIMARY}; }}
+            {_s.SCROLLBAR_STYLE}
+        """)
+        self._btn_style_template = f"""
+            QPushButton {{{{
+                background: {{bg}};
+                border: 1px solid {{color}};
+                color: {{color}};
+                padding: 8px;
+                font-size: 11px;
+                font-weight: bold;
+                border-radius: 2px;
+            }}}}
+            QPushButton:hover {{{{ background: {{color}}; color: black; }}}}
+            QPushButton:pressed {{{{ background: {_s.ACCENT_PRIMARY_DARK}; }}}}
+        """
+        self._set_send_button_state(is_running=self._is_running)
+        self._cmd_popup.apply_theme()
+        self._update_file_chips()
+
+    # -----------------------------------------------------------------------
+    # Command system + input auto-grow
+    # -----------------------------------------------------------------------
+    _INPUT_MIN_H = 38
+    _INPUT_MAX_H = 160
+
+    def _on_text_input_changed(self) -> None:
+        self._grow_input()
+        self._on_input_changed(self.text_input.toPlainText())
+
+    def _grow_input(self) -> None:
+        """Resize text_input to fit its content, clamped to [_INPUT_MIN_H, _INPUT_MAX_H]."""
+        doc_h = self.text_input.document().documentLayout().documentSize().height()
+        fw = self.text_input.frameWidth()
+        # 16 = 8px top + 8px bottom padding from stylesheet
+        needed = int(doc_h) + fw * 2 + 16
+        new_h = max(self._INPUT_MIN_H, min(self._INPUT_MAX_H, needed))
+        if self.text_input.height() != new_h:
+            self.text_input.setFixedHeight(new_h)
+            if self._cmd_popup.isVisible():
+                self._reposition_popup()
+
+    def _on_input_changed(self, text: str) -> None:
+        if self._is_running:
+            self._set_send_button_state(is_running=True)
+
+        stripped = text.lstrip()
+        if stripped.startswith("/"):
+            token = stripped.split()[0] if stripped.split() else "/"
+            matches = [(cmd, desc) for cmd, desc in _SLASH_COMMANDS if cmd.startswith(token)]
+            if matches:
+                self._cmd_popup.populate(matches)
+                self._reposition_popup()
+                self._cmd_popup.show()
+                self._cmd_popup.raise_()
+                return
+        self._cmd_popup.hide()
+
+    def _reposition_popup(self) -> None:
+        pos = self.text_input.mapTo(self, QPoint(0, 0))
+        w = self.text_input.width()
+        h = self._cmd_popup.height()
+        self._cmd_popup.setFixedWidth(w)
+        self._cmd_popup.move(pos.x(), pos.y() - h - 4)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._cmd_popup.isVisible():
+            self._reposition_popup()
+
+    def _handle_command(self, cmd: str) -> None:
+        """Execute a slash command selected from the popup or typed directly."""
+        self.text_input.clear()
+        self._cmd_popup.hide()
+
+        if cmd == "/think":
+            self._set_thinking_mode(not self._thinking_mode)
+            mode_label = "ON (Standard)" if self._thinking_mode else "OFF"
+            self._trace_html(f"Think mode → {mode_label}", "CMD")
+
+        elif cmd == "/clear":
+            self._clear_current_session(delete_archive=False)
+
+        elif cmd == "/attach":
+            self._open_attach_dialog()
+
+        elif cmd == "/vision":
+            self.sig_launch_addon.emit("sd")
+
+        elif cmd == "/audio":
+            self.sig_launch_addon.emit("audiogen")
+
+    # -----------------------------------------------------------------------
+    # File attachment
+    # -----------------------------------------------------------------------
+    def _open_attach_dialog(self) -> None:
+        exts = " ".join(f"*{e}" for e in sorted(_TEXT_EXTENSIONS))
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Attach File", "",
+            f"Text & data files ({exts});;ZIP archives (*.zip);;All files (*.*)"
+        )
+        if path:
+            self._attach_file(path)
+
+    def _attach_file(self, path: str) -> None:
+        p = Path(path)
+        ext = p.suffix.lower()
+
+        if ext == ".zip":
+            try:
+                with ZipFile(p) as zf:
+                    names = zf.namelist()
+                    readable = [n for n in names if Path(n).suffix.lower() in _TEXT_EXTENSIONS]
+                    parts = [f"[ZIP: {p.name}]", f"Contents: {len(names)} files"]
+                    for name in readable[:20]:
+                        try:
+                            content = zf.read(name).decode("utf-8", errors="replace")
+                            parts.append(f"\n--- {name} ---\n{content[:4000]}")
+                        except Exception:
+                            parts.append(f"[binary: {name}]")
+                    full = "\n".join(parts)
+                    icon = "📦"
+            except BadZipFile:
+                return
+        elif ext in _TEXT_EXTENSIONS:
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                return
+            full = f"[FILE: {p.name}]\n{content[:8000]}"
+            icon = "📄"
+        else:
+            # Try reading as text anyway
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+                full = f"[FILE: {p.name}]\n{content[:8000]}"
+                icon = "📄"
+            except Exception:
+                return
+
+        self._attached_files.append({"name": p.name, "content": full, "icon": icon})
+        self._update_file_chips()
+
+    def _remove_attached_file(self, index: int) -> None:
+        if 0 <= index < len(self._attached_files):
+            self._attached_files.pop(index)
+        self._update_file_chips()
+
+    def _update_file_chips(self) -> None:
+        # Remove all widgets except the stretch
+        while self._chips_layout.count() > 1:
+            item = self._chips_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        for i, f in enumerate(self._attached_files):
+            chip = QFrame()
+            chip.setStyleSheet(
+                f"QFrame {{ background: {_s.BG_BUTTON}; border: 1px solid {_s.BORDER_LIGHT}; "
+                f"border-radius: 3px; padding: 2px 4px; }}"
+            )
+            row = QHBoxLayout(chip)
+            row.setContentsMargins(4, 2, 4, 2)
+            row.setSpacing(4)
+            icon_lbl = QLabel(f["icon"])
+            icon_lbl.setStyleSheet(f"border: none; background: transparent; font-size: 11px; color: {_s.FG_TEXT};")
+            name_lbl = QLabel(f["name"])
+            name_lbl.setStyleSheet(f"border: none; background: transparent; font-size: 10px; color: {_s.FG_TEXT};")
+            btn_x = QPushButton("×")
+            btn_x.setFixedSize(16, 16)
+            btn_x.setStyleSheet(
+                f"QPushButton {{ background: transparent; border: none; color: {_s.FG_DIM}; "
+                f"font-size: 12px; font-weight: bold; padding: 0; }}"
+                f"QPushButton:hover {{ color: {_s.FG_ERROR}; }}"
+            )
+            btn_x.clicked.connect(lambda _, idx=i: self._remove_attached_file(idx))
+            row.addWidget(icon_lbl)
+            row.addWidget(name_lbl)
+            row.addWidget(btn_x)
+            self._chips_layout.insertWidget(self._chips_layout.count() - 1, chip)
+
+        self._chips_container.setVisible(bool(self._attached_files))
+
+    def _build_send_text(self) -> str:
+        """Assemble final text from attached files + typed text."""
+        typed = self.text_input.toPlainText().strip()
+        if not self._attached_files:
+            return typed
+        parts = []
+        for f in self._attached_files:
+            parts.append(f["icon"] + " " + f["content"])
+        if typed:
+            parts.append(typed)
+        return "\n\n".join(parts)
+
+    # -----------------------------------------------------------------------
+    # Drag and drop
+    # -----------------------------------------------------------------------
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if path:
+                    self._attach_file(path)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+    # -----------------------------------------------------------------------
+    # Send flow
+    # -----------------------------------------------------------------------
     def send(self):
-        txt = self.text_input.toPlainText().strip()
+        txt = self._build_send_text()
         if not txt:
             return
         self.sig_debug.emit(f"[CHAT] send: text={repr(txt[:60])}, msgs={len(self._current_session['messages'])}")
         self._set_send_button_state(is_running=True)
         self.text_input.clear()
+        # Clear attachments
+        self._attached_files.clear()
+        self._update_file_chips()
+
         user_idx = self._add_message("user", txt)
         self._append_message_widget(user_idx)
+        # Auto-save with the new user message
+        try:
+            self._save_chat_archive()
+        except Exception:
+            pass
         self._start_assistant_stream()
         self.message_list.scrollToBottom()
         self.sig_debug.emit(f"[CHAT] about to emit sig_generate: txt={repr(txt[:60])}")
@@ -374,7 +782,7 @@ class PageChat(QWidget):
             self.send()
             return
 
-        if not txt:
+        if not txt and not self._attached_files:
             self._set_send_button_state(is_running=True, stopping=True)
             self.sig_stop.emit()
             return
@@ -396,33 +804,69 @@ class PageChat(QWidget):
                 self.btn_send.setText("■")
                 color = _s.FG_ERROR
             self.btn_send.setStyleSheet(
-                self._btn_style_template.format(
-                    bg=_s.BG_INPUT,
-                    color=color,
-                )
+                self._btn_style_template.format(bg=_s.BG_INPUT, color=color)
             )
             self.btn_send.setEnabled(not stopping)
         else:
             self.btn_send.setText("SEND")
             self.btn_send.setStyleSheet(
-                self._btn_style_template.format(
-                    bg=_s.BG_INPUT,
-                    color=_s.ACCENT_PRIMARY,
-                )
+                self._btn_style_template.format(bg=_s.BG_INPUT, color=_s.ACCENT_PRIMARY)
             )
             self.btn_send.setEnabled(True)
 
+    # -----------------------------------------------------------------------
+    # Event filter — keyboard nav in popup, drag-drop on text_input
+    # -----------------------------------------------------------------------
     def eventFilter(self, source, event):
-        if hasattr(self, 'text_input') and source is self.text_input and event.type() == QEvent.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
-                self.handle_send_click()
-                return True
-        return super().eventFilter(source, event)
+        # Archive list: left double-click = open, right double-click = delete
+        if source is self.archive_list.viewport():
+            if event.type() == QEvent.MouseButtonDblClick:
+                if event.button() == Qt.LeftButton:
+                    self._load_chat_archive()
+                    return True
+                if event.button() == Qt.RightButton:
+                    self._delete_selected_archive()
+                    return True
 
-    def _on_input_changed(self, text):
-        if not self._is_running:
-            return
-        self._set_send_button_state(is_running=True)
+        if hasattr(self, "text_input") and source is self.text_input:
+            etype = event.type()
+
+            # Keyboard events — command popup navigation
+            if etype == QEvent.KeyPress:
+                if self._cmd_popup.isVisible():
+                    if event.key() == Qt.Key_Up:
+                        self._cmd_popup.move_selection(-1)
+                        return True
+                    if event.key() == Qt.Key_Down:
+                        self._cmd_popup.move_selection(1)
+                        return True
+                    if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
+                        self._cmd_popup.accept_current()
+                        return True
+                    if event.key() == Qt.Key_Escape:
+                        self._cmd_popup.hide()
+                        return True
+
+                if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
+                    self.handle_send_click()
+                    return True
+
+            # Drag-and-drop on text_input — intercept before QTextEdit pastes as text
+            if etype == QEvent.DragEnter:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+
+            if etype == QEvent.Drop:
+                if event.mimeData().hasUrls():
+                    for url in event.mimeData().urls():
+                        path = url.toLocalFile()
+                        if path:
+                            self._attach_file(path)
+                    event.acceptProposedAction()
+                    return True
+
+        return super().eventFilter(source, event)
 
     def _send_message(self, text):
         self.text_input.setPlainText(text)
@@ -457,7 +901,6 @@ User update:
 
 Continue from the interruption point. Do not repeat earlier content. Prioritize the user update.
 """
-
         self.text_input.clear()
         self._start_update_streaming()
         self.sig_generate.emit(injected, self._thinking_mode)
@@ -466,17 +909,16 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.sig_debug.emit(f"[CHAT] _start_assistant_stream: msgs_before={len(self._current_session['messages'])}")
         self._active_assistant_started = True
         self._active_assistant_token_count = 0
-
         self._active_assistant_index = self._add_message("assistant", "")
         self._active_widget = self._append_message_widget(self._active_assistant_index)
-    
 
-    def _flush_tokens(self):
+    def _flush_tokens(self, force_all: bool = False):
         if not self._token_buf:
             self._flush_timer.stop()
             return
-        chunk = "".join(self._token_buf)
-        self._token_buf.clear()
+        chunk = "".join(self._token_buf) if force_all else self._token_buf.popleft()
+        if force_all:
+            self._token_buf.clear()
         if self._active_widget is None:
             target_index = self._rewrite_assistant_index
             if target_index is None:
@@ -485,7 +927,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                 self._active_widget = self._widget_for_index(target_index)
         if self._active_widget is None:
             return
-        # Check if user is near the bottom before appending (so we don't yank them down)
         sb = self.message_list.verticalScrollBar()
         at_bottom = sb.value() >= sb.maximum() - 40
 
@@ -501,9 +942,11 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                 break
         if at_bottom:
             self.message_list.scrollToBottom()
+        if not self._token_buf:
+            self._flush_timer.stop()
 
     def append_token(self, t):
-        self._token_buf.append(t)
+        self._token_buf.extend(str(t))
         self._append_assistant_token(t)
         self._update_progress_markers()
         if not self._flush_timer.isActive():
@@ -515,15 +958,20 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         if not self._current_session.get("messages"):
             return
         try:
+            self._flush_tokens(force_all=True)
+        except Exception:
+            pass
+        try:
+            self._parse_assistant_commands()
+        except Exception as exc:
+            self._trace_html(f"assistant command parse error: {exc}", "CMD", error=True)
+        try:
             self._save_chat_archive()
         except Exception:
             pass
 
     def append_trace(self, trace_msg):
         lowered = trace_msg.lower()
-
-        # --- Filter: only show LLM-relevant trace info ---
-        # Skip guard internals, status transitions, and noise
         skip_patterns = [
             "guard", "dispatch", "route", "bridge", "dock",
             "addon", "registry", "host", "mount",
@@ -532,7 +980,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             if pat in lowered and "error" not in lowered:
                 return
 
-        # Categorize what we show
         if "system online" in lowered:
             self._is_model_loaded = True
         elif "model unloaded" in lowered:
@@ -581,7 +1028,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.lbl_config_state.setStyleSheet(
             f"color: {_s.ACCENT_PRIMARY if dirty else _s.FG_DIM}; font-size: 10px; font-weight: bold;"
         )
-        # Save button: gold when dirty (action needed), gray when clean
         if dirty:
             self.btn_save_config.setStyleSheet(f"""
                 QPushButton {{ background: {_s.BG_BUTTON}; border: 1px solid {_s.ACCENT_PRIMARY}; color: {_s.ACCENT_PRIMARY}; padding: 6px 12px; font-size: 11px; font-weight: bold; border-radius: 2px; }}
@@ -623,16 +1069,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         qt_slider.blockSignals(False)
 
     def _apply_default_limits(self):
-        self._set_slider_limits(
-            self.s_ctx,
-            DEFAULT_CONFIG["ctx_limit"],
-            DEFAULT_CONFIG["ctx_limit"],
-        )
-        self._set_slider_limits(
-            self.s_tok,
-            DEFAULT_CONFIG["max_tokens"],
-            DEFAULT_CONFIG["max_tokens"],
-        )
+        self._set_slider_limits(self.s_ctx, DEFAULT_CONFIG["ctx_limit"], DEFAULT_CONFIG["ctx_limit"])
+        self._set_slider_limits(self.s_tok, DEFAULT_CONFIG["max_tokens"], DEFAULT_CONFIG["max_tokens"])
 
     def _trace_html(self, msg, tag="INFO", error=False):
         arrow_color = _s.FG_ERROR if error else _s.ACCENT_PRIMARY
@@ -654,28 +1092,17 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             return
         configured_ctx = int(self.config.get("ctx_limit", 8192))
         self._set_slider_limits(self.s_ctx, model_ctx_length, model_ctx_length)
-        self._set_slider_limits(
-            self.s_tok,
-            model_ctx_length,
-            min(8192, model_ctx_length),
-        )
-        # Surface context capacity info in reasoning trace
+        self._set_slider_limits(self.s_tok, model_ctx_length, min(8192, model_ctx_length))
         if configured_ctx < model_ctx_length:
             pct = int((configured_ctx / model_ctx_length) * 100)
             self._trace_html(
-                f"Context: {configured_ctx:,} / {model_ctx_length:,} tokens "
-                f"({pct}% of model capacity)",
-                "CTX",
+                f"Context: {configured_ctx:,} / {model_ctx_length:,} tokens ({pct}% of model capacity)", "CTX"
             )
             self._trace_html(
-                f"Increase context limit in CONFIG to use full {model_ctx_length:,} capacity",
-                "CTX",
+                f"Increase context limit in CONFIG to use full {model_ctx_length:,} capacity", "CTX"
             )
         else:
-            self._trace_html(
-                f"Context: {model_ctx_length:,} tokens (full capacity)",
-                "CTX",
-            )
+            self._trace_html(f"Context: {model_ctx_length:,} tokens (full capacity)", "CTX")
 
     def _on_ctx_limit_changed(self, value):
         self._update_config_value("ctx_limit", int(value))
@@ -688,64 +1115,18 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._thinking_mode = bool(checked)
         self.config["thinking_mode"] = self._thinking_mode
         self._set_config_dirty(True)
-        self._update_thinking_button_style()
 
-    def _set_thinking_mode(self, enabled, label="Off"):
+    def _set_thinking_mode(self, enabled, label=""):
         self._thinking_mode = enabled
         self.config["thinking_mode"] = enabled
         self._set_config_dirty(True)
-        self._update_thinking_button_style()
-
-    def _show_plus_menu(self):
-        menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu {{ background: {_s.BG_INPUT}; border: 1px solid {_s.BORDER_LIGHT}; "
-            f"color: {_s.FG_TEXT}; font-family: Consolas; font-size: 10px; }}"
-            f"QMenu::item {{ padding: 6px 16px; }}"
-            f"QMenu::item:selected {{ background: {_s.BG_BUTTON_HOVER}; color: {_s.ACCENT_PRIMARY}; }}"
-            f"QMenu::separator {{ height: 1px; background: {_s.BORDER_SUBTLE}; margin: 4px 8px; }}"
-        )
-
-        # THINK mode section
-        think_menu = menu.addMenu("THINK")
-        think_menu.setStyleSheet(menu.styleSheet())
-        ag = QActionGroup(think_menu)
-        ag.setExclusive(True)
-        act_off = think_menu.addAction("OFF")
-        act_off.setCheckable(True)
-        act_off.setChecked(not self._thinking_mode)
-        ag.addAction(act_off)
-        act_std = think_menu.addAction("STD")
-        act_std.setCheckable(True)
-        act_std.setChecked(self._thinking_mode)
-        ag.addAction(act_std)
-        act_ext = think_menu.addAction("EXT")
-        act_ext.setCheckable(True)
-        ag.addAction(act_ext)
-        act_off.triggered.connect(lambda: self._set_thinking_mode(False, "Off"))
-        act_std.triggered.connect(lambda: self._set_thinking_mode(True, "Standard"))
-        act_ext.triggered.connect(lambda: self._set_thinking_mode(True, "Extended"))
-
-        menu.addSeparator()
-        menu.addAction("ATTACH FILE", self._attach_file_placeholder)
-
-        menu.exec(self.btn_plus.mapToGlobal(self.btn_plus.rect().topRight()))
 
     def _toggle_options_panel(self):
         self._options_expanded = not self._options_expanded
         self.options_panel.setVisible(self._options_expanded)
         self.btn_options_toggle.setText("▾ ADVANCED" if self._options_expanded else "▸ ADVANCED")
 
-    def _update_thinking_button_style(self):
-        # Think mode state is tracked internally; (+) menu reflects it dynamically
-        pass
-
-    def _attach_file_placeholder(self):
-        """Placeholder for file attachment — backend will be implemented later."""
-        pass
-
     def _reset_config(self):
-        """Reset all settings to DEFAULT_CONFIG values."""
         for key, val in DEFAULT_CONFIG.items():
             self.config[key] = val
         self.s_temp.slider.blockSignals(True)
@@ -787,13 +1168,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.btn_load.setText("UNLOAD MODEL" if self._is_model_loaded else "LOAD MODEL")
 
     def _request_mutation(self, fn):
-        """Run a session mutation safely.
-
-        If a generation is currently running, STOP first, then run `fn` on the next READY.
-        This prevents stale indices / widgets during streaming.
-        """
         if self._is_running:
-            # Cancel any queued UPDATE-restart; mutation wins.
             self._awaiting_update_restart = False
             self._pending_update_text = None
             self._pending_mutation = fn
@@ -804,8 +1179,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
 
     def update_status(self, engine_key: str, status: SystemStatus):
         ek_short = engine_key[-8:] if engine_key else "?"
-        prev = getattr(self, '_last_status', None)
-        transition = f"{prev.name if prev else '?'}→{status.name}" if hasattr(status, 'name') else str(status)
+        prev = getattr(self, "_last_status", None)
+        transition = f"{prev.name if prev else '?'}→{status.name}" if hasattr(status, "name") else str(status)
         self.sig_debug.emit(f"[CHAT:{ek_short}] status {transition}, running={self._is_running}, mutation={'yes' if self._pending_mutation else 'no'}")
         if engine_key != getattr(self, "_engine_key", "llm"):
             return
@@ -816,18 +1191,16 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         else:
             self._update_load_button_text()
         if status == SystemStatus.READY and self._pending_mutation is not None:
-            # Finish transition to READY (stop state) first, then mutate.
-            # Keep this path above UPDATE-restart.
             self._set_send_button_state(is_running=False)
             self._rewrite_assistant_index = None
+            if self._token_buf:
+                self._flush_tokens(force_all=True)
             if self._active_widget is not None:
                 self._active_widget.finalize()
             self._active_widget = None
             if self._update_trace_state == "streaming":
                 self._finalize_update_progress()
-            # If generation ended before any tokens arrived, remove the empty assistant bubble.
             self._cleanup_empty_assistant_if_needed()
-            # Reset assistant stream trackers after end-of-generation.
             self._active_assistant_started = False
             self._active_assistant_token_count = 0
             self._suppress_title_regen = False
@@ -842,7 +1215,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         if status == SystemStatus.READY and self._awaiting_update_restart:
             self._awaiting_update_restart = False
             self.btn_send.setEnabled(True)
-
             update_text = self._pending_update_text
             self._pending_update_text = None
             self._submit_update(update_text)
@@ -858,21 +1230,16 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                 self._update_load_button_text()
             self._set_send_button_state(is_running=False)
             self._rewrite_assistant_index = None
+            if self._token_buf:
+                self._flush_tokens(force_all=True)
             if self._active_widget is not None:
                 self._active_widget.finalize()
             self._active_widget = None
             if self._update_trace_state == "streaming":
                 self._finalize_update_progress()
-            # If generation ended before any tokens arrived, remove the empty assistant bubble.
             self._cleanup_empty_assistant_if_needed()
-            # Reset assistant stream trackers after end-of-generation.
             self._active_assistant_started = False
             self._active_assistant_token_count = 0
-            # Title generation is finalized ONLY on READY.
-
-            # READY is emitted after _on_gen_finish completes and assistant text is final.
-            # STOP also transitions to READY; _maybe_generate_title self-guards.
-            # Do NOT call this method from token flush, send paths, or mutation handlers.
             if self._pending_mutation is None:
                 self._maybe_generate_title()
             self._suppress_title_regen = False
@@ -892,7 +1259,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         if checked:
             self.ops_stack.setCurrentIndex(index)
 
-
     def apply_operator(self, operator_data: dict):
         if not isinstance(operator_data, dict):
             return
@@ -906,13 +1272,15 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             "max_tokens": int(config.get("max_tokens", self.config.get("max_tokens", 2048))),
             "ctx_limit": int(config.get("ctx_limit", self.config.get("ctx_limit", 8192))),
         }
-
         self.config.update(config)
 
-        self.s_temp.slider.blockSignals(True)
-        self.s_top.slider.blockSignals(True)
-        self.s_tok.slider.blockSignals(True)
-        self.s_ctx.slider.blockSignals(True)
+        for slider, key in (
+            (self.s_temp, "temp"),
+            (self.s_top, "top_p"),
+            (self.s_tok, "max_tokens"),
+            (self.s_ctx, "ctx_limit"),
+        ):
+            slider.slider.blockSignals(True)
         self.s_temp.slider.setValue(int(slider_values["temp"] * 100))
         self.s_temp.val_lbl.setText(f"{slider_values['temp']:.2f}")
         self.s_top.slider.setValue(int(slider_values["top_p"] * 100))
@@ -921,16 +1289,17 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.s_tok.val_lbl.setText(str(int(slider_values["max_tokens"])))
         self.s_ctx.slider.setValue(int(slider_values["ctx_limit"]))
         self.s_ctx.val_lbl.setText(str(int(slider_values["ctx_limit"])))
-        self.s_temp.slider.blockSignals(False)
-        self.s_top.slider.blockSignals(False)
-        self.s_tok.slider.blockSignals(False)
-        self.s_ctx.slider.blockSignals(False)
+        for slider, key in (
+            (self.s_temp, "temp"),
+            (self.s_top, "top_p"),
+            (self.s_tok, "max_tokens"),
+            (self.s_ctx, "ctx_limit"),
+        ):
+            slider.slider.blockSignals(False)
 
         self.sig_set_ctx_limit.emit(int(slider_values["ctx_limit"]))
-
         tags = config.get("behavior_tags", [])
         self.behavior_tags.set_tags(tags if isinstance(tags, list) else [])
-
         thinking_mode = bool(config.get("thinking_mode", False))
         self._set_thinking_mode(thinking_mode, "Standard" if thinking_mode else "Off")
         gguf_path = config.get("gguf_path")
@@ -939,7 +1308,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             self.sig_set_model_path.emit(str(gguf_path))
         self._sync_path_display()
 
-        # Restore chat messages if snapshot included them, otherwise fresh session
         messages = operator_data.get("messages")
         if isinstance(messages, list) and messages:
             session = self._create_session(
@@ -960,46 +1328,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self.trace.clear()
         self._set_current_session(self._create_session(), show_reset=True, sync_history=True)
         self._trace_plain("--- TRACE RESET ---")
-
-    def _prompt_clear_session(self):
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("Clear Session")
-        dialog.setText("Choose how to clear the current session.")
-        dialog.setStyleSheet(f"""
-            QMessageBox {{
-                background: {_s.BG_INPUT};
-                color: {_s.FG_TEXT};
-            }}
-            QLabel {{
-                color: {_s.FG_TEXT};
-            }}
-            QPushButton {{
-                color: {_s.FG_TEXT};
-                background: transparent;
-                border: 1px solid {_s.BORDER_LIGHT};
-                padding: 6px 12px;
-                font-size: 10px;
-                font-weight: bold;
-                border-radius: 2px;
-            }}
-            QPushButton:hover {{
-                border: 1px solid {_s.ACCENT_PRIMARY};
-                color: {_s.ACCENT_PRIMARY};
-            }}
-            QPushButton:checked {{
-                border: 1px solid {_s.ACCENT_PRIMARY};
-                color: {_s.ACCENT_PRIMARY};
-            }}
-        """)
-        btn_clear = dialog.addButton("Clear Logs", QMessageBox.AcceptRole)
-        btn_delete = dialog.addButton("Delete Chat", QMessageBox.DestructiveRole)
-        dialog.addButton("Cancel", QMessageBox.RejectRole)
-        dialog.exec()
-        clicked = dialog.clickedButton()
-        if clicked == btn_clear:
-            self._clear_current_session(delete_archive=False)
-        elif clicked == btn_delete:
-            self._clear_current_session(delete_archive=True)
 
     def _clear_current_session(self, delete_archive):
         archive_path = self._current_session.get("archive_path")
@@ -1082,8 +1410,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         for msg in data.get("messages", []):
             role = msg.get("role", "user")
             text = msg.get("text", "")
-            time = msg.get("time", meta.get("updated_at", self._now_iso()))
-            messages.append({"i": msg.get("i"), "time": time, "role": role, "text": text})
+            t = msg.get("time", meta.get("updated_at", self._now_iso()))
+            messages.append({"i": msg.get("i"), "time": t, "role": role, "text": text})
         session = self._create_session(
             messages=messages,
             created_at=meta.get("created_at"),
@@ -1122,7 +1450,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             list_item.setToolTip(tooltip)
             self.archive_list.addItem(list_item)
 
-    def _create_session(self, messages=None, created_at=None, updated_at=None, archive_path=None, summary=None, title=None, assistant_tokens=0):
+    def _create_session(self, messages=None, created_at=None, updated_at=None,
+                        archive_path=None, summary=None, title=None, assistant_tokens=0):
         self._session_counter += 1
         now = self._now_iso()
         return {
@@ -1151,19 +1480,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._notify_header_update()
 
     def _build_engine_history_from_session(self):
-        """
-        Convert _current_session["messages"] into engine-ready history.
-
-        Always include:
-          {"role": "system", "content": MASTER_PROMPT}
-
-        Then append each session message as:
-          {"role": msg["role"], "content": msg["text"]}
-
-        Behavior tags are NOT included here.
-        Engine recompiles system prompt at generation time.
-        """
-        history = [{"role": "system", "content": MASTER_PROMPT}]
+        history = [{"role": "system", "content": build_system_prompt(self.config)}]
         for msg in self._current_session.get("messages", []):
             if not isinstance(msg, dict):
                 continue
@@ -1174,6 +1491,53 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             history.append({"role": role, "content": text})
         return history
 
+    def _parse_assistant_commands(self) -> None:
+        if not bool(self.config.get("assistant_commands_enabled", False)):
+            return
+        msgs = self._current_session.get("messages", [])
+        if not msgs:
+            return
+        msg = msgs[-1]
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            return
+        if msg.get("_assistant_cmds_parsed"):
+            return
+
+        text = str(msg.get("text") or "")
+        matches = _ASSISTANT_CMD_RE.findall(text)
+        if not matches:
+            msg["_assistant_cmds_parsed"] = True
+            return
+
+        if len(matches) > 1:
+            self._trace_html("assistant command rejected: multiple envelopes", "CMD", error=True)
+            msg["_assistant_cmds_parsed"] = True
+            return
+
+        raw = matches[0].strip()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            self._trace_html("assistant command rejected: invalid JSON", "CMD", error=True)
+            msg["_assistant_cmds_parsed"] = True
+            return
+
+        op = str(payload.get("op") or "").strip()
+        if op != "open_addon":
+            self._trace_html(f"assistant command rejected: unsupported op '{op or 'unknown'}'", "CMD", error=True)
+            msg["_assistant_cmds_parsed"] = True
+            return
+
+        addon_id = str(payload.get("addon") or "").strip()
+        if addon_id not in _ASSISTANT_ALLOWED_ADDONS:
+            self._trace_html(f"assistant command rejected: addon '{addon_id or 'unknown'}'", "CMD", error=True)
+            msg["_assistant_cmds_parsed"] = True
+            return
+
+        self.sig_launch_addon.emit(addon_id)
+        self._trace_html(f"open_addon({addon_id})", "CMD")
+        msg["_assistant_cmds_parsed"] = True
+
     def _snapshot_session(self):
         self._undo_snapshot = [dict(m) for m in self._current_session["messages"]]
 
@@ -1183,9 +1547,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._current_session["messages"] = self._undo_snapshot
         self._undo_snapshot = None
         self._render_session()
-        self.sig_sync_history.emit(
-            self._build_engine_history_from_session()
-        )
+        self.sig_sync_history.emit(self._build_engine_history_from_session())
 
     def _delete_from_index(self, idx: int):
         self.sig_debug.emit(f"[CHAT] _delete_from_index: idx={idx}, msgs={len(self._current_session['messages'])}, is_running={self._is_running}")
@@ -1195,7 +1557,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             if idx < 0 or idx >= len(msgs):
                 return
             del msgs[idx:]
-            # Reset any stale streaming pointers.
             self._active_assistant_index = None
             self._rewrite_assistant_index = None
             self._active_widget = None
@@ -1203,10 +1564,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             if self._flush_timer.isActive():
                 self._flush_timer.stop()
             self._render_session()
-            self.sig_sync_history.emit(
-                self._build_engine_history_from_session()
-            )
-
+            self.sig_sync_history.emit(self._build_engine_history_from_session())
         self._request_mutation(_do_delete)
 
     def _edit_from_index(self, idx: int):
@@ -1217,7 +1575,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                 return
             text = msgs[idx].get("text", "")
             self._suppress_title_regen = True
-            # Inline delete to avoid nested mutation requests.
             self._snapshot_session()
             del msgs[idx:]
             self._active_assistant_index = None
@@ -1227,11 +1584,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             if self._flush_timer.isActive():
                 self._flush_timer.stop()
             self._render_session()
-            self.sig_sync_history.emit(
-                self._build_engine_history_from_session()
-            )
+            self.sig_sync_history.emit(self._build_engine_history_from_session())
             self.text_input.setPlainText(text)
-
         self._request_mutation(_do_edit)
 
     def _regen_last_assistant(self):
@@ -1250,10 +1604,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             if self._flush_timer.isActive():
                 self._flush_timer.stop()
             self._render_session()
-            self.sig_sync_history.emit(
-                self._build_engine_history_from_session()
-            )
-
+            self.sig_sync_history.emit(self._build_engine_history_from_session())
             for m in reversed(msgs):
                 if m.get("role") == "user":
                     self._set_send_button_state(is_running=True)
@@ -1261,7 +1612,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                     self.message_list.scrollToBottom()
                     self.sig_generate.emit(m.get("text", ""), self._thinking_mode)
                     break
-
         self._request_mutation(_do_regen)
 
     def _render_session(self, session=None, show_reset=False):
@@ -1325,10 +1675,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             return
         self._update_token_count += 1
         thresholds = [25, 50, 100]
-        pct = min(
-            100,
-            int((self._update_token_count / self.config["max_tokens"]) * 100),
-        )
+        pct = min(100, int((self._update_token_count / self.config["max_tokens"]) * 100))
         while self._update_progress_index < len(thresholds):
             if pct >= thresholds[self._update_progress_index]:
                 percent = thresholds[self._update_progress_index]
@@ -1365,7 +1712,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             target_index = self._active_assistant_index
         if target_index is None:
             return
-
         msg = self._current_session["messages"][target_index]
         msg["text"] += token
         self._active_assistant_token_count += 1
@@ -1373,9 +1719,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
         self._current_session["updated_at"] = msg["time"]
         self._current_session["assistant_tokens"] = int(self._current_session.get("assistant_tokens", 0)) + 1
 
-
     def _cleanup_empty_assistant_if_needed(self):
-        """Remove a placeholder assistant message if generation ended before any tokens arrived."""
         idx = self._active_assistant_index
         if idx is None:
             return
@@ -1383,13 +1727,11 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
             return
         if int(getattr(self, "_active_assistant_token_count", 0)) > 0:
             return
-
         msgs = self._current_session.get("messages", [])
         if 0 <= idx < len(msgs):
             msg = msgs[idx]
             if msg.get("role") == "assistant" and (msg.get("text") or "") == "":
                 del msgs[idx]
-                # After deletion, any stored indices are stale.
                 self._active_assistant_index = None
                 self._rewrite_assistant_index = None
                 self._active_widget = None
@@ -1398,7 +1740,7 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                     self._flush_timer.stop()
                 self._render_session()
                 self.sig_sync_history.emit(self._build_engine_history_from_session())
-                return
+
     def _maybe_generate_title(self):
         if self._suppress_title_regen:
             return
@@ -1446,10 +1788,8 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                 user_texts.append(text)
             if len(user_texts) == 3:
                 break
-
         if not user_texts:
             return "chat"
-
         candidates = []
         counts = {}
         for text in user_texts:
@@ -1460,7 +1800,6 @@ Continue from the interruption point. Do not repeat earlier content. Prioritize 
                     candidates.append(token)
                     counts[token] = 0
                 counts[token] += 1
-
         ranked = sorted(candidates, key=lambda token: (-counts[token], candidates.index(token)))
         title_tokens = ranked[:6]
         title = " ".join(title_tokens)

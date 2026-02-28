@@ -1,4 +1,5 @@
 import uuid
+from shiboken6 import isValid
 
 from ui.addons.context import AddonContext
 from ui.addons.descriptors import CapabilityDescriptor
@@ -7,14 +8,21 @@ from ui.addons.spec import AddonSpec
 from ui.modules.injector import InjectorWidget
 from ui.modules.sd import SDModule
 from ui.modules.audiogen import AudioGenModule
+from ui.modules.theme import ThemeModule
+from ui.modules.relay import PageRelay
 from ui.modules.manager import PageAddons
 from ui.pages.chat import PageChat
 from ui.pages.code import PageCode
 from ui.pages.databank import PageFiles
 from ui.pages.hub import PageHub
 from core.operators import OperatorManager
+from core.state import SystemStatus
 from engine.bridge import EngineBridge
 from engine.llm import LLMEngine
+from engine.loop_engine import LoopEngine
+from engine.vision import VisionProcess
+from engine.audio import AudioProcess
+from engine.relay import RoomProcess
 
 
 def terminal_factory(ctx: AddonContext):
@@ -130,27 +138,33 @@ def terminal_factory(ctx: AddonContext):
         time.sleep(0.1)
 
     w.destroyed.connect(_cleanup_terminal)
+
+    # Slash-command addon launches (e.g. /vision, /audio, /agent)
+    def _on_launch_addon(addon_id: str) -> None:
+        if ctx.host is not None:
+            ctx.host.launch_module(addon_id)
+    w.sig_launch_addon.connect(_on_launch_addon)
+
     return w
 
 
 def code_factory(ctx: AddonContext):
     instance_id = str(uuid.uuid4())
-    engine_key = f"llm_{instance_id}"
-
+    engine_key = f"loop_{instance_id}"
     short_id = instance_id[:8]
 
     def _trace(msg):
         ctx.guard.sig_trace.emit("system", msg)
 
-    llm_engine = LLMEngine(ctx.state)
-    engine_bridge = EngineBridge(llm_engine)
+    loop_engine = LoopEngine(ctx.state)
+    engine_bridge = EngineBridge(loop_engine)
     ctx.guard.register_engine(engine_key, engine_bridge)
 
     w = PageCode(ctx.state, ctx.ui_bridge)
     w._mod_id = instance_id
     w._engine_key = engine_key
     ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
-    llm_engine.sig_model_capabilities.connect(w._on_model_capabilities)
+    loop_engine.sig_model_capabilities.connect(w._on_model_capabilities)
 
     w.sig_set_model_path.connect(
         lambda path: ctx.bridge.submit(
@@ -167,220 +181,111 @@ def code_factory(ctx: AddonContext):
         w.sig_set_model_path.emit(str(w.config.get("gguf_path")))
     w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
 
-    def _on_generate(prompt):
+    def _on_generate(payload: dict):
         try:
             model = w.config.get("gguf_path", "unknown")
             model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
-            _trace(f"[LLM:{short_id}] generating — agent=ON, model={model_name}, prompt={repr(prompt[:50])}")
-            task = ctx.bridge.wrap(
-                "code",
-                "generate",
-                engine_key,
-                payload={
-                    "prompt": prompt,
-                    "config": w.config,
-                    "agent_mode": True,
-                    "workspace_root": w._workspace_root,
-                    "ctx_limit": int(w.config.get("ctx_limit", 8192)),
-                },
-            )
-            ctx.bridge.submit(task)
+            goal_preview = str((payload or {}).get("goal") or "")[:50]
+            _trace(f"[LOOP:{short_id}] generating — model={model_name}, goal={repr(goal_preview)}")
+            ctx.bridge.submit(ctx.bridge.wrap("code", "generate", engine_key, payload=payload or {}))
         except Exception as e:
-            _trace(f"[LLM:{short_id}] EXCEPTION in generate: {e}")
+            _trace(f"[LOOP:{short_id}] EXCEPTION in generate: {e}")
             import traceback
             traceback.print_exc()
 
     w.sig_generate.connect(_on_generate)
-    w.sig_load.connect(
-        lambda: ctx.bridge.submit(ctx.bridge.wrap("code", "load", engine_key))
-    )
-    w.sig_unload.connect(
-        lambda: ctx.bridge.submit(ctx.bridge.wrap("code", "unload", engine_key))
-    )
-
-    def _on_stop():
-        try:
-            _trace(f"[LLM:{short_id}] stopped — generation halted")
-            ctx.bridge.stop(engine_key)
-        except Exception as e:
-            _trace(f"[LLM:{short_id}] EXCEPTION in stop: {e}")
-            import traceback
-            traceback.print_exc()
-
-    w.sig_stop.connect(_on_stop)
-
-    def _on_force_stop():
-        try:
-            _trace(f"[LLM:{short_id}] FORCE STOP — terminating agent")
-            ctx.guard.force_stop(engine_key)
-        except Exception as e:
-            _trace(f"[LLM:{short_id}] EXCEPTION in force_stop: {e}")
-            import traceback
-            traceback.print_exc()
-
-    w.sig_force_stop.connect(_on_force_stop)
-
-    def _on_sync_history(history):
-        try:
-            _trace(f"[LLM:{short_id}] syncing history — {len(history)} messages")
-            ctx.bridge.submit(
-                ctx.bridge.wrap(
-                    "code",
-                    "set_history",
-                    engine_key,
-                    payload={"history": history},
-                )
-            )
-        except Exception as e:
-            _trace(f"[LLM:{short_id}] EXCEPTION in sync_history: {e}")
-            import traceback
-            traceback.print_exc()
-
-    w.sig_sync_history.connect(_on_sync_history)
+    w.sig_load.connect(lambda: ctx.bridge.submit(ctx.bridge.wrap("code", "load", engine_key)))
+    w.sig_unload.connect(lambda: ctx.bridge.submit(ctx.bridge.wrap("code", "unload", engine_key)))
+    w.sig_stop.connect(lambda: ctx.bridge.stop(engine_key))
     w.sig_runtime_command.connect(
-        lambda payload: ctx.bridge.submit(
-            ctx.bridge.wrap("code", "runtime_command", engine_key, payload=payload if isinstance(payload, dict) else {})
-        )
-    )
-    ctx.guard.sig_status.connect(w.update_status)
-    # Ensure button updates when engine truthfully ready (handles race conditions in load state)
-    ctx.guard.sig_engine_ready.connect(
-        lambda ek: w._update_load_button_text() if ek == engine_key else None
-    )
-    w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
-    ctx.guard.sig_token.connect(
-        lambda ek, t: w.append_token(t) if ek == engine_key else None
-    )
-    ctx.guard.sig_trace.connect(
-        lambda ek, m: w.append_trace(f"[{ek}] {m}" if ek != engine_key else m)
-    )
-    ctx.guard.sig_agent_event.connect(
-        lambda ek, event: w.append_agent_event(event) if ek == engine_key else None
-    )
-    ctx.guard.sig_finished.connect(
-        lambda ek, _task_id: w.on_guard_finished() if ek == engine_key else None
-    )
-
-    def _cleanup_terminal(*_args):
-        ctx.guard.unregister_engine(engine_key)
-        engine_bridge.shutdown()
-
-    w.destroyed.connect(_cleanup_terminal)
-    return w
-
-
-
-def agent_factory(ctx: AddonContext):
-    instance_id = str(uuid.uuid4())
-    engine_key = f"agent_{instance_id}"
-
-    short_id = instance_id[:8]
-
-    def _trace(msg):
-        ctx.guard.sig_trace.emit("system", msg)
-
-    agent_engine = LLMEngine(ctx.state)
-    engine_bridge = EngineBridge(agent_engine)
-    ctx.guard.register_engine(engine_key, engine_bridge)
-
-    w = PageChat(ctx.state, ctx.ui_bridge)
-    w._mod_id = instance_id
-    w._engine_key = engine_key
-    ctx.ui_bridge.sig_apply_operator.connect(w.apply_operator)
-    agent_engine.sig_model_capabilities.connect(w._on_model_capabilities)
-
-    w.sig_set_model_path.connect(
-        lambda path: ctx.bridge.submit(
-            ctx.bridge.wrap("agent", "set_path", engine_key, payload={"path": path})
-        )
-    )
-    w.sig_set_ctx_limit.connect(
-        lambda limit: None if limit is None else ctx.bridge.submit(
-            ctx.bridge.wrap("agent", "set_ctx_limit", engine_key, payload={"ctx_limit": int(limit)})
-        )
-    )
-
-    if w.config.get("gguf_path"):
-        w.sig_set_model_path.emit(str(w.config.get("gguf_path")))
-    w.sig_set_ctx_limit.emit(int(w.config.get("ctx_limit", 8192)))
-
-    def _on_generate(prompt, thinking_mode):
-        try:
-            model = w.config.get("gguf_path", "unknown")
-            model_name = str(model).rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if model else "none"
-            think_label = "think=ON" if thinking_mode else "think=OFF"
-            _trace(f"[AGENT:{short_id}] generating — {think_label}, model={model_name}, prompt={repr(prompt[:50])}")
-            task = ctx.bridge.wrap(
-                "agent",
-                "generate",
+        lambda action, payload: ctx.bridge.submit(
+            ctx.bridge.wrap(
+                "code",
+                "runtime_command",
                 engine_key,
-                payload={
-                    "prompt": prompt,
-                    "config": w.config,
-                    "thinking_mode": thinking_mode,
-                    "ctx_limit": int(w.config.get("ctx_limit", 8192)),
-                },
+                payload={"action": action, **(payload or {})},
             )
-            ctx.bridge.submit(task)
-        except Exception as e:
-            _trace(f"[AGENT:{short_id}] EXCEPTION in generate: {e}")
-            import traceback
-            traceback.print_exc()
-
-    w.sig_generate.connect(_on_generate)
-    w.sig_load.connect(
-        lambda: ctx.bridge.submit(ctx.bridge.wrap("agent", "load", engine_key))
-    )
-    w.sig_unload.connect(
-        lambda: ctx.bridge.submit(ctx.bridge.wrap("agent", "unload", engine_key))
+        )
     )
 
-    def _on_stop():
+    def _alive() -> bool:
         try:
-            _trace(f"[AGENT:{short_id}] stopped — generation halted")
-            ctx.bridge.stop(engine_key)
-        except Exception as e:
-            _trace(f"[AGENT:{short_id}] EXCEPTION in stop: {e}")
-            import traceback
-            traceback.print_exc()
+            return isValid(w)
+        except Exception:
+            return False
 
-    w.sig_stop.connect(_on_stop)
+    def _slot_status(ek, st):
+        if ek == engine_key and _alive():
+            try:
+                w.update_status(ek, st)
+            except RuntimeError:
+                pass
 
-    def _on_sync_history(history):
-        try:
-            _trace(f"[AGENT:{short_id}] syncing history — {len(history)} messages")
-            ctx.bridge.submit(
-                ctx.bridge.wrap(
-                    "agent",
-                    "set_history",
-                    engine_key,
-                    payload={"history": history},
-                )
-            )
-        except Exception as e:
-            _trace(f"[AGENT:{short_id}] EXCEPTION in sync_history: {e}")
-            import traceback
-            traceback.print_exc()
+    def _slot_token(ek, t):
+        if ek == engine_key and _alive():
+            try:
+                w.append_token(t)
+            except RuntimeError:
+                pass
 
-    w.sig_sync_history.connect(_on_sync_history)
-    ctx.guard.sig_status.connect(w.update_status)
+    def _slot_trace(ek, m):
+        if ek == engine_key and _alive():
+            try:
+                w.append_trace(m)
+            except RuntimeError:
+                pass
+
+    def _slot_agent_event(ek, ev):
+        if ek == engine_key and _alive():
+            try:
+                w.on_agent_event(ek, ev)
+            except RuntimeError:
+                pass
+
+    def _slot_finished(ek, task_id):
+        if _alive():
+            try:
+                w.on_guard_finished(ek, task_id)
+            except RuntimeError:
+                pass
+
+    ctx.guard.sig_status.connect(_slot_status)
     w.sig_debug.connect(lambda msg: ctx.guard.sig_trace.emit(engine_key, msg))
-    ctx.guard.sig_token.connect(
-        lambda ek, t: w.append_token(t) if ek == engine_key else None
-    )
-    ctx.guard.sig_trace.connect(
-        lambda ek, m: w.append_trace(m) if ek == engine_key else None
-    )
-    ctx.guard.sig_finished.connect(w.on_guard_finished)
+    ctx.guard.sig_token.connect(_slot_token)
+    ctx.guard.sig_trace.connect(_slot_trace)
+    ctx.guard.sig_agent_event.connect(_slot_agent_event)
+    ctx.guard.sig_finished.connect(_slot_finished)
 
-    def _cleanup_agent(*_args):
+    def _cleanup_code(*_args):
+        try:
+            ctx.guard.sig_status.disconnect(_slot_status)
+        except Exception:
+            pass
+        try:
+            ctx.guard.sig_token.disconnect(_slot_token)
+        except Exception:
+            pass
+        try:
+            ctx.guard.sig_trace.disconnect(_slot_trace)
+        except Exception:
+            pass
+        try:
+            ctx.guard.sig_agent_event.disconnect(_slot_agent_event)
+        except Exception:
+            pass
+        try:
+            ctx.guard.sig_finished.disconnect(_slot_finished)
+        except Exception:
+            pass
         ctx.guard.unregister_engine(engine_key)
         engine_bridge.shutdown()
         import time
         time.sleep(0.1)
 
-    w.destroyed.connect(_cleanup_agent)
+    w.destroyed.connect(_cleanup_code)
     return w
+
+
 
 def addons_page_factory(ctx: AddonContext):
     w = PageAddons(ctx.state)
@@ -468,8 +373,8 @@ def hub_factory(ctx: AddonContext):
                     ctx.guard.sig_trace.emit("system", f"[OPERATOR] failed to launch {addon_id}")
                     continue
 
-                # For chat-like modules with saved state, apply config + messages
-                if addon_id in ("terminal", "agent") and "config" in entry:
+                # For terminals with saved state, apply config + messages
+                if addon_id == "terminal" and "config" in entry:
                     for i in range(ctx.ui.stack.count()):
                         widget = ctx.ui.stack.widget(i)
                         if getattr(widget, '_mod_id', None) == new_mod_id and isinstance(widget, PageChat):
@@ -478,7 +383,7 @@ def hub_factory(ctx: AddonContext):
                     if not first_terminal_mod_id:
                         first_terminal_mod_id = new_mod_id
 
-            # Switch to first restored chat-like module
+            # Switch to first terminal
             if first_terminal_mod_id:
                 ctx.ui.switch_to_module(first_terminal_mod_id)
 
@@ -527,11 +432,81 @@ def injector_factory(ctx: AddonContext):
 
 
 def sd_factory(ctx: AddonContext):
-    return SDModule(ctx.bridge, ctx.guard)
+    # Register VisionProcess as the "vision" engine if not already present
+    if "vision" not in ctx.guard.engines:
+        vision_engine = VisionProcess()
+        ctx.guard.register_engine("vision", vision_engine)
+        ctx.bus.wire_engine("vision", vision_engine)
+    return SDModule(ctx.bridge, ctx.guard, ctx.ui_bridge)
 
 
 def audiogen_factory(ctx: AddonContext):
-    return AudioGenModule()
+    # Register AudioProcess as the "audio" engine if not already present
+    if "audio" not in ctx.guard.engines:
+        audio_engine = AudioProcess()
+        ctx.guard.register_engine("audio", audio_engine)
+        ctx.bus.wire_engine("audio", audio_engine)
+    return AudioGenModule(ctx.bridge, ctx.guard, ctx.ui_bridge)
+
+
+def relay_factory(ctx: AddonContext):
+    engine_key = "relay"
+
+    def _trace(msg: str):
+        ctx.guard.sig_trace.emit("system", msg)
+
+    # Register RoomProcess once — singleton for the whole app session
+    if engine_key not in ctx.guard.engines:
+        room = RoomProcess()
+        ctx.guard.register_engine(engine_key, room)
+        ctx.bus.wire_engine(engine_key, room)
+
+    w = PageRelay(ctx.state, ctx.ui_bridge)
+    w._mod_id = engine_key
+
+    # ── Outgoing: UI → kernel ──────────────────────────────────────
+
+    def _submit(payload: dict):
+        try:
+            ctx.bridge.submit(
+                ctx.bridge.wrap("relay", "generate", engine_key, payload=payload)
+            )
+        except Exception as exc:
+            _trace(f"[RELAY] submit error: {exc}")
+
+    w.sig_send.connect(_submit)
+    w.sig_action.connect(_submit)
+
+    w.sig_load.connect(
+        lambda: ctx.bridge.submit(ctx.bridge.wrap("relay", "load", engine_key))
+    )
+
+    # ── Incoming: kernel → UI ──────────────────────────────────────
+
+    ctx.guard.sig_status.connect(
+        lambda ek, st: w.on_status(st) if ek == engine_key else None
+    )
+    ctx.guard.sig_token.connect(
+        lambda ek, t: w.on_relay_event(t) if ek == engine_key else None
+    )
+    ctx.guard.sig_trace.connect(
+        lambda ek, m: _trace(m) if ek == engine_key else None
+    )
+
+    # ── Auto-start server when module opens ───────────────────────
+    w.sig_load.emit()
+
+    def _cleanup(*_args):
+        # Leave room process running across addon closes —
+        # only shut down when the app exits.
+        pass
+
+    w.destroyed.connect(_cleanup)
+    return w
+
+
+def theme_factory(ctx: AddonContext):
+    return ThemeModule(ctx.ui_bridge)
 
 
 def build_builtin_registry() -> AddonRegistry:
@@ -553,29 +528,15 @@ def build_builtin_registry() -> AddonRegistry:
     )
     registry.register(
         AddonSpec(
-            id="agent",
-            kind="module",
-            title="AGENT",
-            icon="◉",
-            factory=agent_factory,
-            descriptor=CapabilityDescriptor(
-                verbs=("generate_text", "agent", "tool_use", "load_model", "unload_model"),
-                appetites=("text_prompt", "gguf_file", "conversation_history", "workspace_path"),
-                emissions=("text_stream", "tool_result", "model_status"),
-            ),
-        )
-    )
-    registry.register(
-        AddonSpec(
             id="code",
             kind="module",
             title="CODE",
-            icon="▶",
+            icon="⋇",
             factory=code_factory,
             descriptor=CapabilityDescriptor(
-                verbs=("generate_text", "agent", "tool_use", "code"),
-                appetites=("text_prompt", "gguf_file", "workspace_path"),
-                emissions=("text_stream", "tool_result", "code_output"),
+                verbs=("agent_loop", "generate_code", "use_tools", "load_model", "unload_model"),
+                appetites=("coding_task", "gguf_file", "tool_policy"),
+                emissions=("loop_events", "final_summary", "model_status"),
             ),
         )
     )
@@ -663,5 +624,35 @@ def build_builtin_registry() -> AddonRegistry:
             ),
         )
     )
+    registry.register(
+        AddonSpec(
+            id="relay",
+            kind="module",
+            title="RELAY",
+            icon="⇄",
+            factory=relay_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("send_message", "read_messages", "coordinate_agents"),
+                appetites=("agent_mention", "text_prompt"),
+                emissions=("chat_message", "participant_joined", "participant_left"),
+            ),
+        )
+    )
+    registry.register(
+        AddonSpec(
+            id="theme",
+            kind="module",
+            title="THEME",
+            icon="◌",
+            factory=theme_factory,
+            descriptor=CapabilityDescriptor(
+                verbs=("edit_theme", "apply_theme", "save_theme"),
+                appetites=("theme_palette",),
+                emissions=("theme_applied", "theme_saved"),
+            ),
+        )
+    )
 
     return registry
+
+

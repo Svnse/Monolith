@@ -1,10 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 
 from core.state import AppState
 from monokernel.bridge import MonoBridge
 from monokernel.guard import MonoGuard
 from ui.bridge import UIBridge
+from ui.addons.bus import AddonEventBus
 
 if TYPE_CHECKING:
     from ui.addons.host import AddonHost
@@ -19,3 +20,4 @@ class AddonContext:
     ui: Optional["MonolithUI"]
     host: Optional["AddonHost"]
     ui_bridge: UIBridge
+    bus: AddonEventBus = field(default_factory=AddonEventBus)

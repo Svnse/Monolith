@@ -1,9 +1,9 @@
 from PySide6.QtWidgets import (
-    QWidget, QFrame, QLabel, QSlider, QHBoxLayout, QVBoxLayout,
+    QWidget, QFrame, QLabel, QLineEdit, QSlider, QHBoxLayout, QVBoxLayout,
     QPushButton, QScrollArea, QSizePolicy, QTextEdit
 )
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QDragEnterEvent, QPainter, QPen, QColor, QFont
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtGui import QDragEnterEvent, QPainter, QPen, QColor, QFont, QWheelEvent
 
 
 def import_vbox(widget, l=15, t=25, r=15, b=15):
@@ -22,7 +22,7 @@ class MonoGroupBox(QFrame):
         self._title = title
         self._header_buttons: list[QPushButton] = []
         self.setObjectName("mono_group_box")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.layout_main = import_vbox(self)
         self.layout_main.setContentsMargins(10, 22, 10, 8)
 
@@ -65,6 +65,23 @@ class MonoGroupBox(QFrame):
         super().resizeEvent(event)
         if self._header_buttons:
             self._position_header_buttons()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.StyleChange:
+            if self._header_buttons:
+                import core.style as s
+                ss = (
+                    f"QPushButton {{ background: transparent; "
+                    f"border: 1px solid {s.BORDER_SUBTLE}; border-radius: 8px; "
+                    f"color: {s.FG_DIM}; font-family: Consolas; font-size: 8px; "
+                    f"font-weight: bold; letter-spacing: 1px; padding: 0 6px; }}"
+                    f"QPushButton:hover {{ color: {s.ACCENT_PRIMARY}; "
+                    f"border: 1px solid {s.ACCENT_PRIMARY}; }}"
+                )
+                for btn in self._header_buttons:
+                    btn.setStyleSheet(ss)
+            self.update()
 
     def _resolve_parent_bg(self):
         """Walk up the parent chain to find the first opaque background color."""
@@ -148,6 +165,17 @@ class MonoTriangleButton(QPushButton):
         self.setFocusPolicy(Qt.NoFocus)
 
 
+class _MonoQSlider(QSlider):
+    """Slider that consumes wheel input while hovered/focused."""
+
+    def wheelEvent(self, event: QWheelEvent):
+        if self.underMouse() or self.hasFocus():
+            super().wheelEvent(event)
+            event.accept()
+            return
+        event.ignore()
+
+
 class MonoSlider(QWidget):
     valueChanged = Signal(float)
 
@@ -158,18 +186,19 @@ class MonoSlider(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.lbl = QLabel(label)
         self.lbl.setObjectName("slider_label")
-        val_str = str(int(init_v) if is_int else f"{init_v:.2f}")
-        self.val_lbl = QLabel(val_str)
+        self.val_lbl = QLabel("")
         self.val_lbl.setObjectName("slider_value")
         self.val_lbl.setFixedWidth(40)
         self.val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = _MonoQSlider(Qt.Horizontal)
         if is_int:
             self.slider.setRange(int(min_v), int(max_v))
             self.slider.setValue(int(init_v))
         else:
             self.slider.setRange(int(min_v * 100), int(max_v * 100))
             self.slider.setValue(int(init_v * 100))
+        actual = self.slider.value() if self.is_int else self.slider.value() / 100.0
+        self.val_lbl.setText(str(int(actual)) if self.is_int else f"{actual:.2f}")
         self.slider.valueChanged.connect(self._on_change)
         layout.addWidget(self.lbl)
         layout.addWidget(self.slider)
@@ -217,6 +246,11 @@ class SidebarButton(QPushButton):
             f"color: {color}; font-size: 9px; font-weight: bold;"
             f" letter-spacing: 1px; background: transparent;"
         )
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.StyleChange:
+            self.update_style(self.isChecked())
 
     def enterEvent(self, event):
         if not self.isChecked():
@@ -291,6 +325,14 @@ class CollapsibleStepWidget(QFrame):
         self._label = label
         self._status_icon = status_icon
         self._detail_text = ""
+        self._style_refreshing = False
+        # Initialize child refs early; StyleChange can fire during construction.
+        self._header: QFrame | None = None
+        self._arrow: QLabel | None = None
+        self._lbl_number: QLabel | None = None
+        self._lbl_icon: QLabel | None = None
+        self._lbl_label: QLabel | None = None
+        self._detail: QTextEdit | None = None
 
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(
@@ -357,15 +399,61 @@ class CollapsibleStepWidget(QFrame):
 
         self._header.mousePressEvent = self._on_header_click
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.StyleChange:
+            # During construction, style-change can fire before subwidgets exist.
+            if not (
+                isinstance(self._arrow, QLabel)
+                and isinstance(self._lbl_number, QLabel)
+                and isinstance(self._lbl_icon, QLabel)
+                and isinstance(self._lbl_label, QLabel)
+                and isinstance(self._detail, QTextEdit)
+            ):
+                return
+            if self._style_refreshing:
+                return
+            self._style_refreshing = True
+            try:
+                import core.style as s
+                self.setStyleSheet(
+                    f"CollapsibleStepWidget {{ background: {s.BG_INPUT}; "
+                    f"border: 1px solid {s.BORDER_SUBTLE}; border-radius: 2px; }}"
+                )
+                self._arrow.setStyleSheet(
+                    f"color: {s.ACCENT_PRIMARY}; font-size: 10px; border: none; background: transparent;"
+                )
+                self._lbl_number.setStyleSheet(
+                    f"color: {s.FG_DIM}; font-family: Consolas; font-size: 9px; "
+                    f"border: none; background: transparent;"
+                )
+                self._lbl_label.setStyleSheet(
+                    f"color: {s.FG_TEXT}; font-family: Consolas; font-size: 10px; "
+                    f"border: none; background: transparent;"
+                )
+                self._detail.setStyleSheet(
+                    f"QTextEdit {{ background: {s.BG_MAIN}; color: {s.FG_TEXT}; "
+                    f"border: none; border-top: 1px solid {s.BORDER_SUBTLE}; "
+                    f"font-family: Consolas; font-size: 9px; padding: 6px; }}"
+                )
+                # Re-apply current icon color through existing method
+                self.update_status(self._status_icon)
+            finally:
+                self._style_refreshing = False
+
     def _on_header_click(self, event):
         self._expanded = not self._expanded
-        self._detail.setVisible(self._expanded)
-        self._arrow.setText("▾" if self._expanded else "▸")
+        if isinstance(self._detail, QTextEdit):
+            self._detail.setVisible(self._expanded)
+        if isinstance(self._arrow, QLabel):
+            self._arrow.setText("▾" if self._expanded else "▸")
         self.sig_height_changed.emit()
 
     def update_status(self, status_icon: str):
         import core.style as s
         self._status_icon = status_icon
+        if not isinstance(self._lbl_icon, QLabel):
+            return
         self._lbl_icon.setText(status_icon)
         color_map = {"✓": s.ACCENT_PRIMARY, "✗": s.FG_ERROR, "▶": s.FG_WARN, "…": s.FG_DIM}
         self._lbl_icon.setStyleSheet(
@@ -375,12 +463,190 @@ class CollapsibleStepWidget(QFrame):
 
     def update_label(self, label: str):
         self._label = label
-        self._lbl_label.setText(label)
+        if isinstance(self._lbl_label, QLabel):
+            self._lbl_label.setText(label)
 
     def set_detail(self, text: str):
         self._detail_text = text
-        self._detail.setPlainText(text)
+        if isinstance(self._detail, QTextEdit):
+            self._detail.setPlainText(text)
 
     def append_detail(self, text: str):
         self._detail_text += text
-        self._detail.setPlainText(self._detail_text)
+        if isinstance(self._detail, QTextEdit):
+            self._detail.setPlainText(self._detail_text)
+
+
+class MonoDragSpin(QFrame):
+    """Drag-to-change value control.
+
+    Click and drag up to increase the value, down to decrease it.
+    Double-click to type a value directly.
+    A small ↕ handle on the right indicates the drag axis.
+    """
+
+    valueChanged = Signal(float)
+    _SENS = 4  # pixels of drag per step
+
+    def __init__(self, *, minimum: float = 0, maximum: float = 100,
+                 step: float = 1, decimals: int = 0, parent=None):
+        super().__init__(parent)
+        self._min = float(minimum)
+        self._max = float(maximum)
+        self._step = float(step)
+        self._decimals = decimals
+        self._value = float(minimum)
+        self._dragging = False
+        self._drag_y = 0
+        self._drag_accum = 0.0
+        self._editing = False
+
+        self.setObjectName("drag_spin")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFixedHeight(26)
+        self.setCursor(Qt.SizeVerCursor)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 0, 4, 0)
+        lay.setSpacing(0)
+
+        self._lbl = QLabel(self._fmt(self._value))
+        self._lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        self._edit = QLineEdit()
+        self._edit.setFrame(False)
+        self._edit.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._edit.hide()
+        self._edit.editingFinished.connect(self._commit_edit)
+        self._edit.installEventFilter(self)
+
+        self._handle = QLabel("↕")
+        self._handle.setFixedWidth(14)
+        self._handle.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        lay.addWidget(self._lbl)
+        lay.addWidget(self._edit)
+        lay.addWidget(self._handle)
+
+        self.refresh_style()
+
+    # ---- public API ----
+
+    def value(self) -> float:
+        return self._value
+
+    def setValue(self, v: float) -> None:
+        v = max(self._min, min(self._max, float(v)))
+        if v != self._value:
+            self._value = v
+            if not self._editing:
+                self._lbl.setText(self._fmt(v))
+            self.valueChanged.emit(v)
+
+    def setRange(self, minimum: float, maximum: float) -> None:
+        self._min = float(minimum)
+        self._max = float(maximum)
+        self.setValue(self._value)
+
+    def setSingleStep(self, step: float) -> None:
+        self._step = float(step)
+
+    def setDecimals(self, n: int) -> None:
+        self._decimals = n
+        self._lbl.setText(self._fmt(self._value))
+
+    def refresh_style(self) -> None:
+        import core.style as s
+        self.setStyleSheet(
+            f"QFrame#drag_spin {{ background: {s.BG_INPUT}; border: 1px solid {s.BORDER_DARK}; "
+            f"border-radius: 3px; }}"
+        )
+        self._lbl.setStyleSheet(
+            f"color: {s.FG_TEXT}; font-size: 12px; background: transparent; border: none;"
+        )
+        self._edit.setStyleSheet(
+            f"background: transparent; border: none; color: {s.FG_TEXT}; font-size: 12px;"
+        )
+        self._handle.setStyleSheet(
+            f"color: {s.FG_DIM}; font-size: 10px; background: transparent; border: none;"
+        )
+
+    # ---- internal ----
+
+    def _fmt(self, v: float) -> str:
+        if self._decimals == 0:
+            return str(int(round(v)))
+        return f"{v:.{self._decimals}f}"
+
+    # ---- mouse events ----
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and not self._editing:
+            self._dragging = True
+            self._drag_y = event.globalPosition().toPoint().y()
+            self._drag_accum = 0.0
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging and event.buttons() == Qt.LeftButton:
+            curr_y = event.globalPosition().toPoint().y()
+            dy = curr_y - self._drag_y
+            self._drag_y = curr_y
+            self._drag_accum -= dy  # negative dy (up) = increase
+            steps = int(self._drag_accum / self._SENS)
+            if steps != 0:
+                self._drag_accum -= steps * self._SENS
+                new_val = max(self._min, min(self._max, self._value + steps * self._step))
+                if new_val != self._value:
+                    self._value = new_val
+                    self._lbl.setText(self._fmt(new_val))
+                    self.valueChanged.emit(new_val)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = False
+            self._editing = True
+            self._edit.setText(self._fmt(self._value))
+            self._lbl.hide()
+            self._edit.show()
+            self._edit.setFocus()
+            self._edit.selectAll()
+            self.unsetCursor()
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def _commit_edit(self):
+        text = self._edit.text().strip()
+        try:
+            self.setValue(float(text))
+        except ValueError:
+            self._lbl.setText(self._fmt(self._value))
+        self._edit.hide()
+        self._lbl.show()
+        self._editing = False
+        self.setCursor(Qt.SizeVerCursor)
+
+    def eventFilter(self, obj, event):
+        if obj is self._edit and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self._edit.hide()
+                self._lbl.show()
+                self._editing = False
+                self.setCursor(Qt.SizeVerCursor)
+                return True
+        return super().eventFilter(obj, event)

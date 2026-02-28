@@ -25,6 +25,9 @@ class MonolithUI(QMainWindow):
         self._drag_pos = None
         self._chat_title = "Untitled Chat"
         self._terminal_titles: dict[str, tuple[str, str]] = {}
+        self._pre_maximize_geo = None       # geometry saved before maximizing
+        self._drag_from_maximized = False   # dragging from a maximized state
+        self._drag_press_global = None      # global cursor pos at press time
 
         self.setWindowFlags(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -158,7 +161,12 @@ class MonolithUI(QMainWindow):
             event.accept()
             return
         if pos.y() < 40:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            if self.isMaximized():
+                # Defer drag setup; restore when the mouse actually moves
+                self._drag_from_maximized = True
+                self._drag_press_global = event.globalPosition().toPoint()
+            else:
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent):
@@ -179,6 +187,22 @@ class MonolithUI(QMainWindow):
                 self.setGeometry(new_geo)
             event.accept()
             return
+        # Restore from maximized when user actually starts dragging
+        if self._drag_from_maximized and event.buttons() == Qt.LeftButton:
+            global_pos = event.globalPosition().toPoint()
+            if (global_pos - self._drag_press_global).manhattanLength() > 5:
+                # Restore window, keeping cursor at the same proportional x position
+                normal_geo = self._pre_maximize_geo or self.normalGeometry()
+                max_w = self.width()
+                ratio = global_pos.x() / max_w if max_w > 0 else 0.5
+                self.showNormal()
+                restore_x = int(global_pos.x() - normal_geo.width() * ratio)
+                restore_y = global_pos.y() - 10
+                self.move(restore_x, max(0, restore_y))
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self._drag_from_maximized = False
+            event.accept()
+            return
         # Active drag
         if self._drag_pos and event.buttons() == Qt.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
@@ -194,6 +218,8 @@ class MonolithUI(QMainWindow):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         self._drag_pos = None
+        self._drag_from_maximized = False
+        self._drag_press_global = None
         self._resize_edge = None
         self._resize_origin = None
         self._resize_geo = None
@@ -265,7 +291,7 @@ class MonolithUI(QMainWindow):
                 self.module_strip.select_module(mod_id)
                 self.lbl_monolith.setVisible(True)
                 # Only show chat title for terminal modules
-                if getattr(w, '_addon_id', None) in ("terminal", "agent"):
+                if getattr(w, '_addon_id', None) == "terminal":
                     self.update_terminal_header(mod_id, *self._terminal_titles.get(mod_id, ("Untitled Chat", QDateTime.currentDateTime().toString("ddd • HH:mm"))))
                 else:
                     self.lbl_chat_title.hide()
@@ -328,7 +354,7 @@ class MonolithUI(QMainWindow):
     def _update_time_display(self):
         current = self.stack.currentWidget()
         current_mod = getattr(current, "_mod_id", None) if current is not None else None
-        if current_mod and getattr(current, "_addon_id", None) in ("terminal", "agent"):
+        if current_mod and getattr(current, "_addon_id", None) == "terminal":
             now = QDateTime.currentDateTime().toString("ddd • HH:mm")
             self.lbl_chat_time.setText(now)
             if current_mod in self._terminal_titles:
@@ -367,7 +393,13 @@ class MonolithUI(QMainWindow):
         return bar
 
     def toggle_maximize(self):
-        self.showNormal() if self.isMaximized() else self.showMaximized()
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self._pre_maximize_geo = self.geometry()
+            self.showMaximized()
+        if hasattr(self, "win_controls") and hasattr(self.win_controls, "set_maximized"):
+            self.win_controls.set_maximized(self.isMaximized())
 
     def toggle_vitals(self):
         if not self.vitals_win:

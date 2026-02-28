@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import re
 import select
@@ -152,15 +151,14 @@ class BranchPtySession:
                 if line.startswith("/"):
                     self.cwd = line
                     break
-        env_code, env_output = self._exec_internal("env -0 | base64 -w0", timeout=2)
+        env_code, env_output = self._exec_internal("env -0", timeout=2)
         if env_code == 0 and env_output:
             try:
-                raw = base64.b64decode(env_output.encode("utf-8"), validate=False)
                 parsed: dict[str, str] = {}
-                for entry in raw.split(b"\x00"):
-                    if b"=" in entry:
-                        k, v = entry.split(b"=", 1)
-                        parsed[k.decode("utf-8", errors="ignore")] = v.decode("utf-8", errors="replace")
+                for entry in env_output.split("\x00"):
+                    if "=" in entry:
+                        k, v = entry.split("=", 1)
+                        parsed[k] = v
                 if parsed:
                     self.env = parsed
             except Exception:

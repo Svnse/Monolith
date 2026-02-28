@@ -1,302 +1,150 @@
+"""
+engine/vision.py  —  VisionProcess
+Subprocess-isolated image generation engine.
+
+Public interface is backward-compatible with the old VisionEngine so
+SDModule and existing bridge wiring require no changes.
+
+New signals vs old VisionEngine:
+  sig_image    now (object, int)  — PIL image + batch_index
+  sig_progress (int, int)         — (current_step, total_steps)
+  sig_resource (dict)             — {"vram_used_mb": int, "vram_free_mb": int}
+
+Supported models (auto-detected):
+  SD 1.5 / 2.x   (.safetensors / .ckpt / HuggingFace dir)
+  SDXL
+  Flux.1  (diffusers >= 0.30)
+
+Generation payload keys (passed inside "config" sub-dict or top-level):
+  prompt, negative_prompt, width, height, steps, guidance_scale,
+  seed (-1 = random), scheduler ("euler"|"dpm++"|"ddim"|"lcm"),
+  lora_path, lora_scale, batch_size
+"""
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal, QTimer
+from PySide6.QtCore import QTimer, Signal
 
-from core.state import AppState, SystemStatus
-
-
-class PipelineLoader(QThread):
-    trace = Signal(str)
-    loaded = Signal(object)   # renamed from 'finished' to avoid shadowing QThread.finished
-    error = Signal(str)
-
-    def __init__(self, model_path: str):
-        super().__init__()
-        self.model_path = model_path
-
-    def run(self) -> None:
-        try:
-            try:
-                import torch
-                from diffusers import StableDiffusionPipeline
-            except ImportError as exc:
-                raise RuntimeError(
-                    "diffusers is not installed. pip install diffusers"
-                ) from exc
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            dtype = torch.float16 if device == "cuda" else torch.float32
-
-            if self.isInterruptionRequested():
-                return
-
-            self.trace.emit(f"loading pipeline: {self.model_path}")
-            if self.model_path.endswith((".safetensors", ".ckpt")):
-                pipe = StableDiffusionPipeline.from_single_file(
-                    self.model_path,
-                    torch_dtype=dtype,
-                    safety_checker=None,
-                    requires_safety_checker=False,
-                )
-            else:
-                pipe = StableDiffusionPipeline.from_pretrained(
-                    self.model_path,
-                    torch_dtype=dtype,
-                    safety_checker=None,
-                    requires_safety_checker=False,
-                )
-
-            pipe = pipe.to(device)
-            self.loaded.emit(pipe)
-        except Exception as exc:
-            self.error.emit(str(exc))
+from core.state import SystemStatus
+from engine.engine_process import EngineProcess
 
 
-class GenerationWorker(QThread):
-    image = Signal(object)
-    trace = Signal(str)
-    done = Signal(bool, str)
+class VisionProcess(EngineProcess):
+    """Subprocess-isolated diffusers inference engine."""
 
-    def __init__(
-        self,
-        pipe,
-        prompt: str,
-        steps: int,
-        guidance: float,
-        seed: int | None,
-    ):
-        super().__init__()
-        self.pipe = pipe
-        self.prompt = prompt
-        self.steps = steps
-        self.guidance = guidance
-        self.seed = seed
-
-    def run(self) -> None:
-        completed = False
-        err_msg = ""
-        try:
-            import torch
-
-            if self.isInterruptionRequested():
-                return
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            generator = None
-            if self.seed is not None:
-                generator = torch.Generator(device=device).manual_seed(self.seed)
-
-            def _callback(step: int, timestep: int, latents) -> None:
-                if self.isInterruptionRequested():
-                    raise RuntimeError("Generation interrupted")
-
-            self.trace.emit("generation started")
-            result = self.pipe(
-                self.prompt,
-                num_inference_steps=self.steps,
-                guidance_scale=self.guidance,
-                generator=generator,
-                callback=_callback,
-                callback_steps=1,
-            )
-            if self.isInterruptionRequested():
-                return
-            self.image.emit(result.images[0])
-            self.trace.emit("generation complete")
-            completed = True
-        except Exception as exc:
-            err_msg = str(exc)
-        finally:
-            self.done.emit(completed, err_msg)
-
-
-class VisionEngine(QObject):
-    sig_token = Signal(str)
-    sig_trace = Signal(str)
-    sig_status = Signal(SystemStatus)
-    sig_usage = Signal(int)
+    # ── signals ────────────────────────────────────────────────────────────
+    sig_image    = Signal(object, int)   # (PIL.Image, batch_index)
     sig_finished = Signal()
-    sig_image = Signal(object)
+    sig_progress = Signal(int, int)      # (current_step, total_steps)
+    sig_resource = Signal(dict)          # vram stats after load / generate
 
-    def __init__(self, state: AppState):
+    def __init__(self) -> None:
         super().__init__()
-        self.state = state
-        self.pipe = None
-        self.model_path: str | None = None
-        self._loaded_path: str | None = None
-        self.loader: PipelineLoader | None = None
-        self.worker: GenerationWorker | None = None
-        self._load_cancel_requested = False
-        self._shutdown_requested = False
+        self._model_path: str = ""
+
+    # ── worker entry point (runs in child process) ─────────────────────────
+    @staticmethod
+    def _worker_fn(to_worker, from_worker) -> None:
+        from engine._workers import vision_worker
+        vision_worker.main(to_worker, from_worker)
+
+    # ── EnginePort overrides ───────────────────────────────────────────────
 
     def set_model_path(self, payload: dict) -> None:
-        path = payload.get("path") if isinstance(payload, dict) else None
-        self.model_path = path
+        self._model_path = str(payload.get("path") or "")
         QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
 
     def load_model(self) -> None:
-        if self.loader and self.loader.isRunning():
-            self.sig_trace.emit("VISION: load already in progress.")
-            QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
-            return
-
-        if not self.model_path:
+        if not self._model_path:
             self.sig_trace.emit("VISION: ERROR: No model selected.")
             self.sig_status.emit(SystemStatus.ERROR)
             return
-
-        if self.pipe and self._loaded_path == self.model_path:
-            self.sig_trace.emit("VISION: pipeline already loaded.")
-            QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
+        if not self._ensure_proc():
             return
-
-        if self.pipe and self._loaded_path != self.model_path:
-            self.unload_model()
-
         self.sig_status.emit(SystemStatus.LOADING)
-        self.sig_trace.emit("VISION: loading pipeline")
-        self._load_cancel_requested = False
-        self.loader = PipelineLoader(self.model_path)
-        self.loader.trace.connect(self._emit_trace)
-        self.loader.error.connect(self._on_load_error)
-        self.loader.loaded.connect(self._on_load_success)
-        # Connect cleanup to QThread.finished (fires AFTER run() returns)
-        self.loader.finished.connect(self._cleanup_loader)
-        self.loader.start()
-
-    def _emit_trace(self, message: str) -> None:
-        self.sig_trace.emit(f"VISION: {message}")
-
-    def _on_load_success(self, pipe) -> None:
-        if self._shutdown_requested:
-            del pipe
-            self.sig_status.emit(SystemStatus.READY)
-            return
-
-        if self._load_cancel_requested:
-            del pipe
-            self.pipe = None
-            self._loaded_path = None
-            self.sig_status.emit(SystemStatus.READY)
-            self.sig_trace.emit("VISION: load cancelled")
-            return
-
-        self.pipe = pipe
-        self._loaded_path = self.model_path
-        self.sig_trace.emit("VISION: pipeline ready")
-        self.sig_status.emit(SystemStatus.READY)
-
-    def _on_load_error(self, err_msg: str) -> None:
-        self.sig_trace.emit(f"VISION: ERROR: {err_msg}")
-        self.sig_status.emit(SystemStatus.ERROR)
-
-    def _cleanup_loader(self) -> None:
-        """Deferred loader cleanup — connected to QThread.finished."""
-        def _deferred():
-            loader = self.loader
-            if loader is not None:
-                try:
-                    loader.trace.disconnect()
-                    loader.loaded.disconnect()
-                    loader.error.disconnect()
-                    loader.finished.disconnect()
-                except (TypeError, RuntimeError):
-                    pass
-                self.loader = None
-        QTimer.singleShot(0, _deferred)
+        self.sig_trace.emit(f"VISION: loading {self._model_path}")
+        self._send("load", model_path=self._model_path, config={})
 
     def unload_model(self) -> None:
-        if self.loader and self.loader.isRunning():
-            self._load_cancel_requested = True
-            self.sig_trace.emit(
-                "VISION: unload requested during load; will cancel after init completes"
-            )
-            return
-
-        if self.worker and self.worker.isRunning():
-            self.sig_trace.emit("VISION: ERROR: Cannot unload while generating.")
-            return
-
-        self.sig_status.emit(SystemStatus.UNLOADING)
-        if self.pipe:
-            del self.pipe
-            self.pipe = None
-            self._loaded_path = None
-
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-
-        QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
+        if self._proc and self._proc.is_alive():
+            self.sig_status.emit(SystemStatus.UNLOADING)
+            self._send("unload")
+        else:
+            QTimer.singleShot(0, lambda: self.sig_status.emit(SystemStatus.READY))
 
     def generate(self, payload: dict) -> None:
-        if not self.pipe:
+        if not (self._proc and self._proc.is_alive()):
             self.sig_trace.emit("VISION: ERROR: Model offline.")
             self.sig_status.emit(SystemStatus.READY)
             return
 
-        if self.worker and self.worker.isRunning():
-            self.sig_trace.emit("VISION: ERROR: Busy. Wait for completion.")
-            return
+        # Accept both flat payload and nested "config" sub-dict
+        cfg    = payload.get("config", payload)
+        prompt = str(cfg.get("prompt") or payload.get("prompt") or "")
 
-        config = payload.get("config", payload)
-        prompt = config.get("prompt", payload.get("prompt", ""))
+        self._gen_id += 1
+        self._active_gen_id = self._gen_id
 
-        steps = int(config.get("steps", 25))
-        guidance_scale = float(config.get("guidance_scale", 7.5))
-        seed = config.get("seed")
-        if isinstance(seed, int) and seed < 0:
-            seed = None
+        full_cfg = {
+            "prompt":          prompt,
+            "negative_prompt": str(cfg.get("negative_prompt") or ""),
+            "width":           int(cfg.get("width",  512)),
+            "height":          int(cfg.get("height", 512)),
+            "steps":           int(cfg.get("steps",  25)),
+            "guidance_scale":  float(cfg.get("guidance_scale", 7.5)),
+            "seed":            cfg.get("seed"),
+            "scheduler":       str(cfg.get("scheduler", "dpm++")),
+            "lora_path":       cfg.get("lora_path"),
+            "lora_scale":      float(cfg.get("lora_scale", 0.8)),
+            "batch_size":      int(cfg.get("batch_size", 1)),
+        }
+        # Normalise seed: -1 or None → random
+        if isinstance(full_cfg["seed"], int) and full_cfg["seed"] < 0:
+            full_cfg["seed"] = None
 
         self.sig_status.emit(SystemStatus.RUNNING)
-        self.worker = GenerationWorker(
-            self.pipe,
-            prompt,
-            steps,
-            guidance_scale,
-            seed,
-        )
-        self.worker.image.connect(self.sig_image)
-        self.worker.trace.connect(self._emit_trace)
-        self.worker.done.connect(self._on_gen_finish)
-        self.worker.start()
+        self._send("generate", gen_id=self._gen_id, config=full_cfg)
 
     def stop_generation(self) -> None:
-        if self.loader and self.loader.isRunning():
-            self._load_cancel_requested = True
-            self.sig_trace.emit(
-                "VISION: load cancel requested; will stop after initialization completes"
-            )
+        self._active_gen_id = 0
+        if self._proc and self._proc.is_alive():
+            self._send("stop")
+
+    # ── event dispatch ─────────────────────────────────────────────────────
+
+    def _dispatch_event(self, event: dict) -> None:
+        # Let the base class handle status / trace / error / sig_event
+        super()._dispatch_event(event)
+
+        kind = str(event.get("event") or "")
+
+        if kind == "result":
+            if int(event.get("gen_id") or 0) == self._active_gen_id:
+                img = event.get("image")
+                idx = int(event.get("batch_index") or 0)
+                if img is not None:
+                    self.sig_image.emit(img, idx)
+
+        elif kind == "progress":
+            if int(event.get("gen_id") or 0) == self._active_gen_id:
+                self.sig_progress.emit(
+                    int(event.get("step")  or 0),
+                    int(event.get("total") or 0),
+                )
+
+        elif kind == "resource":
+            self.sig_resource.emit({
+                "vram_used_mb": int(event.get("vram_used_mb") or 0),
+                "vram_free_mb": int(event.get("vram_free_mb") or 0),
+            })
+
+        elif kind in ("status", "stopped", "unloaded"):
+            # Fire sig_finished on any completion transition so callers that
+            # used the old VisionEngine.sig_finished still work
+            s = str(event.get("status") or kind).lower()
+            if s in ("ready", "unloaded", "stopped"):
+                self.sig_finished.emit()
+
+        elif kind == "trace":
+            # Base EngineProcess already emitted this trace and raw sig_event.
+            # Do not re-emit here or the UI gets duplicate lines.
             return
-
-        if self.worker and self.worker.isRunning():
-            self.worker.requestInterruption()
-
-    def _on_gen_finish(self, completed: bool, err_msg: str) -> None:
-        if completed:
-            self.sig_finished.emit()
-            self.sig_status.emit(SystemStatus.READY)
-        elif err_msg == "Generation interrupted":
-            self.sig_trace.emit("VISION: generation interrupted")
-            self.sig_status.emit(SystemStatus.READY)
-        else:
-            self.sig_trace.emit(f"VISION: ERROR: {err_msg}")
-            self.sig_status.emit(SystemStatus.ERROR)
-        self.worker = None
-
-    def shutdown(self) -> None:
-        self._shutdown_requested = True
-        self.stop_generation()
-
-        if self.worker:
-            self.worker.requestInterruption()
-            self.worker.wait(1500)
-            self.worker = None
-
-        if self.loader and self.loader.isRunning():
-            self._load_cancel_requested = True
-            self.loader.wait(150)

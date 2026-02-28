@@ -73,11 +73,13 @@ class PageFiles(QWidget):
     def __init__(self, state):
         super().__init__()
         self.state = state
-        
-        base_dir = "C:\\Models\\knowledge_base"
-        if not os.path.exists("C:\\Models"):
+
+        configured_kb = str(os.getenv("MONOLITH_KNOWLEDGE_BASE") or "").strip()
+        if configured_kb:
+            base_dir = configured_kb
+        else:
             base_dir = str(DEFAULT_WORKSPACE_ROOT / "knowledge_base")
-            
+
         self.current_path = base_dir
         
         layout = QVBoxLayout(self)

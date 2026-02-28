@@ -1,16 +1,113 @@
 import hashlib
 import json
 import os
+import re
+import time
 from threading import Lock
+from dataclasses import dataclass
+from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal, QTimer
 
-from core.llm_config import MASTER_PROMPT, get_agent_prompt, load_config
+from core.llm_config import (
+    MASTER_PROMPT,
+)
 from core.state import AppState, SystemStatus
-from engine.agent_runtime import MAX_AGENT_STEPS, AgentMessage, AgentRuntime, ToolCall
-from engine.contract import AgentOutcome, ContractFactory, ToolPolicy
-from engine.protocol_adapter import ProtocolAdapter, get_profile
-from engine.tools import set_workspace_root
+from engine.llm_modes.chat import ChatModeStrategy
+from engine.tools import set_workspace_root, stop_active_process_groups
+
+MAX_AGENT_STEPS = 25
+
+
+class AgentRuntime:
+    pass
+
+
+ContractFactory = None
+ProtocolAdapter = None
+_AGENT_STACK_AVAILABLE = False
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
+class AgentMessage:
+    role: str
+    content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
+
+
+def get_profile(_model_profile_id: str):
+    raise RuntimeError("agent stack disabled")
+
+
+def _find_first_tool_json_end(*_args, **_kwargs):
+    return None
+
+
+_TASK_QUERY_BATCH_OPEN_RE = re.compile(r"<task_query_batch>", re.IGNORECASE)
+_TASK_QUERY_BATCH_CLOSE_RE = re.compile(r"</task_query_batch>", re.IGNORECASE)
+
+_BARE_JSON_DECODER = json.JSONDecoder()
+
+
+def _find_first_bare_json_object_end(text: str) -> int | None:
+    """
+    Return the end offset of the first complete top-level JSON object in text,
+    regardless of its keys. Used by the observe/commit streaming guard to stop
+    as soon as the model finishes its review JSON, before it starts emitting
+    trailing \\n tokens (Qwen2.5 / models that decode <|im_end|> as a newline).
+    """
+    if not isinstance(text, str):
+        return None
+    cursor = 0
+    length = len(text)
+    while cursor < length:
+        start = text.find("{", cursor)
+        if start < 0:
+            break
+        try:
+            parsed, end = _BARE_JSON_DECODER.raw_decode(text, start)
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        if isinstance(parsed, dict) and parsed:
+            return end
+        cursor = max(start + 1, end)
+    return None
+
+
+def _find_first_task_query_batch_end(text: str) -> int | None:
+    """
+    Return end index of the first complete <task_query_batch>...</task_query_batch>
+    block when payload is valid JSON. Used to stop streaming decode early in
+    required task-query routes and avoid long speculative trailing prose.
+    """
+    if not isinstance(text, str) or not text:
+        return None
+    open_match = _TASK_QUERY_BATCH_OPEN_RE.search(text)
+    if open_match is None:
+        return None
+    close_match = _TASK_QUERY_BATCH_CLOSE_RE.search(text, open_match.end())
+    if close_match is None:
+        return None
+    payload = text[open_match.end():close_match.start()].strip()
+    if not payload:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return close_match.end()
 
 
 def normalize_openai_response(raw: dict) -> AgentMessage:
@@ -135,6 +232,7 @@ class GeneratorWorker(QThread):
         max_tokens,
         runtime: AgentRuntime | None = None,
         agent_mode=False,
+        mode_runner=None,
     ):
         super().__init__()
         self.llm = llm
@@ -144,6 +242,36 @@ class GeneratorWorker(QThread):
         self.max_tokens = max_tokens
         self.agent_mode = bool(agent_mode)
         self.runtime = runtime
+        self._mode_runner = mode_runner
+        self._first_infer_complete = False
+        try:
+            self._first_infer_cap = max(0, int(os.environ.get("MONOLITH_FIRST_INFER_MAX_TOKENS", "4096")))
+        except Exception:
+            self._first_infer_cap = 4096
+        stream_mode = str(os.environ.get("MONOLITH_STREAM_MODE", "char")).strip().lower()
+        self._stream_mode = stream_mode if stream_mode in {"char", "chunk"} else "char"
+        self._stream_token_buffer: list[str] = []
+        self._stream_buffer_chars: int = 0
+        try:
+            self._stream_emit_chars = max(16, int(os.environ.get("MONOLITH_STREAM_EMIT_CHARS", "64")))
+        except Exception:
+            self._stream_emit_chars = 64
+        try:
+            self._stream_emit_interval_ms = max(20, int(os.environ.get("MONOLITH_STREAM_EMIT_MS", "60")))
+        except Exception:
+            self._stream_emit_interval_ms = 60
+        self._stream_last_emit_ts = time.monotonic()
+
+    def _emit_text_stream(self, text: str) -> None:
+        if not isinstance(text, str) or not text:
+            return
+        if self._stream_mode == "char":
+            for char in text:
+                self.token.emit(char)
+            self.usage.emit(len(text))
+            return
+        self.token.emit(text)
+        self.usage.emit(len(text))
 
     def _extract_text(self, response: dict) -> str:
         choices = response.get("choices", [])
@@ -161,13 +289,20 @@ class GeneratorWorker(QThread):
     # Stop sequences to prevent model from emitting prompt scaffolding tags
     _STOP_SEQUENCES = ["</response>", "</answer>", "</output>", "<|end|>", "<|im_end|>"]
 
-    def _try_chat_completion(self, messages, tools=None):
+    def _try_chat_completion(self, messages, tools=None, stream: bool = False):
+        effective_max_tokens = self.max_tokens
+        using_first_infer_cap = False
+        if self.agent_mode and not self._first_infer_complete and self._first_infer_cap > 0:
+            if effective_max_tokens > self._first_infer_cap:
+                effective_max_tokens = self._first_infer_cap
+                using_first_infer_cap = True
+
         kwargs = {
             "messages": messages,
             "temperature": self.temp,
             "top_p": self.top_p,
-            "max_tokens": self.max_tokens,
-            "stream": False,
+            "max_tokens": effective_max_tokens,
+            "stream": stream,
             "stop": self._STOP_SEQUENCES,
         }
         if tools:
@@ -178,32 +313,186 @@ class GeneratorWorker(QThread):
         contract = getattr(self, "_contract", None)
         if contract is not None and getattr(contract, "grammar_profile", None):
             try:
-                from engine.protocol_adapter import get_grammar_profile
-                gp = get_grammar_profile(
-                    contract.model_profile_id,
-                    contract.tool_policy.value if hasattr(contract.tool_policy, "value") else str(contract.tool_policy),
-                )
+                # Legacy protocol adapter was removed from the active stack.
+                # Keep grammar wiring fail-safe by treating profile lookup as unavailable.
+                gp = None
                 if gp is not None and gp.grammar_spec and gp.grammar_type == "bnf":
                     from llama_cpp import LlamaGrammar
                     kwargs["grammar"] = LlamaGrammar.from_string(gp.grammar_spec)
             except Exception:
                 pass  # graceful fallback if grammar not supported
 
-        return self.llm.create_chat_completion(**kwargs)
+        if using_first_infer_cap:
+            self.trace.emit(
+                f"[WORKER] first infer token cap active: requested={self.max_tokens}, capped={effective_max_tokens}"
+            )
+
+        try:
+            return self.llm.create_chat_completion(**kwargs)
+        finally:
+            if self.agent_mode and not self._first_infer_complete:
+                self._first_infer_complete = True
 
     def _chat_once_text(self, messages: list[dict]) -> str:
-        response = self._try_chat_completion(messages)
+        response = self._try_chat_completion(messages, stream=False)
         return self._extract_text(response)
 
     def _chat_once_agent(self, messages: list[dict], tools: list[dict]) -> AgentMessage:
         """Legacy agent path — returns normalized AgentMessage (no adapter)."""
-        response = self._try_chat_completion(messages, tools=tools)
+        response = self._try_chat_completion(messages, tools=tools, stream=False)
         return normalize_openai_response(response)
+
+    def _merge_stream_tool_calls(self, merged: list[dict], delta_calls: list) -> None:
+        for item in delta_calls:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            if not isinstance(idx, int) or idx < 0:
+                idx = len(merged)
+
+            while len(merged) <= idx:
+                merged.append(
+                    {
+                        "id": f"call_{len(merged)}",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                )
+
+            slot = merged[idx]
+            if isinstance(item.get("id"), str) and item["id"]:
+                slot["id"] = item["id"]
+            if isinstance(item.get("type"), str) and item["type"]:
+                slot["type"] = item["type"]
+
+            fn_delta = item.get("function")
+            if isinstance(fn_delta, dict):
+                fn_slot = slot.setdefault("function", {})
+                fn_name = fn_delta.get("name")
+                if isinstance(fn_name, str) and fn_name:
+                    fn_slot["name"] = fn_name
+                fn_args = fn_delta.get("arguments")
+                if isinstance(fn_args, str) and fn_args:
+                    prev = fn_slot.get("arguments", "")
+                    fn_slot["arguments"] = f"{prev}{fn_args}"
+
+    def _chat_once_agent_streaming_raw(self, messages: list[dict], tools: list[dict]) -> dict:
+        stream = self._try_chat_completion(messages, tools=tools, stream=True)
+        merged_tool_calls: list[dict] = []
+        merged_content_parts: list[str] = []
+        merged_role = "assistant"
+        finish_reason = None
+        usage_payload = None
+        allowed_tool_names = set()
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function")
+            if not isinstance(fn, dict):
+                continue
+            name = fn.get("name")
+            if isinstance(name, str) and name:
+                allowed_tool_names.add(name)
+
+        for chunk in stream:
+            if self.isInterruptionRequested():
+                raise RuntimeError("generation interrupted")
+
+            if not isinstance(chunk, dict):
+                continue
+
+            usage = chunk.get("usage")
+            if isinstance(usage, dict):
+                usage_payload = usage
+
+            choices = chunk.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            choice = choices[0] if isinstance(choices[0], dict) else {}
+            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+
+            role = delta.get("role")
+            if isinstance(role, str) and role:
+                merged_role = role
+
+            token = delta.get("content")
+            if isinstance(token, str) and token:
+                merged_content_parts.append(token)
+                if self.runtime is not None and getattr(self.runtime, "_debug_enabled", False) and getattr(self.runtime, "_debug_emit_tokens", False):
+                    self.event.emit(
+                        {
+                            "event": "LLM_TOKEN",
+                            "data": token,
+                            "timestamp": time.time(),
+                            "channel": "raw_infer",
+                        }
+                    )
+                # Step-2 stop guard for raw JSON tool-call emission:
+                # once a valid bare tool-call JSON is complete, stop this infer
+                # stream before trailing speculative prose is generated.
+                joined = "".join(merged_content_parts)
+                task_batch_end = _find_first_task_query_batch_end(joined)
+                if task_batch_end is not None:
+                    merged_content_parts = [joined[:task_batch_end]]
+                    finish_reason = finish_reason or "task_query_batch_recovered"
+                    break
+                tool_json_end = _find_first_tool_json_end(
+                    joined,
+                    allowed_tool_names=allowed_tool_names if allowed_tool_names else None,
+                )
+                if tool_json_end is not None:
+                    merged_content_parts = [joined[:tool_json_end]]
+                    finish_reason = finish_reason or "raw_tool_call_recovered"
+                    break
+                # Guard 3: no-tools path (observe/commit review JSON).
+                # Models like Qwen2.5 decode <|im_end|> as a newline token that
+                # passes through streaming content, causing hundreds of \n tokens
+                # after the closing }. Cut the stream as soon as a complete JSON
+                # object is present and no tools are expected.
+                if not allowed_tool_names:
+                    bare_json_end = _find_first_bare_json_object_end(joined)
+                    if bare_json_end is not None:
+                        merged_content_parts = [joined[:bare_json_end]]
+                        finish_reason = finish_reason or "bare_json_complete"
+                        break
+
+            delta_tool_calls = delta.get("tool_calls")
+            if isinstance(delta_tool_calls, list):
+                self._merge_stream_tool_calls(merged_tool_calls, delta_tool_calls)
+
+            chunk_finish = choice.get("finish_reason")
+            if isinstance(chunk_finish, str):
+                finish_reason = chunk_finish
+
+        message: dict = {
+            "role": merged_role,
+            "content": "".join(merged_content_parts) if merged_content_parts else None,
+        }
+        if merged_tool_calls:
+            message["tool_calls"] = merged_tool_calls
+
+        response: dict = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ]
+        }
+        if isinstance(usage_payload, dict):
+            response["usage"] = usage_payload
+        return response
 
     def _chat_once_agent_raw(self, messages: list[dict], tools: list[dict]) -> dict:
         """Adapter-aware agent path — returns raw dict for ProtocolAdapter."""
-        response = self._try_chat_completion(messages, tools=tools)
-        return response
+        try:
+            return self._chat_once_agent_streaming_raw(messages, tools)
+        except Exception as exc:
+            if self.isInterruptionRequested():
+                raise
+            self.trace.emit(f"[WORKER] stream fallback: {exc}")
+            return self._try_chat_completion(messages, tools=tools, stream=False)
 
     def _emit_runtime_event(self, payload: dict) -> None:
         self.event.emit(payload)
@@ -211,13 +500,33 @@ class GeneratorWorker(QThread):
         if event_name == "LLM_TOKEN":
             token = payload.get("data", "")
             if isinstance(token, str) and token:
-                self.token.emit(token)
-                self.usage.emit(len(token))
-        elif event_name == "FINAL_OUTPUT":
-            token = payload.get("data", "")
-            if isinstance(token, str) and token:
-                self.token.emit(token)
-                self.usage.emit(len(token))
+                if self._stream_mode == "char":
+                    for char in token:
+                        self.token.emit(char)
+                    self.usage.emit(len(token))
+                    return
+                self._stream_token_buffer.append(token)
+                self._stream_buffer_chars += len(token)
+                now = time.monotonic()
+                elapsed_ms = (now - self._stream_last_emit_ts) * 1000.0
+                if (
+                    self._stream_buffer_chars >= self._stream_emit_chars
+                    or elapsed_ms >= self._stream_emit_interval_ms
+                ):
+                    self._flush_stream_token_buffer()
+
+    def _flush_stream_token_buffer(self, *, force: bool = False) -> None:
+        if not self._stream_token_buffer:
+            return
+        if not force and self._stream_buffer_chars <= 0:
+            return
+        chunk = "".join(self._stream_token_buffer)
+        self._stream_token_buffer.clear()
+        self._stream_buffer_chars = 0
+        self._stream_last_emit_ts = time.monotonic()
+        if chunk:
+            self.token.emit(chunk)
+            self.usage.emit(len(chunk))
 
 
     def run(self):
@@ -229,109 +538,11 @@ class GeneratorWorker(QThread):
         loop_history = list(self.messages)
 
         try:
-            if self.agent_mode and self.runtime is not None:
-                # --- Set up Protocol Adapter ---
-                model_profile_id = getattr(self, "_model_profile_id", "local_xml")
-                profile = get_profile(model_profile_id)
-                adapter = ProtocolAdapter(profile)
-                self.runtime._protocol_adapter = adapter
-
-                # --- Set up Execution Contract ---
-                contract = getattr(self, "_contract", None)
-                self.runtime._contract = contract
-
-                # --- Wire adapter-aware LLM call ---
-                self.runtime._llm_call = self._chat_once_agent_raw
-                self.runtime._should_stop = self.isInterruptionRequested
-                self.runtime._emit_event = self._emit_runtime_event
-
-                self.trace.emit(
-                    f"[WORKER] adapter: profile={profile.profile_id}, "
-                    f"format={profile.tool_call_format.value}, "
-                    f"strict={profile.strict_mode}"
-                )
-                if contract is not None:
-                    self.trace.emit(
-                        f"[WORKER] contract: policy={contract.tool_policy.value}, "
-                        f"max_inferences={contract.max_inferences}, "
-                        f"retries={contract.max_format_retries}"
-                    )
-
-                # --- STEP-WISE EXECUTION (Option B) ---
-                # Use StepwiseAgentRuntime to yield between steps
-                # This allows Qt signals to flush to UI in real-time
-                from engine.agent_runtime_stepper import StepwiseAgentRuntime
-                
-                stepper = StepwiseAgentRuntime(
-                    runtime=self.runtime,
-                    messages=self.messages,
-                    emit_event=self._emit_runtime_event,
-                )
-                
-                # Initialize
-                init_events = stepper.initialize()
-                for ev in init_events:
-                    self._emit_runtime_event(ev)
-                
-                # Store stepper on self so it can be resumed from WAIT_ACK
-                self._stepper = stepper
-
-                # Execute steps — worker thread yields between steps
-                step_count = 0
-                awaiting_ack = False
-                self.trace.emit(f"[WORKER] starting step loop, should_continue={stepper.should_continue()}")
-                
-                while stepper.should_continue():
-                    step_count += 1
-                    self.trace.emit(f"[WORKER] beginning step {step_count}, state={stepper._current_state.value if stepper._current_state else 'None'}")
-
-                    # Check for interruption
-                    if self.isInterruptionRequested():
-                        self.trace.emit("[WORKER] interruption requested, stopping")
-                        break
-
-                    # Execute one step
-                    self.trace.emit(f"[WORKER] calling stepper.step() for step {step_count}")
-                    step_result = stepper.step()
-                    self.trace.emit(f"[WORKER] stepper.step() returned for step {step_count}")
-
-                    # Emit trace for state transition visibility
-                    self.trace.emit(
-                        f"[WORKER] step {step_count}: state={step_result.state.value}, "
-                        f"continue={step_result.should_continue}"
-                    )
-
-                    if not step_result.should_continue:
-                        if step_result.awaiting_ack:
-                            # WAIT_ACK: worker thread dies cleanly.
-                            # Stepper stays in memory. MonoGuard will spawn
-                            # a new worker via resume_agent() after user action.
-                            self.trace.emit("[WORKER] entering WAIT_ACK — thread will terminate")
-                            awaiting_ack = True
-                        break
-
-                if awaiting_ack:
-                    # Don't emit done — the stepper is parked in WAIT_ACK.
-                    # The resume path will create a new worker to finish.
-                    # Note: Worker will be cleaned up by LLMEngine when replaced
-                    return
-
-                # Get final result
-                result = stepper.get_result()
-                if result is not None:
-                    self._last_run_result = result
-                    completed = result.success
-                    assistant_text = result.output
-                    loop_history = result.history
-                else:
-                    completed = False
-                    
-            else:
-                assistant_text = self._chat_once_text(self.messages)
-                if assistant_text:
-                    self.token.emit(assistant_text)
-                    self.usage.emit(len(assistant_text))
-                completed = not self.isInterruptionRequested()
+            mode_runner = self._mode_runner
+            if mode_runner is None:
+                from engine.llm_modes.chat_worker import ChatWorkerExecutionMode
+                mode_runner = ChatWorkerExecutionMode()
+            completed, assistant_text, loop_history = mode_runner.run(self)
 
             if completed:
                 self.trace.emit("→ inference complete")
@@ -340,93 +551,8 @@ class GeneratorWorker(QThread):
             import traceback
             self.trace.emit(f"<span style='color:red'>ERROR: {e}\n{traceback.format_exc()}</span>")
         finally:
+            self._flush_stream_token_buffer(force=True)
             self.trace.emit(f"[WORKER] finished: completed={completed}, text_len={len(assistant_text)}")
-            self.done.emit(completed, assistant_text, loop_history)
-            # Note: Worker cleanup handled by LLMEngine _on_gen_finish
-
-
-class _ResumeWorker(QThread):
-    """
-    Worker thread that resumes a StepwiseAgentRuntime from WAIT_ACK.
-
-    Created by LLMEngine.resume_agent() after user approves/denies.
-    """
-    token = Signal(str)
-    trace = Signal(str)
-    done = Signal(bool, str, list)
-    usage = Signal(int)
-    event = Signal(dict)
-
-    def __init__(self, stepper, action: str):
-        super().__init__()
-        self._stepper = stepper
-        self._action = action
-
-    def _emit_runtime_event(self, payload: dict) -> None:
-        self.event.emit(payload)
-        event_name = payload.get("event")
-        if event_name in ("LLM_TOKEN", "FINAL_OUTPUT"):
-            token_data = payload.get("data", "")
-            if isinstance(token_data, str) and token_data:
-                self.token.emit(token_data)
-                self.usage.emit(len(token_data))
-
-    def run(self):
-        completed = False
-        assistant_text = ""
-        loop_history = []
-
-        try:
-            stepper = self._stepper
-
-            # Rewire the event emitter to this worker's signals
-            stepper._emit_event = self._emit_runtime_event
-            stepper._runtime._emit_event = self._emit_runtime_event
-            stepper._runtime._should_stop = self.isInterruptionRequested
-
-            # Resume from ACK
-            self.trace.emit(f"[RESUME] action={self._action}")
-            stepper.resume_from_ack(self._action)
-
-            # Continue stepping
-            step_count = 0
-            awaiting_ack = False
-            while stepper.should_continue():
-                step_count += 1
-
-                if self.isInterruptionRequested():
-                    self.trace.emit("[RESUME] interruption requested, stopping")
-                    break
-
-                step_result = stepper.step()
-                self.trace.emit(
-                    f"[RESUME] step {step_count}: state={step_result.state.value}, "
-                    f"continue={step_result.should_continue}"
-                )
-
-                if not step_result.should_continue:
-                    if step_result.awaiting_ack:
-                        self.trace.emit("[RESUME] re-entering WAIT_ACK — thread will terminate")
-                        awaiting_ack = True
-                    break
-
-            if awaiting_ack:
-                return
-
-            result = stepper.get_result()
-            if result is not None:
-                completed = result.success
-                assistant_text = result.output
-                loop_history = result.history
-            else:
-                completed = False
-
-        except Exception as e:
-            self.trace.emit(f"[RESUME] EXCEPTION: {e}")
-            import traceback
-            self.trace.emit(f"<span style='color:red'>RESUME ERROR: {e}\n{traceback.format_exc()}</span>")
-        finally:
-            self.trace.emit(f"[RESUME] finished: completed={completed}, text_len={len(assistant_text)}")
             self.done.emit(completed, assistant_text, loop_history)
             # Note: Worker cleanup handled by LLMEngine _on_gen_finish
 
@@ -461,7 +587,8 @@ class LLMEngine(QObject):
         self._worker_seed_count: int = 0
         self._worker_agent_mode: bool = False
         self._runtime_lock = Lock()
-        self._runtime = AgentRuntime(llm_call=lambda _m, _t: AgentMessage(role="assistant", content=""), emit_event=self.sig_agent_event.emit)
+        self._runtime = None
+        self._mode_chat = ChatModeStrategy()
 
     def set_ctx_limit(self, payload: dict) -> None:
         value = payload.get("ctx_limit") if isinstance(payload, dict) else None
@@ -555,17 +682,6 @@ class LLMEngine(QObject):
         self.set_status(SystemStatus.READY)
         self.reset_conversation(MASTER_PROMPT)
 
-        # Eager-load agent runtime dependencies to avoid first-call delay
-        # These modules have regex patterns that compile on first use
-        try:
-            from engine import contract, protocol_adapter
-            # Touch intent classification to pre-compile regexes if needed
-            _ = contract.classify_intent("warmup", "code")
-            _ = protocol_adapter.get_profile("local_xml")
-            self.sig_trace.emit("→ agent runtime warmed up")
-        except Exception as e:
-            self.sig_trace.emit(f"[WARN] agent runtime warmup failed: {e}")
-
         self.sig_trace.emit("→ system online")
         # Note: self.loader cleanup deferred to _cleanup_loader via QThread.finished
 
@@ -639,11 +755,11 @@ class LLMEngine(QObject):
         self.conversation_history = [h for h in history if isinstance(h, dict)]
         self._pending_user_index = None
 
-    def _compile_system_prompt(self, config, agent_mode=False, model_profile_id="local_xml"):
-        if agent_mode:
-            base_prompt = get_agent_prompt(model_profile_id)
-        else:
-            base_prompt = MASTER_PROMPT
+    def _compile_system_prompt(
+        self,
+        config,
+    ):
+        base_prompt = MASTER_PROMPT
         tags = config.get("behavior_tags", [])
         cleaned = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
         if not cleaned:
@@ -657,9 +773,20 @@ class LLMEngine(QObject):
             temp,
             top_p,
             max_tokens,
-            runtime=self._runtime if self._worker_agent_mode else None,
-            agent_mode=self._worker_agent_mode,
+            runtime=None,
+            agent_mode=False,
+            mode_runner=self._mode_chat.create_worker_mode(),
         )
+
+    def _build_execution_contract(
+        self,
+        *,
+        request_agent_mode: bool,
+        payload: dict,
+        prompt: str,
+        model_profile_id: str,
+    ):
+        return None
 
     def generate(self, payload: dict):
         # Clean up any previous worker that has finished
@@ -699,51 +826,12 @@ class LLMEngine(QObject):
         self.sig_trace.emit(
             f"[ENGINE] generate: history_len={len(self.conversation_history)}, prompt={repr(prompt[:80])}, model_loaded={self.model_loaded}"
         )
-        config = payload.get("config")
-        if config is None:
-            config = load_config()
-
-        request_agent_mode = bool(payload.get("agent_mode", False))
-
-        # Model profile for protocol adapter alignment
-        model_profile_id = str(payload.get("model_profile_id", "local_xml"))
-
-        system_prompt = self._compile_system_prompt(config, agent_mode=request_agent_mode, model_profile_id=model_profile_id)
-        temp = float(config.get("temp", 0.7))
-        top_p = float(config.get("top_p", 0.9))
-        max_tokens = int(config.get("max_tokens", 2048))
-
-        self._ephemeral_generation = bool(payload.get("ephemeral", False))
-        thinking_mode = bool(payload.get("thinking_mode", False))
-
-        if not self.conversation_history:
-            self.reset_conversation(MASTER_PROMPT)
-
-        system_entry = {"role": "system", "content": system_prompt}
-        if self.conversation_history[0].get("role") != "system":
-            self.conversation_history.insert(0, system_entry)
-        else:
-            self.conversation_history[0] = system_entry
-
-        is_update = prompt.startswith("You were interrupted mid-generation.")
-        if not self._ephemeral_generation and not is_update:
-            self.conversation_history.append({"role": "user", "content": prompt})
-            self._pending_user_index = len(self.conversation_history) - 1
-            messages = list(self.conversation_history)
-        else:
-            messages = list(self.conversation_history)
-            if not is_update:
-                messages.append({"role": "user", "content": prompt})
-            self._pending_user_index = None
-
-        if thinking_mode and not self._ephemeral_generation:
-            messages = list(messages)
-            messages.append(
-                {
-                    "role": "system",
-                    "content": "Use private reasoning to think step-by-step, then provide a concise final answer.",
-                }
-            )
+        spec = self._mode_chat.prepare_generation(self, payload if isinstance(payload, dict) else {})
+        messages = spec.messages
+        model_profile_id = spec.model_profile_id
+        temp = spec.temp
+        top_p = spec.top_p
+        max_tokens = spec.max_tokens
 
         # Clean up any existing worker before starting a new one (Bug 2 fix)
         if self.worker is not None and self.worker.isRunning():
@@ -754,31 +842,9 @@ class LLMEngine(QObject):
 
         set_workspace_root()
         self._worker_seed_count = len(messages)
-        self._worker_agent_mode = request_agent_mode
+        self._worker_agent_mode = False
 
-        # --- Create ExecutionContract for agent mode ---
         contract = None
-        if request_agent_mode:
-            source_page = str(payload.get("source_page", "code"))
-            allowed_tools = self._runtime._capability_manager.allowed_tools() if self._runtime else None
-            contract_factory = ContractFactory(
-                default_profile_id=model_profile_id,
-                default_max_inferences=MAX_AGENT_STEPS if not hasattr(self, '_runtime') else 25,
-                default_ctx_limit=self.ctx_limit,
-            )
-            contract = contract_factory.create(
-                prompt=prompt,
-                source_page=source_page,
-                allowed_tools=allowed_tools,
-                model_profile_id=model_profile_id,
-                ctx_limit=self.ctx_limit,
-                model_fingerprint=getattr(self, "_model_fingerprint", ""),
-            )
-            self.sig_trace.emit(
-                f"[ENGINE] contract: id={contract.contract_id[:8]}..., "
-                f"policy={contract.tool_policy.value}, "
-                f"profile={contract.model_profile_id}"
-            )
 
         self.worker = self._create_generator_worker(messages, temp, top_p, max_tokens)
         # Pass profile and contract to worker for adapter setup
@@ -793,101 +859,37 @@ class LLMEngine(QObject):
         self.worker.start()
 
 
-    def resume_agent(self, action: str = "approve") -> bool:
-        """
-        Resume an agent parked in WAIT_ACK state.
-
-        Creates a new GeneratorWorker that picks up the stepper from memory.
-        action: "approve" | "deny" | "timeout"
-
-        Returns True if resume was initiated, False if no stepper to resume.
-        """
-        # Find the parked stepper from the last worker
-        stepper = None
-        if self.worker and hasattr(self.worker, "_stepper"):
-            stepper = self.worker._stepper
-
-        if stepper is None:
-            self.sig_trace.emit("[ENGINE] resume_agent: no parked stepper found")
-            return False
-
-        from engine.contract import RuntimeState as RS
-        if stepper._current_state != RS.WAIT_ACK:
-            self.sig_trace.emit(f"[ENGINE] resume_agent: stepper not in WAIT_ACK (state={stepper._current_state})")
-            return False
-
-        self.sig_trace.emit(f"[ENGINE] resume_agent: action={action}")
-        self.set_status(SystemStatus.RUNNING)
-
-        # Clean up old worker if it exists but is finished
-        old_worker = self.worker
-        if old_worker is not None:
-            # Only cleanup if finished - if still running, something is wrong
-            if not old_worker.isRunning():
-                # Worker finished - safe to disconnect and replace
-                try:
-                    old_worker.token.disconnect()
-                    old_worker.trace.disconnect()
-                    old_worker.usage.disconnect()
-                    old_worker.event.disconnect()
-                    old_worker.done.disconnect()
-                except Exception:
-                    pass
-                self.worker = None
-            else:
-                # Worker still running - this shouldn't happen in WAIT_ACK flow
-                self.sig_trace.emit("[ENGINE] WARNING: worker still running during resume, waiting...")
-                old_worker.requestInterruption()
-                if not old_worker.wait(1000):
-                    old_worker.terminate()
-                    old_worker.wait(500)
-                try:
-                    old_worker.token.disconnect()
-                    old_worker.trace.disconnect()
-                    old_worker.usage.disconnect()
-                    old_worker.event.disconnect()
-                    old_worker.done.disconnect()
-                except Exception:
-                    pass
-                self.worker = None
-
-        # Create a resume worker that runs the stepper from WAIT_ACK
-        resume_worker = _ResumeWorker(stepper, action)
-        resume_worker.token.connect(self.sig_token)
-        resume_worker.trace.connect(self.sig_trace)
-        resume_worker.usage.connect(self._on_usage_update)
-        resume_worker.event.connect(self.sig_agent_event)
-        resume_worker.done.connect(self._on_gen_finish)
-
-        self.worker = resume_worker
-        self._worker_agent_mode = True
-        resume_worker.start()
-        return True
-
     def runtime_command(self, command: str, payload: dict | None = None) -> dict:
         request = payload if isinstance(payload, dict) else {}
-        
-        # OFAC v0.2: Handle ack_decision to resume from WAIT_ACK
-        if command == "ack_decision":
-            decision = request.get("decision", "deny")
-            success = self.resume_agent(action=decision)
-            result = {"ok": success, "action": decision}
-            self.sig_agent_event.emit({"event": "ACK_DECISION_HANDLED", "decision": decision, "success": success})
-            return result
-        
-        result = self._runtime.runtime_command(command, request)
-        self.sig_agent_event.emit({"event": "RUNTIME_COMMAND_RESULT", "request": request, "result": result})
+        result = {
+            "ok": False,
+            "error": "runtime_command is only available on AgentLLMEngine",
+            "command": command,
+            "request": request,
+        }
+        self.sig_trace.emit(f"[ENGINE] runtime_command ignored: {command}")
         return result
 
     def stop_generation(self):
         if self._status == SystemStatus.LOADING and self.loader and self.loader.isRunning():
             self._load_cancel_requested = True
-            self.sig_trace.emit("→ load cancel requested; will stop after initialization completes")
+            self.sig_trace.emit("-> load cancel requested; will stop after initialization completes")
             return
 
         self._ephemeral_generation = False
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
+
+        try:
+            stop_summary = stop_active_process_groups(grace_timeout_s=1.0)
+            if int(stop_summary.get("active_before", 0) or 0) > 0:
+                self.sig_trace.emit(
+                    "[ENGINE] stop: terminated subprocess groups "
+                    f"(terminated={stop_summary.get('terminated', 0)}, "
+                    f"force_killed={stop_summary.get('force_killed', 0)})"
+                )
+        except Exception as exc:
+            self.sig_trace.emit(f"[ENGINE] stop: subprocess cleanup warning: {exc}")
 
     def force_stop(self):
         """Force terminate running generation thread."""
@@ -906,20 +908,7 @@ class LLMEngine(QObject):
 
     def _on_gen_finish(self, completed, assistant_text, loop_history):
         self.sig_trace.emit(f"[ENGINE] _on_gen_finish: completed={completed}, text_len={len(assistant_text)}")
-        if completed and not self._ephemeral_generation:
-            if self._worker_agent_mode and isinstance(loop_history, list):
-                delta = loop_history[self._worker_seed_count :]
-                for msg in delta:
-                    if isinstance(msg, dict):
-                        self.conversation_history.append(msg)
-                if assistant_text:
-                    self.conversation_history.append(
-                        {"role": "assistant", "content": assistant_text}
-                    )
-            else:
-                self.conversation_history.append({"role": "assistant", "content": assistant_text})
-        self._pending_user_index = None
-        self._ephemeral_generation = False
+        self._mode_chat.on_generation_finished(self, completed, assistant_text, loop_history)
         self.sig_token.emit("\n")
         self.sig_finished.emit()
         self.set_status(SystemStatus.READY)

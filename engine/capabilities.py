@@ -19,8 +19,36 @@ class CapabilityScope(str, Enum):
 
 
 CAPABILITY_MANIFEST: dict[str, list[str]] = {
-    "code": ["read_file", "write_file", "list_dir", "grep_search", "run_cmd", "apply_patch", "run_python"],
-    "analysis": ["read_file", "list_dir", "grep_search", "run_python"],
+    "code": [
+        "read_file",
+        "write_file",
+        "list_dir",
+        "grep_search",
+        "glob_files",
+        "mkdir",
+        "move_path",
+        "copy_path",
+        "delete_path",
+        "zip_path",
+        "unzip_archive",
+        "run_cmd",
+        "run_tests",
+        "apply_patch",
+        "run_python",
+        "git_status",
+        "git_diff",
+        "http_fetch",
+    ],
+    "analysis": [
+        "read_file",
+        "list_dir",
+        "grep_search",
+        "glob_files",
+        "run_python",
+        "git_status",
+        "git_diff",
+        "http_fetch",
+    ],
     "secure": ["read_file"],
 }
 
@@ -29,10 +57,21 @@ TOOL_SCOPE_MAP: dict[str, CapabilityScope] = {
     "read_file": CapabilityScope.READ,
     "list_dir": CapabilityScope.READ,
     "grep_search": CapabilityScope.READ,
+    "glob_files": CapabilityScope.READ,
+    "git_status": CapabilityScope.READ,
+    "git_diff": CapabilityScope.READ,
     "write_file": CapabilityScope.WRITE,
     "apply_patch": CapabilityScope.WRITE,
+    "mkdir": CapabilityScope.WRITE,
+    "move_path": CapabilityScope.WRITE,
+    "copy_path": CapabilityScope.WRITE,
+    "delete_path": CapabilityScope.WRITE,
+    "zip_path": CapabilityScope.WRITE,
+    "unzip_archive": CapabilityScope.WRITE,
     "run_cmd": CapabilityScope.EXEC,
     "run_python": CapabilityScope.EXEC,
+    "run_tests": CapabilityScope.EXEC,
+    "http_fetch": CapabilityScope.NETWORK,
 }
 
 
@@ -103,8 +142,31 @@ class CapabilityManager:
 def extract_tool_path(tool: str, arguments: dict[str, Any]) -> str | None:
     if not isinstance(arguments, dict):
         return None
-    if tool in {"read_file", "write_file", "list_dir", "grep_search", "apply_patch"}:
+    if tool in {
+        "read_file",
+        "write_file",
+        "list_dir",
+        "grep_search",
+        "glob_files",
+        "apply_patch",
+        "delete_path",
+        "mkdir",
+        "git_status",
+        "git_diff",
+    }:
         raw = arguments.get("path", ".")
+        if isinstance(raw, str):
+            return PurePosixPath(raw).as_posix()
+    if tool == "unzip_archive":
+        raw = arguments.get("dst", ".")
+        if isinstance(raw, str):
+            return PurePosixPath(raw).as_posix()
+    if tool == "zip_path":
+        raw = arguments.get("dst")
+        if isinstance(raw, str):
+            return PurePosixPath(raw).as_posix()
+    if tool in {"move_path", "copy_path"}:
+        raw = arguments.get("src")
         if isinstance(raw, str):
             return PurePosixPath(raw).as_posix()
     return "."

@@ -41,8 +41,8 @@ QPushButton:pressed {{ background: {t.bg_button_pressed}; }}
 QPushButton:disabled {{ background: {t.bg_button_disabled}; color: {t.border_light}; border-color: {t.border_subtle}; }}
 
 QPushButton.MonoButton {{ font-size: 10px; letter-spacing: 1px; }}
-QPushButton.MonoButton[accent="true"] {{ color: {t.fg_accent}; }}
-QPushButton.MonoButton[accent="true"]:hover {{ color: {t.accent_primary}; }}
+QPushButton.MonoButton[accent="true"] {{ color: {t.accent_primary}; }}
+QPushButton.MonoButton[accent="true"]:hover {{ color: {t.accent_primary}; border-color: {t.accent_primary}; }}
 QPushButton.MonoTriangleButton {{ color: {t.fg_text}; }}
 QPushButton.SidebarButton {{
     background: transparent;
@@ -92,10 +92,13 @@ QFrame#drop_panel {{ background: transparent; border: 2px dashed {t.accent_prima
 
 QFrame.MessageWidget {{ border-left: 2px solid {t.border_subtle}; background: transparent; padding: 0px; }}
 QFrame.MessageWidget[role="assistant"] {{ border-left-color: {t.accent_primary}; }}
+QFrame.MessageWidget[role="system"] {{ border-left-color: {t.fg_info}; }}
 QLabel#msg_role {{ font-size: 9px; font-weight: bold; color: {t.fg_dim}; background: transparent; }}
+QLabel#msg_role[role="system"] {{ color: {t.fg_info}; }}
 QLabel#msg_time {{ font-size: 8px; color: {t.fg_info}; background: transparent; }}
 QLabel#msg_content {{ color: {t.fg_text}; font-size: 11px; background: transparent; padding: 0px; }}
 QTextEdit#msg_content {{ color: {t.fg_text}; font-size: 11px; background: transparent; border: none; padding: 0px; margin: 0px; }}
+QTextEdit#msg_content[role="system"] {{ color: {t.fg_secondary}; }}
 QPushButton.msg_icon_action {{
     background: transparent;
     border: 1px solid {t.border_subtle};

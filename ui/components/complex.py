@@ -76,52 +76,148 @@ class VitalsWindow(QDialog):
         self.state = state
         self.setObjectName("vitals_window")
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+
+        import core.style as _s
+
+        self.setStyleSheet(
+            f"""
+            QDialog#vitals_window {{
+                background: {_s.BG_MAIN};
+                border: 1px solid {_s.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+            QFrame#vitals_frame {{
+                background: {_s.BG_PANEL};
+                border: 1px solid {_s.BORDER_SUBTLE};
+                border-radius: 8px;
+            }}
+            QLabel#vitals_title {{
+                color: {_s.ACCENT_PRIMARY};
+                font-family: Consolas;
+                font-size: 10px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                border: none;
+                background: transparent;
+            }}
+            QLabel#vitals_subtitle {{
+                color: {_s.FG_DIM};
+                font-family: Consolas;
+                font-size: 9px;
+                border: none;
+                background: transparent;
+            }}
+            QLabel#vitals_key {{
+                color: {_s.FG_DIM};
+                font-family: Consolas;
+                font-size: 9px;
+                font-weight: bold;
+                border: none;
+                background: transparent;
+            }}
+            QLabel#vitals_value {{
+                color: {_s.FG_TEXT};
+                font-family: Consolas;
+                font-size: 9px;
+                font-weight: bold;
+                border: none;
+                background: transparent;
+            }}
+            QProgressBar#vitals_bar {{
+                background: {_s.BG_BUTTON};
+                border: 1px solid {_s.BORDER_SUBTLE};
+                border-radius: 3px;
+                text-align: center;
+            }}
+            QProgressBar#vitals_bar::chunk {{
+                background: {_s.ACCENT_PRIMARY};
+                border-radius: 2px;
+            }}
+            QPushButton#vitals_close {{
+                background: transparent;
+                border: 1px solid {_s.BORDER_SUBTLE};
+                color: {_s.FG_DIM};
+                border-radius: 3px;
+                padding: 0px;
+                font-family: Consolas;
+                font-size: 9px;
+                font-weight: bold;
+            }}
+            QPushButton#vitals_close:hover {{
+                color: {_s.FG_ERROR};
+                border-color: {_s.FG_ERROR};
+                background: {_s.BG_BUTTON_HOVER};
+            }}
+            """
+        )
+
         layout = QVBoxLayout(self)
         layout.setSpacing(0)
-        layout.setContentsMargins(0,0,0,0)
-        
+        layout.setContentsMargins(0, 0, 0, 0)
+
         self.frame = QFrame()
-        # Glassmorphic + Ultra Compact
-        
+        self.frame.setObjectName("vitals_frame")
         frame_layout = QVBoxLayout(self.frame)
-        frame_layout.setSpacing(2) 
-        frame_layout.setContentsMargins(6, 6, 6, 6)
-        
-        # Header
+        frame_layout.setSpacing(6)
+        frame_layout.setContentsMargins(10, 8, 10, 8)
+
         head = QHBoxLayout()
-        lbl = QLabel("SYSTEM VITALS")
-        btn_x = QPushButton("×")
-        btn_x.setFixedSize(14, 14)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(0)
+        title = QLabel("VITALS")
+        title.setObjectName("vitals_title")
+        subtitle = QLabel("runtime telemetry")
+        subtitle.setObjectName("vitals_subtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+
+        btn_x = QPushButton("x")
+        btn_x.setObjectName("vitals_close")
+        btn_x.setFixedSize(16, 16)
         btn_x.clicked.connect(self.close)
-        head.addWidget(lbl)
+
+        head.addLayout(title_col)
         head.addStretch()
         head.addWidget(btn_x)
         frame_layout.addLayout(head)
-        
-        # Bars
+
         self.bars = {}
+        self.value_labels = {}
         for key in ["VRAM", "CTX", "CPU", "GPU"]:
             row = QHBoxLayout()
-            row.setSpacing(4)
-            l = QLabel(key)
-            l.setFixedWidth(22)
-            
+            row.setSpacing(6)
+            row.setContentsMargins(0, 0, 0, 0)
+
+            label = QLabel(key)
+            label.setObjectName("vitals_key")
+            label.setFixedWidth(34)
+
             bar = QProgressBar()
-            bar.setFixedHeight(2) # Ultra thin
+            bar.setObjectName("vitals_bar")
+            bar.setFixedHeight(8)
             bar.setTextVisible(False)
+            bar.setRange(0, 100)
             bar.setValue(0)
             self.bars[key] = bar
-            
-            row.addWidget(l)
-            row.addWidget(bar)
+
+            value = QLabel("0%")
+            value.setObjectName("vitals_value")
+            value.setFixedWidth(34)
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.value_labels[key] = value
+
+            row.addWidget(label)
+            row.addWidget(bar, 1)
+            row.addWidget(value)
             frame_layout.addLayout(row)
-            
+
         layout.addWidget(self.frame)
-        
-        # Make the window itself small
-        self.setFixedSize(140, 90)
+        self.setFixedSize(220, 146)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_stats)
@@ -129,17 +225,35 @@ class VitalsWindow(QDialog):
         self.old_pos = None
 
     def update_stats(self):
+        import core.style as _s
         if self.state.ctx_limit > 0:
             ctx_p = int((self.state.ctx_used / self.state.ctx_limit) * 100)
-            self.bars["CTX"].setValue(ctx_p)
+            self.bars["CTX"].setValue(max(0, min(100, ctx_p)))
         import random
         base_load = 10 if not self.state.model_loaded else 40
-        self.bars["VRAM"].setValue(base_load + random.randint(0, 5))
-        self.bars["CPU"].setValue(random.randint(5, 15))
-        self.bars["GPU"].setValue(base_load + random.randint(0, 10))
-        
-    def mousePressEvent(self, e): self.old_pos = e.globalPosition().toPoint()
-    def mouseReleaseEvent(self, e): self.old_pos = None
+        self.bars["VRAM"].setValue(max(0, min(100, base_load + random.randint(0, 5))))
+        self.bars["CPU"].setValue(max(0, min(100, random.randint(5, 15))))
+        self.bars["GPU"].setValue(max(0, min(100, base_load + random.randint(0, 10))))
+
+        for key, bar in self.bars.items():
+            value = int(bar.value())
+            self.value_labels[key].setText(f"{value}%")
+            if value >= 90:
+                color = _s.FG_ERROR
+            elif value >= 75:
+                color = _s.FG_WARN
+            else:
+                color = _s.FG_TEXT
+            self.value_labels[key].setStyleSheet(
+                f"color: {color}; font-family: Consolas; font-size: 9px; font-weight: bold; border: none;"
+            )
+
+    def mousePressEvent(self, e):
+        self.old_pos = e.globalPosition().toPoint()
+
+    def mouseReleaseEvent(self, e):
+        self.old_pos = None
+
     def mouseMoveEvent(self, e):
         if self.old_pos:
             delta = e.globalPosition().toPoint() - self.old_pos
@@ -335,25 +449,44 @@ class SplitControlBlock(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setFixedSize(45, 34)
+        self.setFixedSize(54, 34)
         layout = QGridLayout(self)
-        layout.setContentsMargins(0,0,0,0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
-        self.btn_min = QPushButton("─")
+
+        self._glyph_min = "\U0001F5D5"
+        self._glyph_max = "\U0001F5D6"
+        self._glyph_restore = "\U0001F5D7"
+        self._glyph_close = "\U0001F5D9"
+
+        self.btn_min = QPushButton(self._glyph_min)
         self.btn_min.setProperty("class", "SplitControl")
-        self.btn_min.setFixedSize(22, 16) 
+        self.btn_min.setFixedSize(22, 16)
+        self.btn_min.setToolTip("Minimize")
+        self.btn_min.setStyleSheet("font-family: 'Segoe UI Symbol'; font-size: 10px;")
         self.btn_min.clicked.connect(self.minClicked)
 
-        self.btn_max = QPushButton("□")
+        self.btn_max = QPushButton(self._glyph_max)
         self.btn_max.setProperty("class", "SplitControl")
         self.btn_max.setFixedSize(22, 16)
+        self.btn_max.setToolTip("Maximize")
+        self.btn_max.setStyleSheet("font-family: 'Segoe UI Symbol'; font-size: 10px;")
         self.btn_max.clicked.connect(self.maxClicked)
 
-        self.btn_close = QPushButton("×")
+        self.btn_close = QPushButton(self._glyph_close)
         self.btn_close.setObjectName("close_btn")
         self.btn_close.setProperty("class", "SplitControl")
         self.btn_close.setFixedHeight(16)
+        self.btn_close.setToolTip("Close")
+        self.btn_close.setStyleSheet("font-family: 'Segoe UI Symbol'; font-size: 10px;")
         self.btn_close.clicked.connect(self.closeClicked)
+
         layout.addWidget(self.btn_min, 0, 0)
         layout.addWidget(self.btn_max, 0, 1)
         layout.addWidget(self.btn_close, 1, 0, 1, 2)
+
+        self.set_maximized(False)
+
+    def set_maximized(self, maximized: bool) -> None:
+        self.btn_max.setText(self._glyph_restore if maximized else self._glyph_max)
+        self.btn_max.setToolTip("Restore Down" if maximized else "Maximize")

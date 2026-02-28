@@ -8,7 +8,7 @@ You are Monolith.
 CORE RULES:
 - Treat inference as a threat.
 - Only assert facts explicitly present in the user-visible context or provided by the system.
-- If information is missing or uncertain: respond with "Unknown" or "I don’t know" and stop.
+- If information is missing or uncertain: respond with \"Unknown\" or \"I don't know\" and stop.
 - Do not guess user intent.
 - Do not invent system state.
 - Do not assume defaults.
@@ -30,86 +30,15 @@ WORLD MODEL:
 - Only the current session text is authoritative.
 """.strip()
 
-
-AGENT_PROMPT_NATIVE = """
-You are Monolith Code, a coding assistant that EXECUTES tasks using tools.
-
-CRITICAL RULES:
-1. You MUST use tools to accomplish tasks. NEVER write code as prose.
-2. NEVER output reasoning, thinking, or planning. No chain-of-thought. No internal monologue.
-3. Respond ONLY with a tool call OR a brief final answer. Nothing else.
-
-TOOLS:
-- read_file(path, offset?, limit?) — read a file
-- write_file(path, content) — create or overwrite a file
-- list_dir(path, pattern?) — list directory contents
-- grep_search(pattern, path?) — regex search in files
-- run_cmd(command, timeout?) — run a shell command
-- apply_patch(path, old, new) — edit a file by replacing text
-- run_python(code, timeout?) — execute Python code (full OS access)
-
-PYTHON RUNTIME (run_python):
-- Full OS-level execution. All builtins and stdlib available.
-- Assign to `result` variable for structured return value.
-- `workspace_root` variable contains the workspace path.
-- Output goes to stdout; `result` appears in return_value.
-- Each call is a fresh subprocess.
-
-TOOL RULES:
-- Read before editing.
-- One tool call per response.
-- After edits, verify with read_file or run_cmd.
-- When done, return a brief final answer with no tool call.
-- Invoke tools via the function calling interface, NOT as text.
+ASSISTANT_COMMANDS_PROMPT = """
+ASSISTANT COMMANDS (OPTIONAL):
+- You may emit at most one command envelope when a UI action is clearly useful.
+- Supported command: open_addon
+- Allowed addon ids: "sd", "audiogen", "databank", "terminal"
+- Envelope format (exact tags):
+<monolith_cmd>{"op":"open_addon","addon":"sd"}</monolith_cmd>
+- Do not invent commands or addon ids.
 """.strip()
-
-
-AGENT_PROMPT_XML = """
-You are Monolith Code, a coding assistant that EXECUTES tasks using tools.
-
-CRITICAL RULES:
-1. You MUST use tools to accomplish tasks. NEVER write code as prose.
-2. NEVER output reasoning, thinking, or planning. No chain-of-thought. No internal monologue.
-3. Respond ONLY with a tool call OR a brief final answer. Nothing else.
-
-TOOLS:
-- read_file(path, offset?, limit?) — read a file
-- write_file(path, content) — create or overwrite a file
-- list_dir(path, pattern?) — list directory contents
-- grep_search(pattern, path?) — regex search in files
-- run_cmd(command, timeout?) — run a shell command
-- apply_patch(path, old, new) — edit a file by replacing text
-- run_python(code, timeout?) — execute Python code (full OS access)
-
-PYTHON RUNTIME (run_python):
-- Full OS-level execution. All builtins and stdlib available.
-- Assign to `result` variable for structured return value.
-- `workspace_root` variable contains the workspace path.
-- Output goes to stdout; `result` appears in return_value.
-- Each call is a fresh subprocess.
-
-To invoke a tool, output exactly one block:
-<tool_call>
-{"name": "tool_name", "args": {"key": "value"}}
-</tool_call>
-
-TOOL RULES:
-- Read before editing.
-- One tool call per response.
-- After edits, verify with read_file or run_cmd.
-- When done, return a brief final answer with NO tool_call block.
-""".strip()
-
-
-def get_agent_prompt(model_profile_id: str = "local_xml") -> str:
-    """Return the appropriate agent prompt for the model profile."""
-    if model_profile_id in ("native", "local_native"):
-        return AGENT_PROMPT_NATIVE
-    return AGENT_PROMPT_XML
-
-
-# Legacy alias — default to XML for backward compatibility
-AGENT_PROMPT = AGENT_PROMPT_XML
 
 TAG_MAP = {
     "helpful": "[TONE] neutral\n[DETAIL] medium",
@@ -127,6 +56,7 @@ DEFAULT_CONFIG = {
     "ctx_limit": 8192,
     "system_prompt": MASTER_PROMPT,
     "behavior_tags": [],
+    "assistant_commands_enabled": False,
 }
 
 CONFIG_PATH = CONFIG_DIR / "llm_config.json"
@@ -140,9 +70,10 @@ def load_config():
             with CONFIG_PATH.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
                 if isinstance(data, dict):
-                    if "system_prompt" in data or "context_injection" in data:
+                    if "system_prompt" in data or "context_injection" in data or "pipeline_id" in data:
                         data.pop("system_prompt", None)
                         data.pop("context_injection", None)
+                        data.pop("pipeline_id", None)
                         resave_config = True
                     config.update(data)
         except Exception:
@@ -150,7 +81,8 @@ def load_config():
     config.setdefault("behavior_tags", [])
     if not isinstance(config.get("behavior_tags"), list):
         config["behavior_tags"] = []
-    config["system_prompt"] = MASTER_PROMPT
+    config["assistant_commands_enabled"] = bool(config.get("assistant_commands_enabled", False))
+    config["system_prompt"] = build_system_prompt(config)
     if resave_config:
         save_config(config)
     return config
@@ -160,6 +92,13 @@ def save_config(config):
     persisted = dict(config)
     persisted.pop("system_prompt", None)
     persisted.pop("context_injection", None)
+    persisted.pop("pipeline_id", None)
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with CONFIG_PATH.open("w", encoding="utf-8") as handle:
         json.dump(persisted, handle, indent=2)
+
+
+def build_system_prompt(config: dict | None = None) -> str:
+    if config and bool(config.get("assistant_commands_enabled", False)):
+        return f"{MASTER_PROMPT}\n\n{ASSISTANT_COMMANDS_PROMPT}"
+    return MASTER_PROMPT

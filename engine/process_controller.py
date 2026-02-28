@@ -98,6 +98,11 @@ class ProcessGroupController:
         if sys.platform != "win32":
             # POSIX: create new session so we get a process group
             kwargs["preexec_fn"] = os.setsid
+        else:
+            # Windows: start a process group for CTRL/CLOSE isolation.
+            create_group = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) or 0)
+            if create_group:
+                kwargs["creationflags"] = int(kwargs.get("creationflags", 0) or 0) | create_group
 
         proc = subprocess.Popen(cmd, **kwargs)
 
@@ -305,7 +310,11 @@ class ProcessGroupController:
                 return
             except Exception:
                 pass
-        handle.proc.terminate()
+        ProcessGroupController._taskkill_tree(handle.pid, force=False)
+        try:
+            handle.proc.terminate()
+        except Exception:
+            pass
 
     @staticmethod
     def _kill_windows_job(handle: ProcessHandle) -> None:
@@ -320,7 +329,29 @@ class ProcessGroupController:
                 return
             except Exception:
                 pass
-        handle.proc.kill()
+        ProcessGroupController._taskkill_tree(handle.pid, force=True)
+        try:
+            handle.proc.kill()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _taskkill_tree(pid: int, *, force: bool) -> None:
+        if sys.platform != "win32":
+            return
+        cmd = ["taskkill", "/PID", str(pid), "/T"]
+        if force:
+            cmd.append("/F")
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Internal
