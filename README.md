@@ -1,42 +1,61 @@
-<p align="center">
-<img width="642" height="118" alt="monolith" src="https://github.com/user-attachments/assets/17bc1107-9fdd-4d9d-9c7d-6c9a1f00fed6" />
-</p>
+# Monolith v0.28a
 
-<p align="center">
-<b>Stop chatting with AI. Start commanding it.</b><br/>
-A local-native AI workstation that puts modular tools at your fingertips—no cloud, no chat, no compromises.
-</p>
+**Stop chatting with AI. Start commanding it.**
+
+Monolith is a local-first AI workstation built for real execution, not just conversation. It combines a modular UI, a kernel-style routing layer, and multi-engine runtime support for coding, LLM chat, vision, audio, and relay workflows.
 
 ---
 
-## Screenshots
+## What Is New in v0.28a
 
-<table style="border: none;">
-<tr>
-<td width="50%" align="center" style="border:none;">
-<img src="https://github.com/user-attachments/assets/817d57a3-fb4a-4210-80a4-511116faad0b" width="98%">
-</td>
-<td width="50%" align="center" style="border:none;">
-<img src="https://github.com/user-attachments/assets/f6f2af83-3038-42a0-b0aa-dbfa79489485" width="98%">
-</td>
-</tr>
-</table>
+- Refined CODE agent loop with stronger runtime walls and clearer event traces
+- Improved approval flow and redirect behavior while runs are active
+- Better tool execution safety with boundary-aware path controls
+- Expanded runtime observability via effect journaling and structured events
+- Cleaner module orchestration through the MonoKernel task routing path
 
-<p align="center">
-<img src="https://github.com/user-attachments/assets/7bb47e3d-0b12-413b-8fa7-24c174a4ddc4" width="88%">
-</p>
+---
 
-<p align="center">
-<i>Top: idle kernel + LLM chat · Bottom: Vision tab generating an image</i>
-</p>
+## Core Capabilities
+
+- **CODE Agent Runtime**
+  - Goal-driven execution loop with tool use, policy checks, and stop controls
+  - Inline approvals for sensitive tool scopes
+  - Timeline-first UI with cycle grouping and event visibility
+
+- **Local LLM Chat**
+  - GGUF model loading via `llama-cpp-python`
+  - Streaming generation and persistent session behavior
+
+- **Vision Generation**
+  - Stable Diffusion module integration for image generation workflows
+
+- **Audio Generation**
+  - Audio generation module support for local creative pipelines
+
+- **Relay Module**
+  - Multi-agent style message relay and room coordination primitives
+
+---
+
+## Architecture (High Level)
+
+Monolith follows a layered signal architecture:
+
+1. **UI / Addons**
+2. **MonoKernel (Guard + Dock + Bridge)**
+3. **Engines (LLM / Loop / Vision / Audio / Relay)**
+
+All execution commands are routed through the kernel path, not direct UI-to-engine calls.
 
 ---
 
 ## Quick Start
 
 ### Windows
-1. Clone repo  
-2. Run `install.bat`  
+
+1. Clone the repository
+2. Run `install.bat`
 3. Run `start.bat`
 
 ### Linux / macOS
@@ -48,33 +67,41 @@ pip install -r requirements.txt
 python main.py
 ```
 
-
-## Core Overview
-
-**Status**
-v0.2.2a — Early alpha. Built for personal use and active experimentation. Shared publicly for builders & creators.
-
-**Features**
-* **Local LLM Chat:** GGUF models via llama.cpp
-* **Image Generation:** Stable Diffusion
-* **Audio Generation:** AudioCraft
-* **System:** Persistent conversation history, modular kernel architecture, dark mode
-
-**Architecture**
-Kernel + Engines + Addons model. Engines run isolated processes; Addons control them. The Kernel enforces contracts and lifecycle boundaries.
-
-See [Kernel Contract (V2)](/monokernel/kernel_contract.md) for details.
-
 ---
 
 ## Requirements
 
-* **Python:** 3.10+
-* **GPU:** NVIDIA GPU with 8GB+ VRAM recommended (required for SD/Audio)
-* **Storage:** ~10GB disk space for base models
+- Python 3.10+
+- NVIDIA GPU recommended for Vision and Audio modules
+- Sufficient VRAM for selected local models
 
 ---
 
-<p align="center">
-  Built by <a href="https://eryndel.us">Eryndel</a>
-</p>
+## Project Layout
+
+```text
+monokernel/   # Guard, queue, and execution arbitration
+engine/       # Loop runtime, LLM engine, tools, process control
+ui/           # Main window, pages, modules, addon registry
+core/         # Shared state, config, paths, style, theme logic
+docs/         # Specs, architecture notes, prompts, contracts
+```
+
+---
+
+## Docs Pointers
+
+- `docs/architecture.md`
+- `docs/AGENT_SYSTEM_SPEC_V1.md`
+- `docs/MONOLITH_LOOP_REFACTOR_SPEC.md`
+- `docs/RUNTIME_AWARENESS_SPEC.md`
+
+---
+
+## Status
+
+**Version:** `0.28a`  
+**Stage:** Active experimental development
+
+Monolith is built for rapid iteration. Interfaces and internals can evolve quickly between versions.
+
