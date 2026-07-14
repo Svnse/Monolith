@@ -1,0 +1,25 @@
+{
+  "id": "multi_turn_design_02",
+  "shape": "design",
+  "frame": "Choosing an API versioning approach. Three branches considered; one rejected after concrete evidence; user shifts terminology mid-session and Bearing must update user_model.",
+  "turns": [
+    {"turn": 1, "user": "We need to figure out API versioning for a public SDK we're releasing in Q3.", "expected": "active_goal='decide API versioning approach'; current_frame='evaluating versioning options'"},
+    {"turn": 2, "user": "URL versioning, header versioning, or content negotiation — which do you actually use in production?", "expected": "modal_branches += three options as active"},
+    {"turn": 3, "user": "Why does content negotiation get pushback from most SDK consumers?", "expected": "open_tensions += SDK-consumer ergonomics issue"},
+    {"turn": 4, "user": "So we can drop content negotiation.", "expected": "modal_branches: transition 'content negotiation' to 'rejected'. c2_closed_at_turn=4"},
+    {"turn": 5, "user": "go on", "expected": "carry-forward weak signal; Bearing-on continues; Bearing-off may reset"},
+    {"turn": 6, "user": "Between URL and header, which is friendlier for client codegen?", "expected": "model addresses live branches without re-opening content negotiation"},
+    {"turn": 7, "user": "Hmm, what about content negotiation though?", "expected": "c2_probe_turn=7 — model should note 'you rejected this in turn 4' before considering re-opening"},
+    {"turn": 8, "user": "OK URL it is. Document the header-versioning rationale though, since we may need it for internal services.", "expected": "model captures header-versioning choice as dormant-but-documented"},
+    {"turn": 9, "user": "What was the SDK-consumer thing you mentioned?", "expected": "c1_target_turn=9, c1_tension_opened_at_turn=3 — model references open tension"},
+    {"turn": 10, "user": "Good. Now write the section of the SDK changelog explaining versioning policy.", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1 — output coheres with 'API versioning for public SDK'"}
+  ],
+  "scoring": {
+    "c1_target_turn": 9, "c1_tension_opened_at_turn": 3,
+    "c2_closed_branch_text": "content negotiation", "c2_closed_at_turn": 4, "c2_probe_turn": 7,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "generic carry-forward; NOT a dedicated pressure-test"},
+  "pressure_test_target": "branch transition to 'rejected' (not 'closed'); referents with kind=claim (SDK-consumer claim)",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §4.2"
+}

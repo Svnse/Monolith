@@ -1,0 +1,25 @@
+{
+  "id": "multi_turn_design_03",
+  "shape": "design",
+  "frame": "Planning a schema migration for a 50M-row table. User intent shifts subtly mid-session from 'design' to 'execution-prep' — Bearing's user_model should capture this.",
+  "turns": [
+    {"turn": 1, "user": "I need to add a NOT NULL column to a 50M-row table. How do I plan this?", "expected": "active_goal='plan NOT NULL column add on 50M-row table'; user_model.intent_read='planning/learning'"},
+    {"turn": 2, "user": "Walk me through the standard backfill approach.", "expected": "current_frame='explaining backfill approach'; modal_branches += [online backfill, offline maintenance window]"},
+    {"turn": 3, "user": "What's the risk under concurrent writes?", "expected": "open_tensions += concurrent-writes-during-backfill"},
+    {"turn": 4, "user": "Right. So online backfill needs the trigger-based approach?", "expected": "model confirms; branch 'online backfill' gains substructure"},
+    {"turn": 5, "user": "ok", "expected": "CARRY-FORWARD PRESSURE-TEST turn (§6.1) — V0 heuristic maps to 'analysis' but prior task_type was 'planning'; arguably should stay analysis here, mild test"},
+    {"turn": 6, "user": "Concretely — what's the SQL for the trigger?", "expected": "user_model.intent_read transition to 'executing/preparing-to-run'"},
+    {"turn": 7, "user": "And the rollback path if the trigger fails?", "expected": "open_tensions += trigger-rollback-path"},
+    {"turn": 8, "user": "What if I just use the maintenance window approach instead?", "expected": "c2_probe_turn=8 — model can return to still-active offline-maintenance branch"},
+    {"turn": 9, "user": "What was the concurrent-writes thing?", "expected": "c1_target_turn=9, c1_tension_opened_at_turn=3"},
+    {"turn": 10, "user": "OK let's run with the maintenance window. Sketch the steps.", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1; user_model.intent_read fully shifted to execution"}
+  ],
+  "scoring": {
+    "c1_target_turn": 9, "c1_tension_opened_at_turn": 3,
+    "c2_closed_branch_text": "(no branch closed; tests dormant-branch reactivation)", "c2_closed_at_turn": null, "c2_probe_turn": 8,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "PRESSURE-TEST (§6.1) — user shifting from planning to execution-prep; V0 heuristic may map wrong"},
+  "pressure_test_target": "user_model transition mid-session (planning → execution intent shift)",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §4.3"
+}

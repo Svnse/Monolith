@@ -1,0 +1,102 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Monolith specific
+ui/addons/configs/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Model files (optional - user downloads these)
+*.gguf
+*.safetensors
+*.ckpt
+*.pth
+
+# Generated content
+generated_images/
+generated_audio/
+chat_history/
+
+# Tool/runtime dirs
+artifacts/
+
+# Local code-intelligence and agent state
+.gitnexus/
+.claude/
+.codex/
+.superpowers/
+
+# Local release/development residue
+/.chat_*.patch
+/temp_*.py
+/claude_inbox.log
+/codex_peer_server.py
+/combiner.py
+/monolith_source.txt
+
+# Runtime-owned reasoning history (created on demand)
+/prompts/reasoning/*.journal.jsonl
+/prompts/*.bak.*
+/prompts/reasoning/*.bak.*
+
+# Private/internal evidence excluded from the public source snapshot
+/bugs/
+/docs/audits/
+/docs/reports/
+/docs/research/
+/docs/roadmaps/
+/docs/snapshots/
+/docs/superpowers/
+/docs/github-release/
+/docs/monothink_probes_llm_failure_v2.md
+/docs/agent-guides/AGENTS.md
+/docs/agent-guides/CLAUDE.md
+/docs/agent-guides/HANDOFF_FOR_CLAUDE.md
+/docs/agent-guides/RELAY_belief_ledger_unit1.md
+
+# Local calibration/training corpora
+/tools/frame_drift/*.json
+/tools/friction_labels.jsonl
+/scripts/ingest_audit_acus.py
+
+# Packaging output
+build/
+dist/
+*.egg-info/

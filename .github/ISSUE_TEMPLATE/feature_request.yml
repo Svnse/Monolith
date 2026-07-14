@@ -1,0 +1,67 @@
+name: Feature request
+description: Describe a user problem or workflow improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are considered best-effort. Start with the user problem and current behavior; a proposed subsystem is not a substitute for a demonstrated need.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What cannot be done reliably today, and who encounters it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Desired workflow
+      description: Describe the trigger, expected behavior, and visible result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior or workaround
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface
+      options:
+        - Desktop UI or chat
+        - Models or generation
+        - Tools or files
+        - Image or audio
+        - CONNECT, Matrix, or peers
+        - Monoline or Workshop
+        - Memory, search, or cognition
+        - MonoNote or Soundtrap
+        - Installation or documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Dependencies and boundaries
+      description: Note any new package, model, network service, credential, persistent state, file/command side effect, feature flag, or license/provenance impact.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I checked existing issues and the known limitations.
+          required: true
+        - label: I understand that submitting a request does not guarantee acceptance or a delivery date.
+          required: true

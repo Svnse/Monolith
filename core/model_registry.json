@@ -1,0 +1,723 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-04-14",
+  "generic_fallback": {
+    "sampler": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 40,
+      "min_p": 0.0,
+      "repeat_penalty": 1.1,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0
+    },
+    "output": {
+      "default_max_output_tokens": 1024,
+      "hard_cap_output_tokens": 4096,
+      "reserved_context_tokens": 512
+    }
+  },
+  "families": [
+    {
+      "id": "qwen3",
+      "display_name": "Qwen 3 / 3.5",
+      "publisher": "Alibaba Cloud",
+      "homepage": "https://qwenlm.github.io/",
+      "license": "apache-2.0",
+      "match": {
+        "family_aliases": ["qwen3", "qwen-3", "qwen 3", "qwen3.5", "qwen-3.5", "qwen 3.5", "qwq", "qwen-coder-next"],
+        "filename_patterns": ["(?i)qwen[-_ ]?3"],
+        "metadata_name_patterns": ["(?i)qwen[-_ ]?3"],
+        "metadata_architecture_patterns": ["^qwen3$"],
+        "hf_repo_patterns": ["Qwen/", "QwenLM/"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": true,
+        "supports_tools": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "tool_call_format": "hermes"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 131072,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 1024
+          },
+          "warnings": [],
+          "notes": ["MoE variants can diverge materially in cache behavior and context handling."]
+        },
+        "thinking": {
+          "sampler": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 1024
+          },
+          "warnings": ["avoid_greedy_decoding"],
+          "notes": []
+        }
+      },
+      "variants": [
+        {
+          "id": "omnicoder",
+          "display_name": "OmniCoder",
+          "match": {
+            "filename_patterns": ["(?i)omni[-_ ]?coder"],
+            "metadata_name_patterns": ["(?i)omnicoder"],
+            "metadata_architecture_patterns": []
+          },
+          "overrides": {
+            "context_window": null,
+            "chat_template": null,
+            "default_mode": null,
+            "modes": {}
+          },
+          "research": {
+            "confidence": "medium",
+            "sources": []
+          }
+        },
+        {
+          "id": "qwen3_coder_next",
+          "display_name": "Qwen3-Coder-Next",
+          "match": {
+            "filename_patterns": ["(?i)qwen3[-_ ]?coder[-_ ]?next"],
+            "metadata_name_patterns": [],
+            "metadata_architecture_patterns": []
+          },
+          "overrides": {
+            "context_window": 262144,
+            "chat_template": null,
+            "default_mode": null,
+            "modes": {}
+          },
+          "research": {
+            "confidence": "high",
+            "sources": []
+          }
+        }
+      ],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "qwen2_5",
+      "display_name": "Qwen 2.5 / 2.5-Coder",
+      "publisher": "Alibaba Cloud",
+      "homepage": "https://qwenlm.github.io/",
+      "license": "apache-2.0",
+      "match": {
+        "family_aliases": ["qwen2.5", "qwen-2.5", "qwen 2.5", "qwen2.5-coder"],
+        "filename_patterns": ["(?i)qwen[-_ ]?2\\.5"],
+        "metadata_name_patterns": ["(?i)qwen[-_ ]?2\\.5"],
+        "metadata_architecture_patterns": ["^qwen2$"],
+        "hf_repo_patterns": ["Qwen/Qwen2.5*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "tool_call_format": "hermes"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 131072,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 1024
+          },
+          "warnings": [],
+          "notes": []
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "medium",
+        "sources": []
+      }
+    },
+    {
+      "id": "llama4",
+      "display_name": "Meta Llama 4",
+      "publisher": "Meta",
+      "homepage": "https://www.llama.com",
+      "license": "llama4",
+      "match": {
+        "family_aliases": ["llama4", "llama-4", "llama 4"],
+        "filename_patterns": ["(?i)llama[-_ ]?4"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^llama4$"],
+        "hf_repo_patterns": ["meta-llama/Llama-4*", "unsloth/Llama-4*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": true,
+        "supports_tools": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "tool_call_format": "llama"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 131072,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": ["Multi-EOS parsing may be required for tool and reasoning boundaries."]
+        }
+      },
+      "variants": [
+        {
+          "id": "llama4_scout_17b",
+          "display_name": "Llama 4 Scout 17B",
+          "match": {
+            "filename_patterns": ["(?i)llama[-_ ]?4[-_ ]?scout|(?i)llama[-_ ]?4.*17b"],
+            "metadata_name_patterns": [],
+            "metadata_architecture_patterns": []
+          },
+          "overrides": {
+            "context_window": null,
+            "chat_template": null,
+            "default_mode": null,
+            "modes": {}
+          },
+          "research": {
+            "confidence": "high",
+            "sources": []
+          }
+        }
+      ],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "deepseek_v3",
+      "display_name": "DeepSeek V3 / R1",
+      "publisher": "DeepSeek",
+      "homepage": "https://www.deepseek.com",
+      "license": "mit",
+      "match": {
+        "family_aliases": ["deepseek", "deepseek v3", "deepseek r1", "r1", "v3", "v3.2"],
+        "filename_patterns": ["(?i)deepseek[-_ ]?(v3|r1)"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^deepseek"],
+        "hf_repo_patterns": ["deepseek-ai/"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": true,
+        "supports_tools": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "tool_call_format": "deepseek"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 131072,
+        "default_mode": "thinking"
+      },
+      "modes": {
+        "thinking": {
+          "sampler": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 8192,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": []
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "gemma3",
+      "display_name": "Gemma 3",
+      "publisher": "Google",
+      "homepage": "https://ai.google.dev/gemma",
+      "license": "gemma",
+      "match": {
+        "family_aliases": ["gemma3", "gemma-3", "gemma 3"],
+        "filename_patterns": ["(?i)gemma[-_ ]?3"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^gemma3$", "^gemma$"],
+        "hf_repo_patterns": ["google/gemma-3"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": false,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "tool_call_format": null
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 32768,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 64,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 2048,
+            "hard_cap_output_tokens": 32768,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": ["Hybrid cache implementation."]
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "phi4",
+      "display_name": "Phi-4",
+      "publisher": "Microsoft",
+      "homepage": "https://azure.microsoft.com/",
+      "license": "mit",
+      "match": {
+        "family_aliases": ["phi4", "phi-4", "phi 4"],
+        "filename_patterns": ["(?i)phi[-_ ]?4"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^phi3$", "^phi4$"],
+        "hf_repo_patterns": ["microsoft/phi-4"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": true,
+        "supports_tools": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "tool_call_format": "openai_json"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 128000,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.8,
+            "top_p": 0.95,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": []
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "granite3_3",
+      "display_name": "Granite 3.3",
+      "publisher": "IBM",
+      "homepage": "https://www.ibm.com/granite",
+      "license": "apache-2.0",
+      "match": {
+        "family_aliases": ["granite", "granite 3.3", "granite3.3"],
+        "filename_patterns": ["(?i)granite[-_ ]?3\\.3"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^granite$"],
+        "hf_repo_patterns": ["ibm-granite/granite-3.3*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "tool_call_format": "hermes"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 131072,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": ["Enterprise RAG focus; pythonic tool-calling."]
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "mistral3_1",
+      "display_name": "Mistral Small 3.1 / Pixtral",
+      "publisher": "Mistral AI",
+      "homepage": "https://mistral.ai",
+      "license": "apache-2.0",
+      "match": {
+        "family_aliases": ["mistral small 3.1", "mistral-small-3.1", "mistral 3.1", "pixtral", "mistral3"],
+        "filename_patterns": ["(?i)mistral[-_ ]?(small[-_ ]?)?3\\.1|(?i)pixtral"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": [],
+        "hf_repo_patterns": ["mistralai/Mistral-Small-3.1*", "mistralai/Pixtral*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": false,
+        "supports_vision": true,
+        "supports_function_calling": false,
+        "tool_call_format": null
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 131072,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "min_p": 0.0,
+            "repeat_penalty": 1.1,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": ["Sampler defaults inferred from generic fallback; upstream generation_config has no explicit sampler."],
+          "notes": []
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "medium",
+        "sources": []
+      }
+    },
+    {
+      "id": "starcoder2",
+      "display_name": "StarCoder2",
+      "publisher": "BigCode",
+      "homepage": "https://www.bigcode-project.org/",
+      "license": "bigcode-openrail-m",
+      "match": {
+        "family_aliases": ["starcoder", "starcoder2"],
+        "filename_patterns": ["(?i)starcoder[-_ ]?2"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^starcoder2$"],
+        "hf_repo_patterns": ["bigcode/starcoder2*"]
+      },
+      "capabilities": {
+        "supports_chat": false,
+        "supports_thinking": false,
+        "supports_tools": false,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "tool_call_format": null
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 16384,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.2,
+            "top_p": 0.95,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": []
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "high",
+        "sources": []
+      }
+    },
+    {
+      "id": "exaone4",
+      "display_name": "EXAONE 4.0",
+      "publisher": "LG AI Research",
+      "homepage": "https://www.lgresearch.ai/",
+      "license": "exaone",
+      "match": {
+        "family_aliases": ["exaone", "exaone4", "exaone 4.0"],
+        "filename_patterns": ["(?i)exaone[-_ ]?4"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^exaone$"],
+        "hf_repo_patterns": ["LGAI-EXAONE/EXAONE-4*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": false,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "tool_call_format": null
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 32768,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "top_k": 50,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 2048,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": ["Hybrid KV-cache."]
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "medium",
+        "sources": []
+      }
+    },
+    {
+      "id": "minimax_m2",
+      "display_name": "MiniMax M2",
+      "publisher": "MiniMax",
+      "homepage": "https://www.minimax.io",
+      "license": "mit",
+      "match": {
+        "family_aliases": ["minimax", "m2", "m2.7"],
+        "filename_patterns": ["(?i)minimax[-_ ]?m2"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": [],
+        "hf_repo_patterns": ["MiniMaxAI/*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "tool_call_format": "hermes"
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 100000,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 40,
+            "min_p": 0.0,
+            "repeat_penalty": null,
+            "presence_penalty": null,
+            "frequency_penalty": null
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": ["High-entropy generalist profile; temperature=1.0 is intentional per upstream config."]
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "medium",
+        "sources": []
+      }
+    },
+    {
+      "id": "falcon3",
+      "display_name": "Falcon 3",
+      "publisher": "Technology Innovation Institute",
+      "homepage": "https://falconllm.tii.ae",
+      "license": "falcon-llm-license",
+      "match": {
+        "family_aliases": ["falcon3", "falcon-3"],
+        "filename_patterns": ["(?i)falcon[-_ ]?3"],
+        "metadata_name_patterns": [],
+        "metadata_architecture_patterns": ["^falcon$"],
+        "hf_repo_patterns": ["tiiuae/Falcon3-*"]
+      },
+      "capabilities": {
+        "supports_chat": true,
+        "supports_thinking": false,
+        "supports_tools": false,
+        "supports_vision": false,
+        "supports_function_calling": false,
+        "tool_call_format": null
+      },
+      "defaults": {
+        "chat_template": null,
+        "context_window": 32768,
+        "default_mode": "chat"
+      },
+      "modes": {
+        "chat": {
+          "sampler": {
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "min_p": 0.0,
+            "repeat_penalty": 1.1,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0
+          },
+          "output": {
+            "default_max_output_tokens": 4096,
+            "hard_cap_output_tokens": null,
+            "reserved_context_tokens": 512
+          },
+          "warnings": [],
+          "notes": []
+        }
+      },
+      "variants": [],
+      "research": {
+        "confidence": "medium",
+        "sources": []
+      }
+    }
+  ]
+}

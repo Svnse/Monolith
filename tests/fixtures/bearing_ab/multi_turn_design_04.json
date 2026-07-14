@@ -1,0 +1,25 @@
+{
+  "id": "multi_turn_design_04",
+  "shape": "design",
+  "frame": "Multi-stakeholder design conversation. Bearing must track which constraints came from whom (referents with kind=claim from different 'stakeholders' — narratively framed).",
+  "turns": [
+    {"turn": 1, "user": "We're redesigning our auth system. Legal wants session tokens stored differently, infra wants single sign-on, product wants passwordless login. Where do I start?", "expected": "active_goal='redesign auth system'; referents += [claim:legal-session-token, claim:infra-sso, claim:product-passwordless]"},
+    {"turn": 2, "user": "Legal's requirement is non-negotiable. What does compliant token storage look like?", "expected": "current_frame='exploring compliant token storage'; branches around storage approach emerge"},
+    {"turn": 3, "user": "Does that work with SSO?", "expected": "open_tensions += compliant-storage + SSO compatibility"},
+    {"turn": 4, "user": "And with passwordless?", "expected": "open_tensions += compliant-storage + passwordless compatibility"},
+    {"turn": 5, "user": "Hmm. Let's drop passwordless for V1.", "expected": "modal_branches: transition 'passwordless login' to 'closed'; c2_closed_at_turn=5"},
+    {"turn": 6, "user": "continue", "expected": "carry-forward weak signal"},
+    {"turn": 7, "user": "What does the SSO integration look like under the compliant-storage constraint?", "expected": "references legal claim referent; addresses SSO tension"},
+    {"turn": 8, "user": "Wait, what about passwordless?", "expected": "c2_probe_turn=8 — model should note 'you closed this in turn 5'"},
+    {"turn": 9, "user": "Right, V2. Now — that compliant storage + passwordless tension I mentioned. Worth keeping a note?", "expected": "c1_target_turn=9, c1_tension_opened_at_turn=4 — model recalls open tension explicitly"},
+    {"turn": 10, "user": "OK. Summarize the auth redesign for V1.", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1 — output coheres, names legal/infra/product constraints, defers passwordless to V2"}
+  ],
+  "scoring": {
+    "c1_target_turn": 9, "c1_tension_opened_at_turn": 4,
+    "c2_closed_branch_text": "passwordless login", "c2_closed_at_turn": 5, "c2_probe_turn": 8,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 6, "note": "generic carry-forward"},
+  "pressure_test_target": "multiple referents with kind=claim; multi-stakeholder constraint tracking",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §4.4"
+}

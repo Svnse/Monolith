@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  base-smoke:
+    name: Windows 3.11 base smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      MONOLITH_ROOT: ${{ runner.temp }}\monolith-smoke-state
+      MONOLITH_ALLOW_UNANCHORED_ROOT: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install base profile
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --no-build-isolation -e .
+
+      - name: Verify package state
+        run: python -m pip check
+
+      - name: Import startup path
+        run: python -c "import PySide6, yaml, pydantic, markdown, pygments; import core.config; import ui.components.markdown_renderer; import bootstrap; print('base smoke OK')"
+
+  full-suite:
+    name: Full suite
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      MONOLITH_ROOT: ${{ runner.temp }}\monolith-test-state
+      MONOLITH_ALLOW_UNANCHORED_ROOT: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install non-GPU test profile
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --no-build-isolation -e ".[dev,files,matrix]"
+
+      - name: Run complete suite
+        run: python -m pytest -q

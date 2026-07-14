@@ -1,0 +1,189 @@
+{
+  "schema_version": 4,
+  "id": "sample-two-step",
+  "name": "Two-Step Assistant",
+  "created_at": 1780763782.0180972,
+  "modified_at": 1780763782.0180972,
+  "blocks": [
+    {
+      "id": "draft",
+      "kind": "llm",
+      "label": "LLM",
+      "position": [
+        320,
+        300
+      ],
+      "config": {
+        "provider": "local",
+        "model_path": "",
+        "api_url": "",
+        "api_token": "",
+        "model": "",
+        "airllm_model_id": "",
+        "airllm_compression": "none",
+        "airllm_max_length": 128,
+        "airllm_prefetching": true,
+        "temperature": 0.7,
+        "system_prompt": "",
+        "max_tokens": 2048,
+        "top_p": 1.0,
+        "top_k": 0,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0,
+        "mirostat": 0,
+        "mirostat_tau": 5.0,
+        "mirostat_eta": 0.1,
+        "seed": -1,
+        "stop": "",
+        "n_ctx": 0,
+        "n_gpu_layers": -1,
+        "n_batch": 512,
+        "flash_attn": false,
+        "rope_freq_base": 0.0,
+        "rope_freq_scale": 0.0,
+        "thinking_mode": true,
+        "strip_thinking": false,
+        "strip_tags": "",
+        "trim_response": true,
+        "json_mode": false
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "input",
+      "kind": "port",
+      "label": "Port",
+      "position": [
+        80,
+        300
+      ],
+      "config": {
+        "direction": "in",
+        "label": "request",
+        "source": "user_input"
+      },
+      "extra_out_ports": [
+        {
+          "name": "value",
+          "type": "any",
+          "optional": false
+        }
+      ],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "output",
+      "kind": "port",
+      "label": "Port",
+      "position": [
+        1080,
+        300
+      ],
+      "config": {
+        "direction": "out",
+        "label": "response",
+        "source": "subgraph"
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [
+        {
+          "name": "value",
+          "type": "any",
+          "optional": false
+        }
+      ],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "polish",
+      "kind": "llm",
+      "label": "LLM",
+      "position": [
+        580,
+        300
+      ],
+      "config": {
+        "provider": "local",
+        "model_path": "",
+        "api_url": "",
+        "api_token": "",
+        "model": "",
+        "airllm_model_id": "",
+        "airllm_compression": "none",
+        "airllm_max_length": 128,
+        "airllm_prefetching": true,
+        "temperature": 0.7,
+        "system_prompt": "",
+        "max_tokens": 2048,
+        "top_p": 1.0,
+        "top_k": 0,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0,
+        "mirostat": 0,
+        "mirostat_tau": 5.0,
+        "mirostat_eta": 0.1,
+        "seed": -1,
+        "stop": "",
+        "n_ctx": 0,
+        "n_gpu_layers": -1,
+        "n_batch": 512,
+        "flash_attn": false,
+        "rope_freq_base": 0.0,
+        "rope_freq_scale": 0.0,
+        "thinking_mode": true,
+        "strip_thinking": false,
+        "strip_tags": "",
+        "trim_response": true,
+        "json_mode": false
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "d83169f1-c989-45e2-83b5-b447ced2e848",
+      "from_block": "draft",
+      "from_port": "response",
+      "to_block": "polish",
+      "to_port": "prompt",
+      "feedback": false
+    },
+    {
+      "id": "11bb2adb-36f3-4551-9fa1-10f26336f8fb",
+      "from_block": "input",
+      "from_port": "value",
+      "to_block": "draft",
+      "to_port": "prompt",
+      "feedback": false
+    },
+    {
+      "id": "c93a37c1-a4bf-42c2-8560-7c7e718681d5",
+      "from_block": "polish",
+      "from_port": "response",
+      "to_block": "output",
+      "to_port": "value",
+      "feedback": false
+    }
+  ],
+  "composites": [],
+  "description": "A starter Monoline pipeline: one LLM block drafts a reply, a second polishes it. Open it in the canvas (Edit) to make it your own.",
+  "tags": [],
+  "viewport": [
+    0.0,
+    0.0
+  ],
+  "zoom": 1.0
+}

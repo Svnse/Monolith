@@ -1,0 +1,25 @@
+{
+  "id": "multi_turn_exec_03",
+  "shape": "execution",
+  "frame": "User refactors a function call across multiple files. Bearing tracks referents (file paths) as they're touched.",
+  "turns": [
+    {"turn": 1, "user": "I want to rename `get_user_id_from_token` to `extract_user_id_from_token`. Where is it used?", "expected": "active_goal='rename get_user_id_from_token across codebase'; current_frame='discovery'"},
+    {"turn": 2, "user": "(grep shows usages in 4 files: auth.py, middleware.py, tests/test_auth.py, scripts/migrate.py.)", "expected": "referents += [4 file referents, kind=file, status=observed, grounding=tool_result_N]"},
+    {"turn": 3, "user": "Start with auth.py.", "expected": "next_move='edit auth.py'"},
+    {"turn": 4, "user": "(edit done; tests pass.)", "expected": "next_move='edit middleware.py'"},
+    {"turn": 5, "user": "go on", "expected": "carry-forward weak signal"},
+    {"turn": 6, "user": "(edit middleware.py done.)", "expected": "next_move='edit tests/test_auth.py'"},
+    {"turn": 7, "user": "(edit test file done.)", "expected": "next_move='edit scripts/migrate.py — the last one'"},
+    {"turn": 8, "user": "What files were left?", "expected": "c1_target_turn=8 — model references original referents list; specifically scripts/migrate.py"},
+    {"turn": 9, "user": "Actually, can we skip migrate.py? Doesn't run anymore.", "expected": "model accepts; referents transition status"},
+    {"turn": 10, "user": "What was the original change?", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1"}
+  ],
+  "scoring": {
+    "c1_target_turn": 8, "c1_tension_opened_at_turn": null,
+    "c2_closed_branch_text": "(referents focus, not branch closure)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "generic carry-forward"},
+  "pressure_test_target": "file referents + grounding cycle (G3 verifier check should fire if file moves)",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §5.3"
+}

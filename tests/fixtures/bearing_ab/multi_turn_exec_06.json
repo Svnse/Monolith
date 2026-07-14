@@ -1,0 +1,28 @@
+{
+  "id": "multi_turn_exec_06",
+  "shape": "execution",
+  "frame": "Live incident; multiple parallel actions. Bearing tracks multiple open_tensions simultaneously. Criterion 1 (trajectory) heavily exercised.",
+  "turns": [
+    {"turn": 1, "user": "Pager went off — orders API returning 500s. Help me triage.", "expected": "active_goal='resolve orders-API 500 incident'; current_frame='triage'"},
+    {"turn": 2, "user": "What should I check first?", "expected": "model gives a triage order"},
+    {"turn": 3, "user": "(checked logs — DB connection pool exhausted.)", "expected": "open_tensions += DB-pool-exhaustion"},
+    {"turn": 4, "user": "(checked dashboards — queue depth doubled in last 15min.)", "expected": "open_tensions += queue-depth-doubled; modal branches may emerge for hypotheses"},
+    {"turn": 5, "user": "ok", "expected": "PRESSURE-TEST (§6.1) — incident pressure; prior task_type clearly 'action'; V0 carry-forward heuristic maps to 'analysis' — wrong direction"},
+    {"turn": 6, "user": "Run `SHOW PROCESSLIST` on the primary.", "expected": "current_frame may shift to 'DB diagnosis'"},
+    {"turn": 7, "user": "(slow query identified — long-running report.)", "expected": "open_tensions += long-running-report-query"},
+    {"turn": 8, "user": "Kill it?", "expected": "irreversible-ish (the query, not the report); confirms scope"},
+    {"turn": 9, "user": "(killed; pool recovers.)", "expected": "tensions resolve; next_move='monitor for recurrence'"},
+    {"turn": 10, "user": "What about the queue depth thing?", "expected": "c1_target_turn=10, c1_tension_opened_at_turn=4 — model returns to still-open tension from turn 4 that pool-fix didn't address"},
+    {"turn": 11, "user": "OK find that.", "expected": "model investigates"},
+    {"turn": 12, "user": "What were we doing originally?", "expected": "c3_target_turn=12, c3_goal_stated_at_turn=1 — coheres on original incident goal"}
+  ],
+  "scoring": {
+    "c1_target_turn": 10, "c1_tension_opened_at_turn": 4,
+    "c2_closed_branch_text": "(parallel-tensions focus)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": 12, "c3_active_goal_stated_at_turn": 1,
+    "c4_irreversible_action_turns": [8]
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "PRESSURE-TEST (§6.1) — incident pressure, prior task_type='action', V0 maps to 'analysis' wrong"},
+  "pressure_test_target": "multiple parallel open_tensions; criterion 1 measures whether non-load-bearing tensions get dropped under pressure",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §5.6"
+}

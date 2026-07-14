@@ -1,0 +1,25 @@
+{
+  "id": "multi_turn_exec_05",
+  "shape": "execution",
+  "frame": "TDD cycle. Write test → run (fails) → implement → run (passes) → next test. Bearing carries the cycle position.",
+  "turns": [
+    {"turn": 1, "user": "TDD: implement a sliding-window log filter. Start with the first test.", "expected": "active_goal='TDD-implement sliding-window log filter'; next_move='write first failing test'"},
+    {"turn": 2, "user": "(test written.)", "expected": "next_move='run test, confirm failure'"},
+    {"turn": 3, "user": "(test fails as expected.)", "expected": "next_move='implement minimum to pass'"},
+    {"turn": 4, "user": "(implemented; test passes.)", "expected": "next_move='next test — edge case: empty input'"},
+    {"turn": 5, "user": "go on", "expected": "carry-forward weak signal"},
+    {"turn": 6, "user": "(next test written, fails, implemented, passes.)", "expected": "next_move='next test — edge case: window overlap'"},
+    {"turn": 7, "user": "What was the original goal?", "expected": "c1_target_turn=7 — model references active_goal"},
+    {"turn": 8, "user": "Continue.", "expected": "model proceeds with overlap test"},
+    {"turn": 9, "user": "I want to skip the overlap test and just ship.", "expected": "model addresses; possibly tension around test coverage or modal branch on shipping incomplete"},
+    {"turn": 10, "user": "OK ship it. Summarize what's done.", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1"}
+  ],
+  "scoring": {
+    "c1_target_turn": 7, "c1_tension_opened_at_turn": null,
+    "c2_closed_branch_text": "(next_move-cycle focus, not branch closure)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "generic carry-forward in TDD cycle"},
+  "pressure_test_target": "next_move propagation in a tightly-cyclic workflow",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §5.5"
+}

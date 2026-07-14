@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_03",
+  "shape": "single",
+  "frame": "Factual — Bearing-on must not degrade factual recall.",
+  "turns": [{"turn": 1, "user": "what's the difference between SET and SETNX in Redis?", "expected": "concise factual answer"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 3",
+  "regression_threshold_pct": 5
+}

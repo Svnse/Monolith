@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_12",
+  "shape": "single",
+  "frame": "Opinion/factual — Bearing-on must not degrade nuanced opinion responses.",
+  "turns": [{"turn": 1, "user": "is git rebase destructive?", "expected": "qualified answer: yes if on shared branches/published commits, otherwise just rewrites local history"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 12",
+  "regression_threshold_pct": 5
+}

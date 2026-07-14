@@ -1,0 +1,26 @@
+{
+  "id": "multi_turn_design_05",
+  "shape": "design",
+  "frame": "User starts with a design question, mid-session shifts the entire frame to a different problem. Bearing must update current_frame (with previous + trigger) AND retain the prior tensions/branches as dormant rather than dropping them.",
+  "turns": [
+    {"turn": 1, "user": "How should I structure a Python project that's growing past one file?", "expected": "active_goal='structure growing Python project'; current_frame='exploring project structure'"},
+    {"turn": 2, "user": "What's the trade-off between flat packages and nested?", "expected": "modal_branches += two options"},
+    {"turn": 3, "user": "And how does that affect testing layout?", "expected": "open_tensions += testing-layout coupled to package shape"},
+    {"turn": 4, "user": "Actually wait. The real question is: should this be a package or a monorepo with multiple packages?", "expected": "FRAME SHIFT — Bearing must update current_frame with previous + trigger; prior branches/tensions stay (now dormant) not dropped"},
+    {"turn": 5, "user": "ok", "expected": "carry-forward under shifted frame"},
+    {"turn": 6, "user": "Walk me through what makes monorepo worth it at small scale.", "expected": "new branches/tensions form around monorepo question"},
+    {"turn": 7, "user": "Eh, the project's not big enough. Single package.", "expected": "monorepo branch closes; current_frame may shift back; c2_closed_at_turn=7"},
+    {"turn": 8, "user": "What about the testing layout question?", "expected": "c1_target_turn=8, c1_tension_opened_at_turn=3 — model returns to dormant tension"},
+    {"turn": 9, "user": "Right. So flat vs nested package?", "expected": "dormant branches reactivate; model addresses original modal question"},
+    {"turn": 10, "user": "Should the package be a monorepo though?", "expected": "c2_probe_turn=10 — model should note 'you closed this in turn 7'"},
+    {"turn": 11, "user": "OK flat package, tests next to source. Write the project skeleton.", "expected": "c3_target_turn=11, c3_goal_stated_at_turn=1 — coheres with original goal"}
+  ],
+  "scoring": {
+    "c1_target_turn": 8, "c1_tension_opened_at_turn": 3,
+    "c2_closed_branch_text": "monorepo", "c2_closed_at_turn": 7, "c2_probe_turn": 10,
+    "c3_target_turn": 11, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "generic carry-forward under post-frame-shift conditions"},
+  "pressure_test_target": "frame shift mid-session — Bearing must use current_frame.previous + trigger fields (D2 exercised live)",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §4.5"
+}

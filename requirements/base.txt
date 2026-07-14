@@ -1,0 +1,2 @@
+# Canonical definitions live in pyproject.toml.
+-e .

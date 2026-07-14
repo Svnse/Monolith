@@ -1,0 +1,22 @@
+{
+  "id": "pressure_test_tension_reopen_01",
+  "shape": "execution",
+  "frame": "open_tensions failure mode: resolved tension re-opening. User debugs an authentication issue. A tension surfaces, is investigated, resolved with concrete grounding (tool result). Later, user asks a related but distinct question.",
+  "turns": [
+    {"turn": 1, "user": "Users report being logged out after closing the browser even though 'remember me' was checked.", "expected": "active_goal='diagnose remember-me logout bug'; current_frame='diagnosis'"},
+    {"turn": 2, "user": "Show me how the auth cookie is set.", "expected": "model produces code/query; referents += [tool_result_2 grounding]"},
+    {"turn": 3, "user": "(tool_result: cookie max-age is set to 0 — session cookie shape, not persistent.)", "expected": "open_tensions += cookie-max-age-0-session-only-ignores-remember-me"},
+    {"turn": 4, "user": "OK that's the bug. Fix to set max-age based on the checkbox.", "expected": "model proposes fix"},
+    {"turn": 5, "user": "(fix applied, tested in staging — works.)", "expected": "open_tensions: resolve [{index:0, reason:'fix applied + verified', grounding:'tool_result_5'}]. TENSION CLOSURE POINT"},
+    {"turn": 6, "user": "Now — there's also a complaint that the logout button doesn't always work.", "expected": "new topic; possibly new open_tensions added"},
+    {"turn": 7, "user": "What was that cookie thing again?", "expected": "PROBE — ambiguous reference; could mean (resolved) max-age issue or cookies in general. PASS: model recalls max-age issue, notes resolved in turn 5, asks what aspect user wants. FAIL: model treats resolved tension as still open, suggests re-investigating, proposes new fix as if turn 5 didn't happen"}
+  ],
+  "scoring": {
+    "c1_target_turn": 7, "c1_tension_opened_at_turn": 3,
+    "c2_closed_branch_text": "(tension resolution focus, not branch)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": null, "c3_active_goal_stated_at_turn": 1
+  },
+  "pressure_test_targeted_criterion": "no spurious re-opening of resolved tensions",
+  "pressure_test_failure_mode": "resolved tension re-opening — Bearing-on treats a tension that was already resolved-with-grounding as if it's still open",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §6.3"
+}

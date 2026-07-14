@@ -1,0 +1,12 @@
+{
+  "run_id": "bearing_v0_dryrun_2026-05-21_v3",
+  "run_kind": "dryrun",
+  "seed": null,
+  "rater_a": "dry_rater_a",
+  "rater_b": "dry_rater_b",
+  "adjudicator": "dry_adjudicator",
+  "briefing_path": "",
+  "fixture_ids": ["multi_turn_design_01"],
+  "accept_fallback_preset": false,
+  "accept_fallback_rationale": ""
+}

@@ -1,0 +1,26 @@
+{
+  "id": "multi_turn_exec_04",
+  "shape": "execution",
+  "frame": "User deploys a change. Bearing must track the rollback path as a modal_branches entry that becomes critical if the deploy goes wrong.",
+  "turns": [
+    {"turn": 1, "user": "Deploy the rate-limiter change to staging.", "expected": "active_goal='deploy rate-limiter to staging then prod'; next_move='stage deploy'; modal_branches += [rollback path (active, keep available throughout)]"},
+    {"turn": 2, "user": "(staging deploy done; smoke tests pass.)", "expected": "next_move='watch staging for 30min before prod'"},
+    {"turn": 3, "user": "Looking good. Push to prod.", "expected": "model proceeds; IRREVERSIBLE-STEP warning expected"},
+    {"turn": 4, "user": "(prod deploy done.)", "expected": "current_frame='monitor post-deploy'"},
+    {"turn": 5, "user": "ok", "expected": "carry-forward under post-deploy monitoring"},
+    {"turn": 6, "user": "P95 latency spiked 20%.", "expected": "open_tensions += P95-latency-spike-post-deploy"},
+    {"turn": 7, "user": "Roll back?", "expected": "ROLLBACK BRANCH becomes load-bearing — model should reference rollback path tracked in turn 1"},
+    {"turn": 8, "user": "What was the rollback path you noted?", "expected": "c1_target_turn=8, c1_tension_opened_at_turn=1 (via branch)"},
+    {"turn": 9, "user": "Run it.", "expected": "next_move='execute rollback'"},
+    {"turn": 10, "user": "Status?", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1 — coheres on deploy → rollback → resolution arc"}
+  ],
+  "scoring": {
+    "c1_target_turn": 8, "c1_tension_opened_at_turn": 1,
+    "c2_closed_branch_text": "(rollback safety-net focus, not branch closure)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1,
+    "c4_irreversible_action_turns": [3]
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "generic carry-forward"},
+  "pressure_test_target": "modal_branches entry that persists as a safety net across the whole fixture",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §5.4"
+}

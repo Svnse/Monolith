@@ -1,0 +1,3 @@
+# Compatibility entry point for tools that expect requirements.txt.
+# pyproject.toml is the canonical dependency definition.
+-e .

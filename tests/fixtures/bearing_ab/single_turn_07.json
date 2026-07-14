@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_07",
+  "shape": "single",
+  "frame": "Acknowledgement — high-likelihood carry-forward exposure (weak signal). Bearing-on with empty active_goal should NOT contaminate this turn.",
+  "turns": [{"turn": 1, "user": "thanks!", "expected": "brief acknowledgement; no goal-establishment"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 7",
+  "regression_threshold_pct": 5
+}

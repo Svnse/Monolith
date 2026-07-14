@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_05",
+  "shape": "single",
+  "frame": "Factual — Bearing-on must not degrade conceptual explanations.",
+  "turns": [{"turn": 1, "user": "explain TCP vs UDP in one paragraph", "expected": "one paragraph distinguishing reliability/order vs speed/connectionless"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 5",
+  "regression_threshold_pct": 5
+}

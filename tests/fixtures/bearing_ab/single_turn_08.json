@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_08",
+  "shape": "single",
+  "frame": "Factual lookup — Bearing-on must not degrade short factual responses.",
+  "turns": [{"turn": 1, "user": "what year did python 3 release?", "expected": "2008 (December)"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 8",
+  "regression_threshold_pct": 5
+}

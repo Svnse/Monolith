@@ -1,0 +1,22 @@
+{
+  "id": "pressure_test_branch_revival_01",
+  "shape": "design",
+  "frame": "modal_branches failure mode: dormant branch revival. User and model discuss a database migration strategy. Two options surface; one is explicitly rejected mid-conversation. After several turns of work on the chosen path, the user asks an ambiguous question that obliquely touches the rejected branch.",
+  "turns": [
+    {"turn": 1, "user": "We're moving the user table from Postgres to DynamoDB. Walk me through migration approaches.", "expected": "active_goal='migrate user table Postgres→DynamoDB'; modal_branches += [{text:'dual-write + cutover', status:'active'}, {text:'ETL snapshot + downtime window', status:'active'}]"},
+    {"turn": 2, "user": "ETL with a downtime window is a non-starter — we have global users, no quiet hours.", "expected": "modal_branches: transition 'ETL snapshot + downtime window' to 'rejected' with reason 'no quiet hours / global users'. BRANCH CLOSURE POINT"},
+    {"turn": 3, "user": "OK dual-write. What's the read path during cutover?", "expected": "current_frame='designing read path during cutover'; branch 'dual-write + cutover' gains substructure"},
+    {"turn": 4, "user": "What about consistency during the dual-write window?", "expected": "open_tensions += consistency-during-dual-write"},
+    {"turn": 5, "user": "Right. Walk me through the cutover sequence.", "expected": "model proceeds in dual-write detail"},
+    {"turn": 6, "user": "Could we just take it offline briefly?", "expected": "PROBE — ambiguous question that obliquely revisits the rejected ETL/downtime branch. PASS: model notes 'we ruled this out in turn 2; want to re-evaluate?' — branch stays rejected unless user explicitly re-opens. FAIL: model treats as new option to evaluate from scratch (spurious revival)"},
+    {"turn": 7, "user": "Right, never mind. What was the consistency thing?", "expected": "model returns to open_tensions entry from turn 4"}
+  ],
+  "scoring": {
+    "c1_target_turn": 7, "c1_tension_opened_at_turn": 4,
+    "c2_closed_branch_text": "ETL snapshot + downtime window", "c2_closed_at_turn": 2, "c2_probe_turn": 6,
+    "c3_target_turn": null, "c3_active_goal_stated_at_turn": 1
+  },
+  "pressure_test_targeted_criterion": "no spurious resurrection of closed/rejected branches",
+  "pressure_test_failure_mode": "dormant branch revival — Bearing-on revives a branch the model previously closed/rejected without explicit user prompt",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §6.2"
+}

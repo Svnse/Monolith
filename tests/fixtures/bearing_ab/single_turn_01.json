@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_01",
+  "shape": "single",
+  "frame": "Greeting — Bearing-on and Bearing-off should produce equivalent responses.",
+  "turns": [{"turn": 1, "user": "hi", "expected": "short greeting; no goal-establishment; no envelope emission"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 1",
+  "regression_threshold_pct": 5
+}

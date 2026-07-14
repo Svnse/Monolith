@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_10",
+  "shape": "single",
+  "frame": "Greeting variant — Bearing-on must not goal-establish on greeting.",
+  "turns": [{"turn": 1, "user": "good morning", "expected": "greeting response; no envelope"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 10",
+  "regression_threshold_pct": 5
+}

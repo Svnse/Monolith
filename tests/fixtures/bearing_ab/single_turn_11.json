@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_11",
+  "shape": "single",
+  "frame": "Factual — Bearing-on must not degrade short technical answers.",
+  "turns": [{"turn": 1, "user": "what does `chmod 755` mean?", "expected": "owner=rwx, group=rx, other=rx; brief permission breakdown"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 11",
+  "regression_threshold_pct": 5
+}

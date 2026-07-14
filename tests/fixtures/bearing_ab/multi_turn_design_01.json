@@ -1,0 +1,68 @@
+{
+  "id": "multi_turn_design_01",
+  "shape": "design",
+  "frame": "User explores how to handle session timeout for a web app. Multiple branches considered; one closed mid-fixture; one branch re-opened later. Open tension about federated identity persists across the session.",
+  "turns": [
+    {
+      "turn": 1,
+      "user": "Help me think through how to handle session timeout for a web app.",
+      "expected": "Bearing.active_goal = 'design session timeout strategy'. current_frame = 'exploring session timeout'."
+    },
+    {
+      "turn": 2,
+      "user": "What are the main tradeoffs between hard timeout and rolling refresh?",
+      "expected": "modal_branches += [{text:'hard timeout', status:'active'}, {text:'rolling refresh', status:'active'}]."
+    },
+    {
+      "turn": 3,
+      "user": "Hmm. Anything I should consider for federated identity?",
+      "expected": "open_tensions += [{text:'federated identity affects timeout semantics', opened_at_turn:3}]."
+    },
+    {
+      "turn": 4,
+      "user": "Let's set hard timeout aside for now.",
+      "expected": "modal_branches: transition 'hard timeout' to 'closed'. <-- c2_closed_at_turn = 4."
+    },
+    {
+      "turn": 5,
+      "user": "ok",
+      "expected": "WEAK SIGNAL. Bearing-on should carry trajectory. Bearing-off treats as fresh 'conversation'. (Carry-forward heuristic exercise — not pressure-test target for this fixture.)"
+    },
+    {
+      "turn": 6,
+      "user": "What was that federated identity consideration again?",
+      "expected": "Model references tension from turn 3. <-- c1_target_turn = 6, c1_tension_opened_at = 3."
+    },
+    {
+      "turn": 7,
+      "user": "Right. And the rolling refresh path — still on the table?",
+      "expected": "Model confirms rolling_refresh is still active."
+    },
+    {
+      "turn": 8,
+      "user": "Could we go with hard timeout after all?",
+      "expected": "c2_probe_turn = 8 — model should note hard_timeout was closed in turn 4, not silently re-explore."
+    },
+    {
+      "turn": 9,
+      "user": "Walk me through the rolling refresh implementation with federated identity in mind.",
+      "expected": "c3_target_turn = 9, c3_goal_stated_at = 1 — model's response coheres with the original goal (still designing session timeout)."
+    }
+  ],
+  "scoring": {
+    "c1_target_turn": 6,
+    "c1_tension_opened_at_turn": 3,
+    "c2_closed_branch_text": "hard timeout",
+    "c2_closed_at_turn": 4,
+    "c2_probe_turn": 8,
+    "c3_target_turn": 9,
+    "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {
+    "present": true,
+    "exposure_turn": 5,
+    "note": "Generic carry-forward probe; this fixture is NOT a dedicated pressure-test. See §6.1 of spec for embedded carry-forward exposures and §6.2-6.4 for dedicated pressure-test fixtures."
+  },
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §4.1",
+  "status": "READY for dry-run per spec §10 step 5 (dispatcher wiring blocked — see manifest.md)."
+}

@@ -1,0 +1,302 @@
+{
+  "schema_version": 4,
+  "id": "second-opinion",
+  "name": "Second Opinion",
+  "created_at": 1780850397.7481198,
+  "modified_at": 1780850397.7481198,
+  "blocks": [
+    {
+      "id": "adjudicate",
+      "kind": "llm",
+      "label": "Adjudicator",
+      "position": [
+        1100,
+        300
+      ],
+      "config": {
+        "provider": "monolith",
+        "model_path": "",
+        "api_url": "",
+        "api_token": "",
+        "model": "",
+        "airllm_model_id": "",
+        "airllm_compression": "none",
+        "airllm_max_length": 128,
+        "airllm_prefetching": true,
+        "temperature": 0.2,
+        "system_prompt": "",
+        "max_tokens": 1024,
+        "top_p": 1.0,
+        "top_k": 0,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0,
+        "mirostat": 0,
+        "mirostat_tau": 5.0,
+        "mirostat_eta": 0.1,
+        "seed": -1,
+        "stop": "",
+        "n_ctx": 0,
+        "n_gpu_layers": -1,
+        "n_batch": 512,
+        "flash_attn": false,
+        "rope_freq_base": 0.0,
+        "rope_freq_scale": 0.0,
+        "thinking_mode": true,
+        "strip_thinking": false,
+        "strip_tags": "",
+        "trim_response": true,
+        "json_mode": false
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "answer_a",
+      "kind": "llm",
+      "label": "Answer A (bound model)",
+      "position": [
+        320,
+        300
+      ],
+      "config": {
+        "provider": "monolith",
+        "model_path": "",
+        "api_url": "",
+        "api_token": "",
+        "model": "",
+        "airllm_model_id": "",
+        "airllm_compression": "none",
+        "airllm_max_length": 128,
+        "airllm_prefetching": true,
+        "temperature": 0.7,
+        "system_prompt": "You are the primary model. Answer the user's question directly and concisely. Do not hedge.",
+        "max_tokens": 2048,
+        "top_p": 1.0,
+        "top_k": 0,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0,
+        "mirostat": 0,
+        "mirostat_tau": 5.0,
+        "mirostat_eta": 0.1,
+        "seed": -1,
+        "stop": "",
+        "n_ctx": 0,
+        "n_gpu_layers": -1,
+        "n_batch": 512,
+        "flash_attn": false,
+        "rope_freq_base": 0.0,
+        "rope_freq_scale": 0.0,
+        "thinking_mode": true,
+        "strip_thinking": false,
+        "strip_tags": "",
+        "trim_response": true,
+        "json_mode": false
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "answer_b",
+      "kind": "llm",
+      "label": "Answer B (independent, different family)",
+      "position": [
+        580,
+        300
+      ],
+      "config": {
+        "provider": "api",
+        "model_path": "",
+        "api_url": "",
+        "api_token": "",
+        "model": "",
+        "airllm_model_id": "",
+        "airllm_compression": "none",
+        "airllm_max_length": 128,
+        "airllm_prefetching": true,
+        "temperature": 0.7,
+        "system_prompt": "You are an independent second model, a DIFFERENT family from the primary. Answer the user's question directly and concisely, on your own. Do not hedge.",
+        "max_tokens": 2048,
+        "top_p": 1.0,
+        "top_k": 0,
+        "min_p": 0.0,
+        "repeat_penalty": 1.0,
+        "mirostat": 0,
+        "mirostat_tau": 5.0,
+        "mirostat_eta": 0.1,
+        "seed": -1,
+        "stop": "",
+        "n_ctx": 0,
+        "n_gpu_layers": -1,
+        "n_batch": 512,
+        "flash_attn": false,
+        "rope_freq_base": 0.0,
+        "rope_freq_scale": 0.0,
+        "thinking_mode": true,
+        "strip_thinking": false,
+        "strip_tags": "",
+        "trim_response": true,
+        "json_mode": false
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "output",
+      "kind": "port",
+      "label": "Port",
+      "position": [
+        1080,
+        300
+      ],
+      "config": {
+        "direction": "out",
+        "label": "verdict",
+        "source": "subgraph"
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [
+        {
+          "name": "value",
+          "type": "any",
+          "optional": false
+        }
+      ],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "question_in",
+      "kind": "port",
+      "label": "Port",
+      "position": [
+        80,
+        300
+      ],
+      "config": {
+        "direction": "in",
+        "label": "question",
+        "source": "user_input"
+      },
+      "extra_out_ports": [
+        {
+          "name": "value",
+          "type": "any",
+          "optional": false
+        }
+      ],
+      "extra_in_ports": [],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    },
+    {
+      "id": "verdict_prompt",
+      "kind": "text",
+      "label": "Text",
+      "position": [
+        840,
+        300
+      ],
+      "config": {
+        "content": "You compare two independently-produced answers (A and B) to the same question, produced by two DIFFERENT models. Your ONLY job is to detect AGREEMENT — not to decide which is correct.\n- If A and B make the same substantive claims: reply 'CORROBORATED — two independent models agree:' then give the agreed answer. Agreement is NOT proof of truth (shared mistakes survive); never say 'verified'.\n- If A and B make different or conflicting claims: reply '⚠ UNCERTAIN — two independent models DISAGREE.' then show briefly where they diverge (A says ... / B says ...). Do NOT pick a winner; flag it low-confidence and recommend checking.\nBe terse. Output only the verdict.\n\nQuestion:\n{{question}}\n\nAnswer A (one model):\n{{answer_a}}\n\nAnswer B (a DIFFERENT model, answered independently):\n{{answer_b}}\n\nNow produce ONLY the verdict."
+      },
+      "extra_out_ports": [],
+      "extra_in_ports": [
+        {
+          "name": "question",
+          "type": "text",
+          "optional": false
+        },
+        {
+          "name": "answer_a",
+          "type": "text",
+          "optional": false
+        },
+        {
+          "name": "answer_b",
+          "type": "text",
+          "optional": false
+        }
+      ],
+      "collapsed": false,
+      "bypass": false,
+      "metadata": {}
+    }
+  ],
+  "connections": [
+    {
+      "id": "58d4571d-a626-45f3-aae5-de5e96703bbf",
+      "from_block": "adjudicate",
+      "from_port": "response",
+      "to_block": "output",
+      "to_port": "value",
+      "feedback": false
+    },
+    {
+      "id": "2780d362-02fc-4d8c-9bbc-70c796e03701",
+      "from_block": "answer_a",
+      "from_port": "response",
+      "to_block": "verdict_prompt",
+      "to_port": "answer_a",
+      "feedback": false
+    },
+    {
+      "id": "a16ecd9a-5738-470e-b096-778b630d71e1",
+      "from_block": "answer_b",
+      "from_port": "response",
+      "to_block": "verdict_prompt",
+      "to_port": "answer_b",
+      "feedback": false
+    },
+    {
+      "id": "6d648e7d-53d1-40de-be89-56405df7b4fe",
+      "from_block": "question_in",
+      "from_port": "value",
+      "to_block": "answer_a",
+      "to_port": "prompt",
+      "feedback": false
+    },
+    {
+      "id": "5f4cd45b-7142-47a3-97c3-b221fdfe2043",
+      "from_block": "question_in",
+      "from_port": "value",
+      "to_block": "answer_b",
+      "to_port": "prompt",
+      "feedback": false
+    },
+    {
+      "id": "3bc10066-b09d-49d7-906c-fdcbcafccec7",
+      "from_block": "question_in",
+      "from_port": "value",
+      "to_block": "verdict_prompt",
+      "to_port": "question",
+      "feedback": false
+    },
+    {
+      "id": "cdf29c00-5fb4-402b-bd68-6dec035d3310",
+      "from_block": "verdict_prompt",
+      "from_port": "text",
+      "to_block": "adjudicate",
+      "to_port": "prompt",
+      "feedback": false
+    }
+  ],
+  "composites": [],
+  "description": "Cross-model disagreement as an error signal. A different-family model answers the same question BLIND; an adjudicator reports whether the two agree. CORROBORATED means two independent models agree — NOT that the answer is verified (shared mistakes survive). DISAGREEMENT is the signal: treat it as uncertain and check. Block B must be a DIFFERENT model family than your bound model — that is the whole point: set it to a second local GGUF (no egress), or to the 'api' provider for a cloud model (EGRESS — the question leaves the machine; needs per-flow egress opt-in). ~2-3x compute.",
+  "tags": [],
+  "viewport": [
+    0.0,
+    0.0
+  ],
+  "zoom": 1.0
+}

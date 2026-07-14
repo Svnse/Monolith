@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_02",
+  "shape": "single",
+  "frame": "Factual / how-to — Bearing-on must not degrade simple-turn answer quality.",
+  "turns": [{"turn": 1, "user": "how do you compute factorial in Python?", "expected": "concise code/explanation; no envelope emission"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 2",
+  "regression_threshold_pct": 5
+}

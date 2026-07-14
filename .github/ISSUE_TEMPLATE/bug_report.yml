@@ -1,0 +1,119 @@
+name: Bug report
+description: Report a reproducible non-security defect in Monolith.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check KNOWN_ISSUES.md before reporting. Do not disclose vulnerabilities or credentials here; follow SECURITY.md for private reporting.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version and commit
+      description: Provide the Monolith version and full commit SHA.
+      placeholder: "v1.0.0, commit 0123456789abcdef..."
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Windows and Python
+      description: Include Windows edition/build and the output of venv\Scripts\python.exe --version.
+      placeholder: "Windows 25H2 build 26200; Python 3.11.9"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation
+      options:
+        - Fresh clone with install.bat
+        - Existing checkout updated in place
+        - Manual editable install
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      multiple: true
+      options:
+        - Startup or installer
+        - Desktop UI or chat
+        - API model backend
+        - Local GGUF backend
+        - File or command tool
+        - Image generation
+        - Audio generation
+        - CONNECT or external peer
+        - Matrix
+        - Monoline or Workshop
+        - MonoSearch
+        - ACU, Acatalepsy, Bearing, or cognition
+        - MonoNote
+        - Soundtrap
+        - Tests or documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Configuration boundary
+      description: State API versus GGUF, optional profiles, relevant MONOLITH_* flags, whether start.bat was unchanged, and whether MONOLITH_ROOT was isolated. Do not paste keys, tokens, or full configuration files.
+      placeholder: "Model (API); base+files; no extra flags; unchanged start.bat; isolated root reproduced: yes"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List exact steps from launch to failure and how often it occurs.
+      placeholder: |
+        1. Run start.bat
+        2. ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include a short sanitized error or traceback when useful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Attach only the smallest useful log or screenshot. Remove keys, tokens, prompts, conversations, names, paths, endpoints, room IDs, peer identities, and private model information.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I checked KNOWN_ISSUES.md and this is not already documented.
+          required: true
+        - label: This report does not contain a security vulnerability or exploit detail.
+          required: true
+        - label: I removed credentials and private/personal content from all text and attachments.
+          required: true

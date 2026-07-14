@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_06",
+  "shape": "single",
+  "frame": "Opinion/factual — Bearing-on must not degrade opinion-shaped responses.",
+  "turns": [{"turn": 1, "user": "is rust faster than python?", "expected": "qualified comparison; expected: yes for CPU-bound, with caveats"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 6",
+  "regression_threshold_pct": 5
+}

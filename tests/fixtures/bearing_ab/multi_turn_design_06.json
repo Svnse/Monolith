@@ -1,0 +1,26 @@
+{
+  "id": "multi_turn_design_06",
+  "shape": "design",
+  "frame": "User describes a circular problem (X depends on Y depends on Z depends on X). Bearing must track the cycle as a modal_branches structure and NOT silently re-evaluate from scratch each turn.",
+  "turns": [
+    {"turn": 1, "user": "I need to pick a database, but the choice depends on our deployment target, which depends on our scale plan, which depends on which features we ship, which depends on which database we pick. Help.", "expected": "active_goal='break circular dependency between DB / deployment / scale / features'; modal_branches += four nodes of the cycle"},
+    {"turn": 2, "user": "Which node has the most freedom to move?", "expected": "model explores degrees-of-freedom analysis"},
+    {"turn": 3, "user": "OK so 'features' has the least lock-in. Start there.", "expected": "current_frame='decomposing from features outward'"},
+    {"turn": 4, "user": "Walk me through a minimal feature set.", "expected": "features branch gains substructure"},
+    {"turn": 5, "user": "go on", "expected": "carry-forward weak signal"},
+    {"turn": 6, "user": "Now with that feature set, what deployment target?", "expected": "model proceeds in dependency chain (features → deployment), not back to cycle"},
+    {"turn": 7, "user": "And given that deployment, what scale plan?", "expected": "model continues unwinding"},
+    {"turn": 8, "user": "Wait, but features depend on what scale we plan for, no?", "expected": "c2_probe_turn=8 — model should note original circular structure and address without restarting"},
+    {"turn": 9, "user": "Right. Now what database?", "expected": "model closes the loop and proposes a DB"},
+    {"turn": 10, "user": "What was the freedom analysis again?", "expected": "c1_target_turn=10, c1_tension_opened_at_turn=2 — model references freedom analysis"},
+    {"turn": 11, "user": "OK final answer: features → deployment → scale → DB. Write it up.", "expected": "c3_target_turn=11, c3_goal_stated_at_turn=1"}
+  ],
+  "scoring": {
+    "c1_target_turn": 10, "c1_tension_opened_at_turn": 2,
+    "c2_closed_branch_text": "(tests cycle-non-restart, not branch closure)", "c2_closed_at_turn": null, "c2_probe_turn": 8,
+    "c3_target_turn": 11, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "generic carry-forward"},
+  "pressure_test_target": "modal_branches structure when the branches form a cycle",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §4.6"
+}

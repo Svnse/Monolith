@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_04",
+  "shape": "single",
+  "frame": "Simple code — Bearing-on must not degrade simple action requests.",
+  "turns": [{"turn": 1, "user": "write a one-liner to find the largest file in a directory", "expected": "single-line command (find/du/etc.); no envelope"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 4",
+  "regression_threshold_pct": 5
+}

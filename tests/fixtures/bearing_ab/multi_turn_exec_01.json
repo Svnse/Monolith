@@ -1,0 +1,25 @@
+{
+  "id": "multi_turn_exec_01",
+  "shape": "execution",
+  "frame": "User implements a new feature across 8+ turns. Bearing must carry next_move and current_frame through code-edit / test / run / iterate cycles.",
+  "turns": [
+    {"turn": 1, "user": "Implement a rate-limiter middleware in `web/middleware.py`. Should be token-bucket, 60/minute per IP.", "expected": "active_goal='implement token-bucket rate limiter'; next_move='scaffold middleware file'"},
+    {"turn": 2, "user": "(model emits code; let's say it's done)", "expected": "next_move updates to 'write unit tests'"},
+    {"turn": 3, "user": "Run the tests.", "expected": "(assumed pass); next_move='wire into request pipeline'"},
+    {"turn": 4, "user": "Good. Now wire it in.", "expected": "current_frame transitions to 'integration'"},
+    {"turn": 5, "user": "ok", "expected": "PRESSURE-TEST (§6.1) — prior task_type was 'action' (implementing); V0 carry-forward overrides to 'analysis' — wrong direction"},
+    {"turn": 6, "user": "Test the integration.", "expected": "model runs integration tests"},
+    {"turn": 7, "user": "One test fails. The IP detection helper returns None for proxied requests.", "expected": "open_tensions += proxy-IP-detection-broken; next_move='fix IP detection'"},
+    {"turn": 8, "user": "What was that test failure again?", "expected": "c1_target_turn=8, c1_tension_opened_at_turn=7"},
+    {"turn": 9, "user": "OK fix it.", "expected": "model addresses tension"},
+    {"turn": 10, "user": "And the original goal — what's left?", "expected": "c3_target_turn=10, c3_goal_stated_at_turn=1 — lists done + left toward 'implement token-bucket rate limiter'"}
+  ],
+  "scoring": {
+    "c1_target_turn": 8, "c1_tension_opened_at_turn": 7,
+    "c2_closed_branch_text": "(tests next_move propagation, not branch closure)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": 10, "c3_active_goal_stated_at_turn": 1
+  },
+  "carry_forward_exposure": {"present": true, "exposure_turn": 5, "note": "PRESSURE-TEST (§6.1) — V0 carry-forward heuristic maps to 'analysis' but prior task_type was 'action'"},
+  "pressure_test_target": "next_move propagation across steps",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §5.1"
+}

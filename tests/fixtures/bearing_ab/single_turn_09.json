@@ -1,0 +1,8 @@
+{
+  "id": "single_turn_09",
+  "shape": "single",
+  "frame": "Trivial action — Bearing-on must not degrade simple translation.",
+  "turns": [{"turn": 1, "user": "translate 'hello world' to spanish", "expected": "'hola mundo'"}],
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §7 row 9",
+  "regression_threshold_pct": 5
+}

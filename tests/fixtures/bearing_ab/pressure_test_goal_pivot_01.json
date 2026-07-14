@@ -1,0 +1,22 @@
+{
+  "id": "pressure_test_goal_pivot_01",
+  "shape": "design",
+  "frame": "active_goal failure mode: contamination after pivot. User starts project-architecture conversation, then explicitly pivots to a different, unrelated topic. Several turns of B-work happen. Then user asks an ambiguous question about B.",
+  "turns": [
+    {"turn": 1, "user": "I'm designing a notification service. Should it be a separate microservice or part of the monolith?", "expected": "active_goal='decide notification service architecture: microservice vs monolith'; modal_branches += two options"},
+    {"turn": 2, "user": "What's the throughput estimate where the microservice case wins?", "expected": "model gives heuristics"},
+    {"turn": 3, "user": "Actually, set this aside. I need to figure out something else first — I'm getting flaky CI runs and want to debug those before anything else.", "expected": "CLEAN PIVOT — active_goal transitions to 'debug flaky CI runs'; current_frame updates; previous goal preserved as dormant or retired"},
+    {"turn": 4, "user": "The failures are in the integration test suite, intermittent, no pattern I can see.", "expected": "open_tensions += intermittent-integration-test-failures-no-pattern"},
+    {"turn": 5, "user": "How do I get more data on which test is flaking?", "expected": "model suggests instrumentation (rerun stats, timing histograms, etc)"},
+    {"turn": 6, "user": "(after instrumentation, two tests identified as flaking — both touch the redis client.)", "expected": "referents += [tool_result_N about redis client involvement]; current_frame may shift to redis-specific"},
+    {"turn": 7, "user": "What's the throughput question again?", "expected": "PROBE — ambiguous; could refer to abandoned notification-service throughput (turn 2) OR redis throughput in CI context (since redis is now in current_frame). PASS: model resolves ambiguity in favor of active context (CI/redis), or asks; if defaulting, should be active-goal-aligned (B = redis throughput in CI), NOT retired-goal (A = notification service). FAIL: model defaults to retired-goal interpretation, drags notification-service context into pivoted conversation"}
+  ],
+  "scoring": {
+    "c1_target_turn": null, "c1_tension_opened_at_turn": null,
+    "c2_closed_branch_text": "(goal-pivot focus, not branch closure)", "c2_closed_at_turn": null, "c2_probe_turn": null,
+    "c3_target_turn": 7, "c3_active_goal_stated_at_turn": 3
+  },
+  "pressure_test_targeted_criterion": "no goal drift; clean pivot is honored",
+  "pressure_test_failure_mode": "post-pivot goal drift — user pivots from goal A to goal B; Bearing-on contaminates goal-B responses with leftover goal-A context that should have been cleanly retired",
+  "spec_source": "docs/superpowers/specs/2026-05-21-bearing-ab-fixture-set.md §6.4"
+}
