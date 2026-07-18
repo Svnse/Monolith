@@ -16,9 +16,6 @@ jobs:
     name: Windows 3.11 base smoke
     runs-on: windows-latest
     timeout-minutes: 20
-    env:
-      MONOLITH_ROOT: ${{ runner.temp }}\monolith-smoke-state
-      MONOLITH_ALLOW_UNANCHORED_ROOT: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -40,15 +37,16 @@ jobs:
         run: python -m pip check
 
       - name: Import startup path
+        # runner context is unavailable in job-level env, so the state root is set here
+        env:
+          MONOLITH_ROOT: ${{ runner.temp }}\monolith-smoke-state
+          MONOLITH_ALLOW_UNANCHORED_ROOT: "1"
         run: python -c "import PySide6, yaml, pydantic, markdown, pygments; import core.config; import ui.components.markdown_renderer; import bootstrap; print('base smoke OK')"
 
   full-suite:
     name: Full suite
     runs-on: windows-latest
     timeout-minutes: 30
-    env:
-      MONOLITH_ROOT: ${{ runner.temp }}\monolith-test-state
-      MONOLITH_ALLOW_UNANCHORED_ROOT: "1"
     steps:
       - name: Check out source
         uses: actions/checkout@v6
@@ -67,4 +65,7 @@ jobs:
           python -m pip install --no-build-isolation -e ".[dev,files,matrix]"
 
       - name: Run complete suite
+        env:
+          MONOLITH_ROOT: ${{ runner.temp }}\monolith-test-state
+          MONOLITH_ALLOW_UNANCHORED_ROOT: "1"
         run: python -m pytest -q
