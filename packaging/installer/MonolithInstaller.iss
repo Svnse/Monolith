@@ -28,6 +28,12 @@ SetupLogging=yes
 SetupIconFile=monolith.ico
 UninstallDisplayIcon={app}\app\monolith.ico
 
+[InstallDelete]
+; Always start from a pristine runtime: upgrading over a runtime whose
+; site-packages have diverged (e.g. an upgraded pip) leaves mixed-version
+; trees that break pip itself. Dependencies are reinstalled by install_env.bat.
+Type: filesandordirs; Name: "{app}\runtime\python"
+
 [Dirs]
 Name: "{app}\app"
 Name: "{app}\runtime"
