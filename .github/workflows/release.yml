@@ -1,0 +1,79 @@
+name: Release
+
+# Builds the Windows installer and publishes/refreshes the GitHub Release for the
+# version in core/version.py. Runs when packaging changes land on main, or manually.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-build
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    name: Build installer and publish release
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve release tag from core/version.py
+        id: rel
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path core/version.py -Pattern 'APP_VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          "tag=v$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Release tag: v$v"
+
+      - name: Stage app payload from the release tag
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force packaging\installer\payload\app | Out-Null
+          git archive ${{ steps.rel.outputs.tag }} | tar -xf - -C packaging\installer\payload\app
+          Copy-Item packaging\installer\launcher\MonolithLauncher.bat packaging\installer\payload\app\
+          Copy-Item packaging\installer\monolith.ico packaging\installer\payload\app\
+
+      - name: Stage bundled CPython 3.11.9 runtime
+        shell: pwsh
+        run: |
+          curl.exe -sL -o python-nuget.zip https://www.nuget.org/api/v2/package/python/3.11.9
+          Expand-Archive python-nuget.zip -DestinationPath pynuget
+          Move-Item pynuget\tools packaging\installer\payload\python
+          & packaging\installer\payload\python\python.exe -c "import ensurepip, ssl, sqlite3; print('payload python OK')"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = (Get-ChildItem -Path "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe", "${env:ProgramFiles}\Inno Setup*\ISCC.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
+          $tag = "${{ steps.rel.outputs.tag }}".TrimStart("v")
+          & $iscc packaging\installer\MonolithInstaller.iss /DMonolithVersion=$tag /Opackaging\installer\dist
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem packaging\installer\dist
+
+      - name: Create or refresh the GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.rel.outputs.tag }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "Monolith $tag" --notes-file "packaging\release-notes\$tag.md" --latest
+          }
+          gh release upload $tag (Get-ChildItem packaging\installer\dist\MonolithInstaller_*.exe).FullName --clobber

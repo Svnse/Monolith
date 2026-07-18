@@ -49,7 +49,16 @@ Monoline execution path are **not** shipped as completed features.
 
 ## Quick start
 
-Clone or download the repository, open **Command Prompt** in its root, and run:
+**Easiest (no Python required):** download `MonolithInstaller_<version>.exe` from
+the [latest release](https://github.com/Svnse/Monolith/releases/latest) and run
+it. It installs Monolith with its own bundled Python runtime under
+`%LOCALAPPDATA%\Programs\Monolith`, creates Start Menu/desktop shortcuts, and
+fetches base dependencies (internet required during install). Your data lives
+in `%APPDATA%\Monolith` and survives uninstall. Then skip to "After launch"
+below.
+
+**From source:** clone or download the repository, open **Command Prompt** in
+its root, and run:
 
 ```bat
 install.bat
