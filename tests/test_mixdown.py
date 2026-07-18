@@ -1,7 +1,11 @@
 from pathlib import Path
 
-import torch
-import torchaudio
+import pytest
+
+# core.mixdown needs the optional [audio] extra; the default test profile
+# ([dev,files,matrix]) ships without torch, so skip instead of failing collection.
+torch = pytest.importorskip("torch")
+torchaudio = pytest.importorskip("torchaudio")
 
 from core.mixdown import render_arrangement, render_to_wav, write_wav, DEFAULT_SR
 
